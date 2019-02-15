@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -26,7 +26,7 @@ from indico.modules.events.tracks.settings import track_settings
 
 
 def create_track(event, data):
-    track = Track(event_new=event)
+    track = Track(event=event)
     track.populate_from_dict(data)
     db.session.flush()
     logger.info('Track %r created by %r', track, session.user)
@@ -39,8 +39,8 @@ def update_track(track, data):
     track.populate_from_dict(data)
     db.session.flush()
     logger.info('Track %r modified by %r', track, session.user)
-    track.event_new.log(EventLogRealm.management, EventLogKind.change, 'Tracks',
-                        'Track "{}" has been modified.'.format(track.title), session.user)
+    track.event.log(EventLogRealm.management, EventLogKind.change, 'Tracks',
+                    'Track "{}" has been modified.'.format(track.title), session.user)
 
 
 def delete_track(track):

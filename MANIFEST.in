@@ -1,17 +1,14 @@
-include AUTHORS
-include ChangeLog
-include COPYING
-include INSTALL
-include NEWS
-include README
-include THANKS
+include indico/*.sample indico/web/indico.wsgi
+recursive-include indico *.html *.tpl *.txt *.js *.yaml
+exclude indico/logging.yaml
 
-include doc/*.pdf
-include ez_setup.py
+graft indico/core/plugins/alembic/
+graft indico/htdocs/
+graft indico/migrations/
+graft indico/translations/
+graft indico/web/static
+prune indico/web/client
+prune indico/htdocs
 
-recursive-include bin *
-recursive-include etc *
-recursive-include indico *
-graft migrations
-
-global-exclude *.pyc etc/zdctl.conf etc/zodb.conf etc/indico.conf
+global-exclude *.pyc __pycache__ .keep
+include indico/migrations/versions/.keep

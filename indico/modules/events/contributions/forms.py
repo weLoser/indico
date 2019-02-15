@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,7 +19,7 @@ from __future__ import unicode_literals
 from datetime import timedelta
 
 from wtforms.ext.sqlalchemy.fields import QuerySelectField
-from wtforms.fields import StringField, TextAreaField
+from wtforms.fields import BooleanField, StringField, TextAreaField
 from wtforms.validators import DataRequired, ValidationError
 
 from indico.core.db import db
@@ -29,13 +29,16 @@ from indico.modules.events.contributions.fields import (ContributionPersonLinkLi
 from indico.modules.events.contributions.models.references import ContributionReference, SubContributionReference
 from indico.modules.events.contributions.models.types import ContributionType
 from indico.modules.events.fields import ReferencesField
-from indico.web.flask.util import url_for
-from indico.web.forms.base import IndicoForm, generated_data
-from indico.web.forms.fields import (TimeDeltaField, PrincipalListField, IndicoProtectionField, IndicoLocationField,
-                                     IndicoDateTimeField, IndicoTagListField, AccessControlListField)
-from indico.web.forms.validators import UsedIf, DateTimeRange, MaxDuration
+from indico.modules.events.util import check_permissions
 from indico.util.date_time import get_day_end
 from indico.util.i18n import _
+from indico.web.flask.util import url_for
+from indico.web.forms.base import IndicoForm, generated_data
+from indico.web.forms.fields import (IndicoDateTimeField, IndicoLocationField, IndicoProtectionField,
+                                     IndicoTagListField, TimeDeltaField)
+from indico.web.forms.fields.principals import PermissionsField
+from indico.web.forms.validators import DateTimeRange, MaxDuration
+from indico.web.forms.widgets import SwitchWidget
 
 
 class ContributionForm(IndicoForm):
@@ -97,21 +100,18 @@ class ContributionForm(IndicoForm):
 
 
 class ContributionProtectionForm(IndicoForm):
+    permissions = PermissionsField(_("Permissions"), object_type='contribution')
     protection_mode = IndicoProtectionField(_('Protection mode'), protected_object=lambda form: form.protected_object,
                                             acl_message_url=lambda form: url_for('contributions.acl_message',
                                                                                  form.protected_object))
-    acl = AccessControlListField(_('Access control list'),
-                                 [UsedIf(lambda form, field: form.protected_object.is_protected)],
-                                 groups=True, allow_emails=True, default_text=_('Restrict access to this contribution'),
-                                 description=_('List of users allowed to access the contribution'))
-    managers = PrincipalListField(_('Managers'), groups=True, allow_emails=True,
-                                  description=_('List of users allowed to modify the contribution'))
-    submitters = PrincipalListField(_('Submitters'), groups=True, allow_emails=True,
-                                    description=_('List of users allowed to submit materials for this contribution'))
 
     def __init__(self, *args, **kwargs):
-        self.protected_object = kwargs.pop('contrib')
+        self.protected_object = contribution = kwargs.pop('contrib')
+        self.event = contribution.event
         super(ContributionProtectionForm, self).__init__(*args, **kwargs)
+
+    def validate_permissions(self, field):
+        check_permissions(self.event, field)
 
 
 class SubContributionForm(IndicoForm):
@@ -119,7 +119,7 @@ class SubContributionForm(IndicoForm):
     description = TextAreaField(_('Description'))
     duration = TimeDeltaField(_('Duration'), [DataRequired(), MaxDuration(timedelta(hours=24))],
                               default=timedelta(minutes=20), units=('minutes', 'hours'))
-    speakers = SubContributionPersonLinkListField(_('Speakers'), allow_submitters=False,
+    speakers = SubContributionPersonLinkListField(_('Speakers'), allow_submitters=False, allow_authors=False,
                                                   description=_('The speakers of the subcontribution'))
     references = ReferencesField(_("External IDs"), reference_class=SubContributionReference,
                                  description=_("Manage external resources for this sub-contribution"))
@@ -142,12 +142,12 @@ class ContributionStartDateForm(IndicoForm):
 
     def __init__(self, *args, **kwargs):
         self.contrib = kwargs.pop('contrib')
-        self.event = self.contrib.event_new
+        self.event = self.contrib.event
         self.timezone = self.event.timezone
         super(ContributionStartDateForm, self).__init__(*args, **kwargs)
 
     def validate_start_dt(self, field):
-        event = self.contrib.event_new
+        event = self.contrib.event
         day = self.contrib.start_dt.astimezone(event.tzinfo).date()
         if day == event.end_dt_local.date():
             latest_dt = event.end_dt
@@ -171,7 +171,7 @@ class ContributionDurationForm(IndicoForm):
         if field.errors:
             return
         if self.contrib.is_scheduled:
-            event = self.contrib.event_new
+            event = self.contrib.event
             day = self.contrib.start_dt.astimezone(event.tzinfo).date()
             if day == event.end_dt_local.date():
                 latest_dt = event.end_dt
@@ -183,10 +183,18 @@ class ContributionDurationForm(IndicoForm):
                 raise ValidationError(error_msg)
 
 
+class ContributionDefaultDurationForm(IndicoForm):
+    duration = TimeDeltaField(_('Duration'), [DataRequired(), MaxDuration(timedelta(days=1))],
+                              units=('minutes', 'hours'))
+
+
 class ContributionTypeForm(IndicoForm):
     """Form to create or edit a ContributionType"""
 
     name = StringField(_("Name"), [DataRequired()])
+    is_private = BooleanField(_("Private"), widget=SwitchWidget(),
+                              description=_("If selected, this contribution type cannot be chosen by users "
+                                            "submitting an abstract."))
     description = TextAreaField(_("Description"))
 
     def __init__(self, *args, **kwargs):

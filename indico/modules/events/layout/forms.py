@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,18 +16,20 @@
 
 from __future__ import unicode_literals
 
-from wtforms.fields import BooleanField, TextAreaField, SelectField
+from wtforms.fields import BooleanField, SelectField, TextAreaField
 from wtforms.fields.html5 import URLField
 from wtforms.fields.simple import StringField
 from wtforms.validators import DataRequired, Optional, ValidationError
 
-from indico.core.config import Config
-from indico.modules.events.layout.util import get_logo_data, get_css_file_data
+from indico.core.config import config
+from indico.modules.events.layout import theme_settings
+from indico.modules.events.layout.util import get_css_file_data, get_logo_data, get_plugin_conference_themes
 from indico.util.i18n import _
 from indico.web.forms.base import IndicoForm
 from indico.web.forms.fields import EditableFileField, FileField
-from indico.web.forms.validators import UsedIf, HiddenUnless
-from indico.web.forms.widgets import CKEditorWidget, SwitchWidget, ColorPickerWidget
+from indico.web.forms.validators import HiddenUnless, UsedIf
+from indico.web.forms.widgets import CKEditorWidget, ColorPickerWidget, SwitchWidget
+
 
 THEMES = [('', _('No theme selected')),
           ('orange.css', _('Orange')),
@@ -35,7 +37,17 @@ THEMES = [('', _('No theme selected')),
           ('right_menu.css', _('Right menu'))]
 
 
-class LayoutForm(IndicoForm):
+def _get_timetable_theme_choices(event):
+    it = ((tid, data['title']) for tid, data in theme_settings.get_themes_for(event.type).viewitems())
+    return sorted(it, key=lambda x: x[1].lower())
+
+
+def _get_conference_theme_choices():
+    plugin_themes = [(k, v[1]) for k, v in get_plugin_conference_themes().iteritems()]
+    return THEMES + sorted(plugin_themes, key=lambda x: x[1].lower())
+
+
+class ConferenceLayoutForm(IndicoForm):
     is_searchable = BooleanField(_("Enable search"), widget=SwitchWidget(),
                                  description=_("Enable search within the event"))
     show_nav_bar = BooleanField(_("Show navigation bar"), widget=SwitchWidget(),
@@ -60,23 +72,34 @@ class LayoutForm(IndicoForm):
                                      description=_("Group the entries of the timetable by room by default"))
     timetable_detailed = BooleanField(_("Show detailed view"), widget=SwitchWidget(),
                                       description=_("Show the detailed view of the timetable by default."))
-
+    timetable_theme = SelectField(_('Theme'), [Optional()], coerce=lambda x: x or None)
     # Themes
     use_custom_css = BooleanField(_("Use custom CSS"), widget=SwitchWidget(),
                                   description=_("Use a custom CSS file as a theme for the conference page. Deactivate "
                                                 "this option to reveal the available Indico themes."))
-    theme = SelectField(_("Theme"), [Optional(), HiddenUnless('use_custom_css', False)], choices=THEMES,
+    theme = SelectField(_("Theme"), [Optional(), HiddenUnless('use_custom_css', False)],
                         coerce=lambda x: (x or None),
                         description=_("Currently selected theme of the conference page. Click on the Preview button to "
                                       "preview and select a different one."))
 
     def __init__(self, *args, **kwargs):
         self.event = kwargs.pop('event')
-        super(LayoutForm, self).__init__(*args, **kwargs)
+        super(ConferenceLayoutForm, self).__init__(*args, **kwargs)
+        self.timetable_theme.choices = [('', _('Default'))] + _get_timetable_theme_choices(self.event)
+        self.theme.choices = _get_conference_theme_choices()
 
     def validate_use_custom_css(self, field):
         if field.data and not self.event.has_stylesheet:
             raise ValidationError(_('Cannot enable custom stylesheet unless there is one.'))
+
+
+class LectureMeetingLayoutForm(IndicoForm):
+    timetable_theme = SelectField(_('Timetable theme'), [DataRequired()])
+
+    def __init__(self, *args, **kwargs):
+        event = kwargs.pop('event')
+        super(LectureMeetingLayoutForm, self).__init__(*args, **kwargs)
+        self.timetable_theme.choices = _get_timetable_theme_choices(event)
 
 
 class LogoForm(IndicoForm):
@@ -94,7 +117,7 @@ class CSSForm(IndicoForm):
         self.css_file.description = _("If you want to fully customize your conference page you can create your own "
                                       "stylesheet and upload it. An example stylesheet can be downloaded "
                                       "<a href='{base_url}/standard.css' target='_blank'>here</a>."
-                                      .format(base_url=Config.getInstance().getCssConfTemplateBaseURL()))
+                                      .format(base_url=config.CONFERENCE_CSS_TEMPLATES_BASE_URL))
 
 
 class MenuBuiltinEntryForm(IndicoForm):
@@ -133,12 +156,12 @@ class AddImagesForm(IndicoForm):
 
 
 class CSSSelectionForm(IndicoForm):
-    theme = SelectField(_("Theme"), [Optional()], coerce=lambda x: x)
+    theme = SelectField(_("Theme"), [Optional()], coerce=lambda x: (x or None))
 
     def __init__(self, *args, **kwargs):
         event = kwargs.pop('event')
         super(CSSSelectionForm, self).__init__(*args, **kwargs)
-        self.theme.choices = list(THEMES)
+        self.theme.choices = _get_conference_theme_choices()
         if event.has_stylesheet:
             custom = [('_custom', _("Custom CSS file ({name})").format(name=event.stylesheet_metadata['filename']))]
-            self.theme.choices = THEMES + custom
+            self.theme.choices += custom

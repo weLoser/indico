@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,8 +16,8 @@
 
 from __future__ import unicode_literals
 
-from indico.modules.events import Event
 from indico.modules.attachments.api.util import build_folders_api_data
+from indico.modules.events import Event
 from indico.modules.events.contributions.models.contributions import Contribution
 from indico.modules.events.contributions.models.subcontributions import SubContribution
 from indico.modules.events.sessions import Session
@@ -55,9 +55,8 @@ class AttachmentsExportHook(HTTPAPIHook):
                 if self._obj is None:
                     raise HTTPAPIError("No such subcontribution", 404)
 
-    def _hasAccess(self, aw):
-        user = aw.getUser().user if aw.getUser() else None
+    def _has_access(self, user):
         return self._obj.can_access(user)
 
-    def export_attachments(self, aw):
+    def export_attachments(self, user):
         return {'folders': build_folders_api_data(self._obj)}

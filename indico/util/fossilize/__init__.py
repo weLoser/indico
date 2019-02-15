@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -24,13 +24,15 @@ Some of the features are:
  * Built-in inheritance support;
 """
 
-import logging
 import inspect
+import logging
 import re
 import threading
-import zope.interface
-from types import NoneType
 from itertools import ifilter
+from types import NoneType
+
+import zope.interface
+
 
 _fossil_cache = threading.local()
 
@@ -312,8 +314,8 @@ class Fossilizable(object):
                         try:
                             methodResult = attr()
                         except:
-                            logging.getLogger('indico.fossilize').error("Problem fossilizing '%r' with '%s'" %
-                                                                        (obj, interfaceArg))
+                            logging.getLogger('indico.fossilize').error("Problem fossilizing '%r' with '%s'",
+                                                                        obj, interfaceArg)
                             raise
                     else:
                         methodResult = attr
@@ -354,8 +356,8 @@ class Fossilizable(object):
                 try:
                     methodResult = convertFunction(methodResult, **converterArgs)
                 except:
-                    logging.getLogger('indico.fossilize').error("Problem fossilizing '%r' with '%s' (%s)" %
-                                                                (obj, interfaceArg, methodName))
+                    logging.getLogger('indico.fossilize').error("Problem fossilizing '%r' with '%s' (%s)",
+                                                                obj, interfaceArg, methodName)
                     raise
 
 

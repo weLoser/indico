@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,15 +18,16 @@ from __future__ import unicode_literals
 
 import re
 
-from wtforms.widgets import TextInput, TextArea, HiddenInput, CheckboxInput
+from wtforms.widgets import CheckboxInput, HiddenInput, TextArea, TextInput
 from wtforms.widgets.core import HTMLString
 
 from indico.core.auth import multipass
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db import db
 from indico.util.string import natural_sort_key
-from indico.web.util import inject_js
 from indico.web.flask.templating import get_template_module
+from indico.web.util import inject_js
+
 
 html_commment_re = re.compile(r'<!--.*?-->', re.MULTILINE)
 
@@ -121,9 +122,14 @@ class PasswordWidget(JinjaWidget):
 
 
 class CKEditorWidget(JinjaWidget):
-    """Renders a CKEditor WYSIWYG editor"""
-    def __init__(self, simple=False):
-        super(CKEditorWidget, self).__init__('forms/ckeditor_widget.html', simple=simple)
+    """Renders a CKEditor WYSIWYG editor
+
+    :param simple: Use a simpler version with less options.
+    :param images: Whether to allow images in simple mode.
+    :param height: The height of the editor.
+    """
+    def __init__(self, simple=False, images=False, height=475):
+        super(CKEditorWidget, self).__init__('forms/ckeditor_widget.html', simple=simple, images=images, height=height)
 
 
 class SwitchWidget(JinjaWidget):
@@ -131,12 +137,16 @@ class SwitchWidget(JinjaWidget):
 
     :param on_label: Text to override default ON label
     :param off_label: Text to override default OFF label
+    :param confirm_enable: Text to prompt when enabling the switch
+    :param confirm_disable: Text to prompt when disabling the switch
     """
 
-    def __init__(self, on_label=None, off_label=None):
+    def __init__(self, on_label=None, off_label=None, confirm_enable=None, confirm_disable=None):
         super(SwitchWidget, self).__init__('forms/switch_widget.html')
         self.on_label = on_label
         self.off_label = off_label
+        self.confirm_enable = confirm_enable
+        self.confirm_disable = confirm_disable
 
     def __call__(self, field, **kwargs):
         kwargs.update({
@@ -144,7 +154,8 @@ class SwitchWidget(JinjaWidget):
             'on_label': self.on_label,
             'off_label': self.off_label
         })
-        return super(SwitchWidget, self).__call__(field, kwargs=kwargs)
+        return super(SwitchWidget, self).__call__(field, kwargs=kwargs, confirm_enable=self.confirm_enable,
+                                                  confirm_disable=self.confirm_disable)
 
 
 class SyncedInputWidget(JinjaWidget):
@@ -254,7 +265,7 @@ class LocationWidget(JinjaWidget):
         rooms = {'data': []}
         venues = {'data': []}
         venue_map = {}
-        if Config.getInstance().getIsRoomBookingActive():
+        if config.ENABLE_ROOMBOOKING:
             rooms = {loc.name: {'data': self.get_sorted_rooms(loc)} for loc in field.locations}
             venues = {'data': [{'id': loc.id, 'name': loc.name} for loc in field.locations]}
             venue_map = {loc['id']: loc['name'] for loc in venues['data']}
@@ -290,8 +301,9 @@ class LocationWidget(JinjaWidget):
 class ColorPickerWidget(JinjaWidget):
     """Renders a colorpicker input field"""
 
-    def __init__(self):
-        super(ColorPickerWidget, self).__init__('forms/color_picker_widget.html', single_line=True)
+    def __init__(self, show_field=True):
+        super(ColorPickerWidget, self).__init__('forms/color_picker_widget.html', single_line=True,
+                                                show_field=show_field)
 
     def __call__(self, field, **kwargs):
         return super(ColorPickerWidget, self).__call__(field, input_args=kwargs)

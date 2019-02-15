@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,7 +18,7 @@ from hashlib import md5 as _md5
 
 import pytest
 
-from indico.util.passwords import PasswordProperty, BCryptPassword
+from indico.util.passwords import BCryptPassword, PasswordProperty
 
 
 def md5(s):

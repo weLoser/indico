@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,47 +16,49 @@
 
 from __future__ import unicode_literals
 
-from flask import flash, request, session, jsonify
+from flask import flash, jsonify, request, session
 from sqlalchemy.orm import joinedload, subqueryload
 from werkzeug.exceptions import Forbidden
 
 from indico.modules.events.abstracts.controllers.base import RHAbstractBase, RHAbstractsBase
-from indico.modules.events.abstracts.controllers.common import (DisplayAbstractListMixin, CustomizeAbstractListMixin,
-                                                                AbstractsExportPDFMixin, AbstractsExportCSV,
-                                                                AbstractsExportExcel, AbstractsDownloadAttachmentsMixin)
+from indico.modules.events.abstracts.controllers.common import (AbstractsDownloadAttachmentsMixin, AbstractsExportCSV,
+                                                                AbstractsExportExcel, AbstractsExportPDFMixin,
+                                                                CustomizeAbstractListMixin, DisplayAbstractListMixin)
 from indico.modules.events.abstracts.forms import (AbstractCommentForm, AbstractJudgmentForm,
                                                    AbstractReviewedForTracksForm, build_review_form)
 from indico.modules.events.abstracts.lists import AbstractListGeneratorDisplay
 from indico.modules.events.abstracts.models.abstracts import Abstract, AbstractState
 from indico.modules.events.abstracts.models.comments import AbstractComment
 from indico.modules.events.abstracts.models.reviews import AbstractReview
-from indico.modules.events.abstracts.operations import (judge_abstract, reset_abstract_state, withdraw_abstract,
-                                                        create_abstract_comment, delete_abstract_comment,
-                                                        update_abstract_comment, create_abstract_review,
-                                                        update_abstract_review, update_reviewed_for_tracks)
+from indico.modules.events.abstracts.operations import (create_abstract_comment, create_abstract_review,
+                                                        delete_abstract_comment, judge_abstract, reset_abstract_state,
+                                                        update_abstract_comment, update_abstract_review,
+                                                        update_reviewed_for_tracks, withdraw_abstract)
 from indico.modules.events.abstracts.util import get_track_reviewer_abstract_counts, get_user_tracks
 from indico.modules.events.abstracts.views import WPDisplayAbstractsReviewing, render_abstract_page
 from indico.modules.events.tracks.models.tracks import Track
 from indico.util.i18n import _
 from indico.web.flask.templating import get_template_module
-from indico.web.util import jsonify_data, jsonify_template
+from indico.web.util import _pop_injected_js, jsonify_data, jsonify_template
 
 
 class RHListOtherAbstracts(RHAbstractsBase):
     """AJAX endpoint that lists all abstracts in the event (dict representation)."""
 
-    def _checkProtection(self):
+    ALLOW_LOCKED = True
+
+    def _check_access(self):
         if not session.user:
             raise Forbidden
-        RHAbstractsBase._checkProtection(self)
+        RHAbstractsBase._check_access(self)
 
-    def _checkParams(self, params):
-        RHAbstractsBase._checkParams(self, params)
+    def _process_args(self):
+        RHAbstractsBase._process_args(self)
         self.excluded_ids = set(request.form.getlist('excluded_abstract_id'))
 
     def _process(self):
         query = (Abstract.query
-                 .with_parent(self.event_new)
+                 .with_parent(self.event)
                  .filter(Abstract.state.notin_({AbstractState.duplicate, AbstractState.merged}))
                  .options(joinedload('submitter').lazyload('*'),
                           subqueryload('reviewed_for_tracks'),
@@ -83,8 +85,8 @@ class RHJudgeAbstract(RHAbstractBase):
             judgment_data, abstract_data = form.split_data
             judge_abstract(self.abstract, abstract_data, judge=session.user, **judgment_data)
             return jsonify_data(flash=False, html=render_abstract_page(self.abstract, management=self.management))
-        tpl = get_template_module('events/abstracts/reviewing/judge.html')
-        return jsonify(html=tpl.render_decision_box(self.abstract, form))
+        tpl = get_template_module('events/reviews/_common.html')
+        return jsonify(html=tpl.render_decision_box(self.abstract, form, session.user))
 
 
 class RHResetAbstractState(RHAbstractBase):
@@ -92,7 +94,7 @@ class RHResetAbstractState(RHAbstractBase):
         if self.abstract.state == AbstractState.submitted:
             return False
         # manages can always reset
-        if self.event_new.can_manage(session.user):
+        if self.event.can_manage(session.user):
             return True
         # judges can reset if the abstract has not been withdrawn
         return self.abstract.can_judge(session.user) and self.abstract.state != AbstractState.withdrawn
@@ -100,7 +102,7 @@ class RHResetAbstractState(RHAbstractBase):
     def _process(self):
         if self.abstract.state != AbstractState.submitted:
             reset_abstract_state(self.abstract)
-            flash(_("Abstract state has been reset"), 'success')
+            flash(_("Abstract judgment has been reset"), 'success')
         return jsonify_data(html=render_abstract_page(self.abstract, management=self.management))
 
 
@@ -124,12 +126,12 @@ class RHDisplayAbstractListBase(RHAbstractsBase):
         }
     }
 
-    def _checkParams(self, params):
-        RHAbstractsBase._checkParams(self, params)
+    def _process_args(self):
+        RHAbstractsBase._process_args(self)
         self.track = Track.get_one(request.view_args['track_id'])
-        self.list_generator = AbstractListGeneratorDisplay(event=self.event_new, track=self.track)
+        self.list_generator = AbstractListGeneratorDisplay(event=self.event, track=self.track)
 
-    def _checkProtection(self):
+    def _check_access(self):
         if not self.track.can_review_abstracts(session.user) and not self.track.can_convene(session.user):
             raise Forbidden
 
@@ -149,8 +151,8 @@ class RHSubmitAbstractReview(RHAbstractBase):
             return False
         return self.abstract.can_review(session.user, check_state=True)
 
-    def _checkParams(self, params):
-        RHAbstractBase._checkParams(self, params)
+    def _process_args(self):
+        RHAbstractBase._process_args(self)
         self.track = Track.get_one(request.view_args['track_id'])
 
     def _process(self):
@@ -159,7 +161,8 @@ class RHSubmitAbstractReview(RHAbstractBase):
             create_abstract_review(self.abstract, self.track, session.user, **form.split_data)
             return jsonify_data(flash=False, html=render_abstract_page(self.abstract, management=self.management))
         tpl = get_template_module('events/reviews/forms.html')
-        return jsonify(html=tpl.render_review_form(form, proposal=self.abstract, group=self.track))
+        return jsonify(html=tpl.render_review_form(form, proposal=self.abstract, group=self.track),
+                       js=_pop_injected_js())
 
 
 class RHEditAbstractReview(RHAbstractBase):
@@ -172,8 +175,8 @@ class RHEditAbstractReview(RHAbstractBase):
     def _check_abstract_protection(self):
         return self.review.can_edit(session.user, check_state=True)
 
-    def _checkParams(self, params):
-        RHAbstractBase._checkParams(self, params)
+    def _process_args(self):
+        RHAbstractBase._process_args(self)
         self.review = AbstractReview.get_one(request.view_args['review_id'])
 
     def _process(self):
@@ -182,7 +185,7 @@ class RHEditAbstractReview(RHAbstractBase):
             update_abstract_review(self.review, **form.split_data)
             return jsonify_data(flash=False, html=render_abstract_page(self.abstract, management=self.management))
         tpl = get_template_module('events/reviews/forms.html')
-        return jsonify(html=tpl.render_review_form(form, review=self.review))
+        return jsonify(html=tpl.render_review_form(form, review=self.review), js=_pop_injected_js())
 
 
 class RHSubmitAbstractComment(RHAbstractBase):
@@ -205,12 +208,12 @@ class RHAbstractCommentBase(RHAbstractBase):
         }
     }
 
-    def _checkParams(self, params):
-        RHAbstractBase._checkParams(self, params)
+    def _process_args(self):
+        RHAbstractBase._process_args(self)
         self.comment = AbstractComment.get_one(request.view_args['comment_id'], is_deleted=False)
 
-    def _checkProtection(self):
-        RHAbstractBase._checkProtection(self)
+    def _check_access(self):
+        RHAbstractBase._check_access(self)
         if not self.comment.can_edit(session.user):
             raise Forbidden
 
@@ -223,7 +226,7 @@ class RHEditAbstractComment(RHAbstractCommentBase):
             update_abstract_comment(self.comment, form.data)
             return jsonify_data(flash=False, html=render_abstract_page(self.abstract, management=self.management))
         tpl = get_template_module('events/reviews/forms.html')
-        return jsonify(html=tpl.render_comment_form(form, proposal=self.abstract, comment=self.comment))
+        return jsonify(html=tpl.render_comment_form(form, proposal=self.abstract, comment=self.comment, edit=True))
 
 
 class RHDeleteAbstractComment(RHAbstractCommentBase):
@@ -233,16 +236,16 @@ class RHDeleteAbstractComment(RHAbstractCommentBase):
 
 
 class RHDisplayReviewableTracks(RHAbstractsBase):
-    def _checkProtection(self):
+    def _check_access(self):
         if not session.user:
             raise Forbidden
-        RHAbstractsBase._checkProtection(self)
+        RHAbstractsBase._check_access(self)
 
     def _process(self):
-        track_reviewer_abstract_count = get_track_reviewer_abstract_counts(self.event_new, session.user)
-        return WPDisplayAbstractsReviewing.render_template('display/tracks.html', self._conf, event=self.event_new,
+        track_reviewer_abstract_count = get_track_reviewer_abstract_counts(self.event, session.user)
+        return WPDisplayAbstractsReviewing.render_template('display/tracks.html', self.event,
                                                            abstract_count=track_reviewer_abstract_count,
-                                                           tracks=get_user_tracks(self.event_new, session.user))
+                                                           tracks=get_user_tracks(self.event, session.user))
 
 
 class RHDisplayReviewableTrackAbstracts(DisplayAbstractListMixin, RHDisplayAbstractListBase):
@@ -260,8 +263,8 @@ class RHDisplayAbstractListCustomize(CustomizeAbstractListMixin, RHDisplayAbstra
 class RHDisplayAbstractsActionsBase(RHDisplayAbstractListBase):
     """Base class for classes performing actions on abstract"""
 
-    def _checkParams(self, params):
-        RHDisplayAbstractListBase._checkParams(self, params)
+    def _process_args(self):
+        RHDisplayAbstractListBase._process_args(self)
         ids = map(int, request.form.getlist('abstract_id'))
         self.abstracts = Abstract.query.with_parent(self.track, 'abstracts_reviewed').filter(Abstract.id.in_(ids)).all()
 
@@ -287,7 +290,7 @@ class RHEditReviewedForTrackList(RHAbstractBase):
         return self.abstract.can_judge(session.user, check_state=True)
 
     def _process(self):
-        form = AbstractReviewedForTracksForm(event=self.event_new, obj=self.abstract)
+        form = AbstractReviewedForTracksForm(event=self.event, obj=self.abstract)
         if form.validate_on_submit():
             update_reviewed_for_tracks(self.abstract, form.reviewed_for_tracks.data)
             return jsonify_data(flash=False, html=render_abstract_page(self.abstract, management=self.management))

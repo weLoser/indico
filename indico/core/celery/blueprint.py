@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,6 +18,7 @@ from __future__ import unicode_literals
 
 from indico.core.celery.controllers import RHCeleryTasks
 from indico.web.flask.wrappers import IndicoBlueprint
+
 
 _bp = IndicoBlueprint('celery', __name__, url_prefix='/admin/tasks', template_folder='templates',
                       virtual_template_folder='celery')

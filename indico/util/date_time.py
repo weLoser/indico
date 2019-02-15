@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -15,24 +15,46 @@
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
 from collections import OrderedDict
-from datetime import timedelta, datetime
+from datetime import datetime
 from datetime import time as dt_time
+from datetime import timedelta
 
 import pytz
-from flask import request
+from babel.dates import format_date as _format_date
 from babel.dates import format_datetime as _format_datetime
 from babel.dates import format_time as _format_time
-from babel.dates import format_date as _format_date
 from babel.dates import format_timedelta as _format_timedelta
 from babel.dates import get_timezone
 from babel.numbers import format_number as _format_number
-from dateutil.rrule import rrule, DAILY, MO, TU, WE, TH, FR, SA, SU
-from dateutil.relativedelta import relativedelta
+from dateutil.relativedelta import relativedelta as _relativedelta
+from dateutil.rrule import DAILY, FR, MO, SA, SU, TH, TU, WE, rrule
+from flask import has_request_context, request, session
 
-from indico.core.config import Config
-from indico.util.i18n import get_current_locale, _, ngettext, parse_locale
+from indico.core.config import config
+from indico.util.i18n import _, get_current_locale, ngettext, parse_locale
 from indico.util.string import inject_unicode_debug
-from MaKaC.common.timezoneUtils import DisplayTZ
+
+
+class relativedelta(_relativedelta):
+    """Improved `relativedelta`"""
+
+    def __abs__(self):
+        return self.__class__(years=abs(self.years),
+                              months=abs(self.months),
+                              days=abs(self.days),
+                              hours=abs(self.hours),
+                              minutes=abs(self.minutes),
+                              seconds=abs(self.seconds),
+                              microseconds=abs(self.microseconds),
+                              leapdays=self.leapdays,
+                              year=self.year,
+                              month=self.month,
+                              day=self.day,
+                              weekday=self.weekday,
+                              hour=self.hour,
+                              minute=self.minute,
+                              second=self.second,
+                              microsecond=self.microsecond)
 
 
 def now_utc(exact=True):
@@ -69,13 +91,13 @@ def server_to_utc(dt):
 
     The given datetime **MUST** be naive but already contain the correct time in the server's TZ.
     """
-    server_tz = get_timezone(Config.getInstance().getDefaultTimezone())
+    server_tz = get_timezone(config.DEFAULT_TIMEZONE)
     return server_tz.localize(dt).astimezone(pytz.utc)
 
 
 def utc_to_server(dt):
     """Converts the given UTC datetime to the server's TZ."""
-    server_tz = get_timezone(Config.getInstance().getDefaultTimezone())
+    server_tz = get_timezone(config.DEFAULT_TIMEZONE)
     return dt.astimezone(server_tz)
 
 
@@ -93,9 +115,9 @@ def format_datetime(dt, format='medium', locale=None, timezone=None, server_tz=F
         assert timezone is None
         timezone = dt.tzinfo
     elif not timezone and dt.tzinfo:
-        timezone = DisplayTZ().getDisplayTZ()
+        timezone = session.tzinfo
     elif server_tz:
-        timezone = Config.getInstance().getDefaultTimezone()
+        timezone = config.DEFAULT_TIMEZONE
 
     rv = _format_datetime(dt, format=format, locale=locale, tzinfo=timezone)
     return inject_unicode_debug(rv, 2).encode('utf-8') if inject_unicode else rv.encode('utf-8')
@@ -129,12 +151,11 @@ def format_time(t, format='short', locale=None, timezone=None, server_tz=False):
     if not locale:
         locale = get_current_locale()
     if not timezone and t.tzinfo:
-        timezone = DisplayTZ().getDisplayTZ()
+        timezone = session.tzinfo
     elif server_tz:
-        timezone = Config.getInstance().getDefaultTimezone()
-    if timezone:
+        timezone = config.DEFAULT_TIMEZONE
+    if isinstance(timezone, basestring):
         timezone = get_timezone(timezone)
-
     rv = _format_time(t, format=format, locale=locale, tzinfo=timezone)
     return inject_unicode_debug(rv, 2).encode('utf-8') if inject_unicode else rv.encode('utf-8')
 
@@ -327,19 +348,18 @@ def get_overlap(range1, range2):
 
 
 def iterdays(start, end, skip_weekends=False, day_whitelist=None, day_blacklist=None):
+    tzinfo = start.tzinfo if isinstance(start, datetime) else None
     weekdays = (MO, TU, WE, TH, FR) if skip_weekends else None
-    start = get_day_start(start) if isinstance(start, datetime) else start
-    end = get_day_end(end) if isinstance(end, datetime) else end
+    start = get_day_start(start).replace(tzinfo=None) if isinstance(start, datetime) else start
+    end = get_day_end(end).replace(tzinfo=None) if isinstance(end, datetime) else end
     for day in rrule(DAILY, dtstart=start, until=end, byweekday=weekdays):
+        if tzinfo:
+            day = tzinfo.localize(day)
         if day_whitelist and day.date() not in day_whitelist:
             continue
         if day_blacklist and day.date() in day_blacklist:
             continue
         yield day
-
-
-def is_weekend(d):
-    return d.weekday() in [e.weekday for e in (SA, SU)]
 
 
 def get_datetime_from_request(prefix='', default=None, source=None):
@@ -421,18 +441,6 @@ def get_month_end(date):
     return date + relativedelta(day=1, months=+1, days=-1)
 
 
-def round_up_month(date, from_day=1):
-    """Rounds up a date to the next month unless its day is before *from_day*.
-
-    :param date: date object
-    :param from_day: day from which one to round *date* up
-    """
-    if date.day >= from_day:
-        return date + relativedelta(day=1, months=+1)
-    else:
-        return date
-
-
 def strftime_all_years(dt, fmt):
     """Exactly like datetime.strftime but supports year<1900"""
     assert '%%Y' not in fmt  # unlikely but just in case
@@ -440,3 +448,15 @@ def strftime_all_years(dt, fmt):
         return dt.strftime(fmt)
     else:
         return dt.replace(year=1900).strftime(fmt.replace('%Y', '%%Y')).replace('%Y', unicode(dt.year))
+
+
+def get_display_tz(obj=None, as_timezone=False):
+    display_tz = session.timezone if has_request_context() else 'LOCAL'
+    if display_tz == 'LOCAL':
+        if obj is None:
+            display_tz = config.DEFAULT_TIMEZONE
+        else:
+            display_tz = getattr(obj, 'timezone', 'UTC')
+    if not display_tz:
+        display_tz = config.DEFAULT_TIMEZONE
+    return pytz.timezone(display_tz) if as_timezone else display_tz

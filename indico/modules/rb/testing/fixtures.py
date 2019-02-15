@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -23,7 +23,7 @@ from indico.modules.rb.models.blocked_rooms import BlockedRoom
 from indico.modules.rb.models.blockings import Blocking
 from indico.modules.rb.models.equipment import EquipmentType
 from indico.modules.rb.models.locations import Location
-from indico.modules.rb.models.reservations import Reservation, RepeatFrequency
+from indico.modules.rb.models.reservations import RepeatFrequency, Reservation
 from indico.modules.rb.models.room_attributes import RoomAttribute
 from indico.modules.rb.models.rooms import Room
 
@@ -51,19 +51,17 @@ def dummy_location(db, create_location):
 
 
 @pytest.fixture
-def create_reservation(db, dummy_room, dummy_avatar):
+def create_reservation(db, dummy_room, dummy_user):
     """Returns a callable which lets you create reservations"""
     def _create_reservation(**params):
         params.setdefault('start_dt', date.today() + relativedelta(hour=8, minute=30))
         params.setdefault('end_dt', date.today() + relativedelta(hour=17, minute=30))
         params.setdefault('repeat_frequency', RepeatFrequency.NEVER)
         params.setdefault('repeat_interval', int(params['repeat_frequency'] != RepeatFrequency.NEVER))
-        params.setdefault('contact_email', dummy_avatar.email)
-        params.setdefault('is_accepted', True)
         params.setdefault('booking_reason', u'Testing')
         params.setdefault('room', dummy_room)
-        params.setdefault('booked_for_user', dummy_avatar.user)
-        params.setdefault('created_by_user', dummy_avatar.user)
+        params.setdefault('booked_for_user', dummy_user)
+        params.setdefault('created_by_user', dummy_user)
         reservation = Reservation(**params)
         reservation.create_occurrences(skip_conflicts=False)
         db.session.add(reservation)
@@ -103,17 +101,16 @@ def dummy_occurrence(create_occurrence):
 
 
 @pytest.fixture
-def create_room(db, dummy_location, dummy_avatar):
+def create_room(db, dummy_location, dummy_user):
     """Returns a callable which lets you create rooms"""
     def _create_room(**params):
         params.setdefault('building', u'1')
         params.setdefault('floor', u'2')
         params.setdefault('number', u'3')
-        params.setdefault('name', '')
-        params.setdefault('owner', dummy_avatar.user)
+        params.setdefault('owner', dummy_user)
         params.setdefault('location', dummy_location)
+        params.setdefault('verbose_name', None)
         room = Room(**params)
-        room.update_name()
         db.session.add(room)
         db.session.flush()
         return room
@@ -128,16 +125,12 @@ def dummy_room(create_room):
 
 
 @pytest.fixture
-def create_room_attribute(db, dummy_location):
+def create_room_attribute(db):
     """Returns a callable which let you create room attributes"""
 
-    def _create_attribute(name, **params):
-        params.setdefault('location', dummy_location)
-        params.setdefault('title', name)
-        params.setdefault('type', u'str')
-        params.setdefault('is_required', False)
-        params.setdefault('is_hidden', False)
-        attr = RoomAttribute(name=name, **params)
+    def _create_attribute(name):
+        attr = RoomAttribute(name=name, title=name)
+        db.session.add(attr)
         db.session.flush()
         return attr
 
@@ -145,12 +138,12 @@ def create_room_attribute(db, dummy_location):
 
 
 @pytest.fixture
-def create_equipment_type(db, dummy_location):
+def create_equipment_type(db):
     """Returns a callable which let you create equipment types"""
 
-    def _create_equipment_type(name, **params):
-        params.setdefault('location', dummy_location)
-        eq = EquipmentType(name=name, **params)
+    def _create_equipment_type(name):
+        eq = EquipmentType(name=name)
+        db.session.add(eq)
         db.session.flush()
         return eq
 
@@ -158,7 +151,7 @@ def create_equipment_type(db, dummy_location):
 
 
 @pytest.fixture
-def create_blocking(db, dummy_room, dummy_avatar):
+def create_blocking(db, dummy_room, dummy_user):
     """Returns a callable which lets you create blockings"""
     def _create_blocking(**params):
         room = params.pop('room', dummy_room)
@@ -166,7 +159,7 @@ def create_blocking(db, dummy_room, dummy_avatar):
         params.setdefault('start_date', date.today())
         params.setdefault('end_date', date.today())
         params.setdefault('reason', u'Blocked')
-        params.setdefault('created_by_user', dummy_avatar.user)
+        params.setdefault('created_by_user', dummy_user)
         blocking = Blocking(**params)
         if room is not None:
             br = BlockedRoom(room=room, state=state, blocking=blocking)

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,30 +21,35 @@ from datetime import datetime
 from operator import attrgetter
 
 from dateutil.relativedelta import relativedelta
-from flask import session, request, flash, jsonify, redirect
+from flask import flash, jsonify, redirect, request, session
 from markupsafe import Markup, escape
-from pytz import timezone
-from sqlalchemy.orm import undefer, joinedload, subqueryload, load_only
-from werkzeug.exceptions import Forbidden, NotFound, BadRequest
+from sqlalchemy.orm import joinedload, load_only, subqueryload, undefer
+from sqlalchemy.orm.exc import StaleDataError
+from webargs import fields, validate
+from webargs.flaskparser import use_args
+from werkzeug.exceptions import BadRequest, Forbidden, NotFound
 
 from indico.core import signals
 from indico.core.db import db
 from indico.core.db.sqlalchemy.util.queries import get_n_matching
 from indico.core.notifications import make_email, send_email
+from indico.legacy.common.cache import GenericCache
+from indico.modules.admin import RHAdminBase
 from indico.modules.auth import Identity
 from indico.modules.auth.models.registration_requests import RegistrationRequest
 from indico.modules.auth.util import register_user
 from indico.modules.categories import Category
 from indico.modules.events import Event
 from indico.modules.users import User, logger, user_management_settings
+from indico.modules.users.forms import (AdminAccountRegistrationForm, AdminsForm, AdminUserSettingsForm, MergeForm,
+                                        SearchForm, UserDetailsForm, UserEmailsForm, UserPreferencesForm)
 from indico.modules.users.models.emails import UserEmail
 from indico.modules.users.operations import create_user
-from indico.modules.users.util import (get_related_categories, get_suggested_categories,
-                                       serialize_user, search_users, merge_users, get_linked_events)
-from indico.modules.users.views import WPUserDashboard, WPUser, WPUsersAdmin
-from indico.modules.users.forms import (UserDetailsForm, UserPreferencesForm, UserEmailsForm, SearchForm, MergeForm,
-                                        AdminUserSettingsForm, AdminAccountRegistrationForm)
-from indico.util.date_time import timedelta_split, now_utc
+from indico.modules.users.schemas import user_schema
+from indico.modules.users.util import (build_user_search_query, get_linked_events, get_related_categories,
+                                       get_suggested_categories, merge_users, search_users, serialize_user)
+from indico.modules.users.views import WPUser, WPUsersAdmin
+from indico.util.date_time import now_utc, timedelta_split
 from indico.util.event import truncate_path
 from indico.util.i18n import _
 from indico.util.signals import values_from_signal
@@ -52,23 +57,19 @@ from indico.util.string import make_unique_token
 from indico.web.flask.templating import get_template_module
 from indico.web.flask.util import url_for
 from indico.web.forms.base import FormDefaults
+from indico.web.rh import RHProtected
 from indico.web.util import jsonify_data, jsonify_form, jsonify_template
-
-from MaKaC.common.cache import GenericCache
-from MaKaC.common.mail import GenericMailer
-from MaKaC.common.timezoneUtils import DisplayTZ
-from MaKaC.webinterface.rh.admins import RHAdminBase
-from MaKaC.webinterface.rh.base import RHProtected
 
 
 IDENTITY_ATTRIBUTES = {'first_name', 'last_name', 'email', 'affiliation', 'full_name'}
-UserEntry = namedtuple('UserEntry', IDENTITY_ATTRIBUTES | {'profile_url'})
+UserEntry = namedtuple('UserEntry', IDENTITY_ATTRIBUTES | {'profile_url', 'user'})
 
 
 class RHUserBase(RHProtected):
     flash_user_status = True
+    allow_system_user = False
 
-    def _checkParams(self):
+    def _process_args(self):
         if not session.user:
             return
         self.user = session.user
@@ -87,11 +88,11 @@ class RHUserBase(RHProtected):
                 if self.user.is_pending:
                     flash(_('This user is marked as pending, i.e. it has been attached to something but never '
                             'logged in.'), 'warning')
+        if not self.allow_system_user and self.user.is_system:
+            return redirect(url_for('users.user_profile'))
 
-    def _checkProtection(self):
-        RHProtected._checkProtection(self)
-        if not self._doProcess:  # not logged in
-            return
+    def _check_access(self):
+        RHProtected._check_access(self)
         if not self.user.can_be_modified(session.user):
             raise Forbidden('You cannot modify this user.')
 
@@ -99,21 +100,21 @@ class RHUserBase(RHProtected):
 class RHUserDashboard(RHUserBase):
     management_roles = {'conference_creator', 'conference_chair', 'conference_manager', 'session_manager',
                         'session_coordinator', 'contribution_manager'}
-    reviewer_roles = {'conference_paperReviewManager', 'conference_referee', 'conference_editor', 'conference_reviewer',
+    reviewer_roles = {'paper_manager', 'paper_judge', 'paper_content_reviewer', 'paper_layout_reviewer',
                       'contribution_referee', 'contribution_editor', 'contribution_reviewer', 'abstract_reviewer',
                       'track_convener'}
     attendance_roles = {'contributor', 'contribution_submission', 'abstract_submitter', 'abstract_person',
-                        'registration_registrant', 'survey_submitter'}
+                        'registration_registrant', 'survey_submitter', 'lecture_speaker'}
 
     def _process(self):
         self.user.settings.set('suggest_categories', True)
-        tz = timezone(DisplayTZ().getDisplayTZ())
+        tz = session.tzinfo
         hours, minutes = timedelta_split(tz.utcoffset(datetime.now()))[:2]
         categories = get_related_categories(self.user)
         categories_events = []
         if categories:
             category_ids = {c['categ'].id for c in categories.itervalues()}
-            today = now_utc(False).astimezone(session.tzinfo).date()
+            today = now_utc(False).astimezone(tz).date()
             query = (Event.query
                      .filter(~Event.is_deleted,
                              Event.category_chain_overlaps(category_ids),
@@ -130,16 +131,17 @@ class RHUserDashboard(RHUserBase):
                                   'reviewing': bool(roles & self.reviewer_roles),
                                   'attendance': bool(roles & self.attendance_roles)})
                          for event, roles in get_linked_events(self.user, from_dt, 10).iteritems()]
-        return WPUserDashboard.render_template('dashboard.html', 'dashboard',
-                                               timezone=unicode(tz),
-                                               offset='{:+03d}:{:02d}'.format(hours, minutes), user=self.user,
-                                               categories=categories,
-                                               categories_events=categories_events,
-                                               suggested_categories=get_suggested_categories(self.user),
-                                               linked_events=linked_events)
+        return WPUser.render_template('dashboard.html', 'dashboard',
+                                      offset='{:+03d}:{:02d}'.format(hours, minutes), user=self.user,
+                                      categories=categories,
+                                      categories_events=categories_events,
+                                      suggested_categories=get_suggested_categories(self.user),
+                                      linked_events=linked_events)
 
 
 class RHPersonalData(RHUserBase):
+    allow_system_user = True
+
     def _process(self):
         form = UserDetailsForm(obj=FormDefaults(self.user, skip_attrs={'title'}, title=self.user._title),
                                synced_fields=self.user.synced_fields, synced_values=self.user.synced_values)
@@ -185,8 +187,6 @@ class RHUserFavorites(RHUserBase):
 
 
 class RHUserFavoritesUsersAdd(RHUserBase):
-    CSRF_ENABLED = True
-
     def _process(self):
         users = [User.get(int(id_)) for id_ in request.form.getlist('user_id')]
         self.user.favorite_users |= set(filter(None, users))
@@ -196,20 +196,20 @@ class RHUserFavoritesUsersAdd(RHUserBase):
 
 
 class RHUserFavoritesUserRemove(RHUserBase):
-    CSRF_ENABLED = True
-
     def _process(self):
         user = User.get(int(request.view_args['fav_user_id']))
-        if user in self.user.favorite_users:
-            self.user.favorite_users.remove(user)
+        self.user.favorite_users.discard(user)
+        try:
+            db.session.flush()
+        except StaleDataError:
+            # Deleted in another transaction
+            db.session.rollback()
         return jsonify(success=True)
 
 
 class RHUserFavoritesCategoryAPI(RHUserBase):
-    CSRF_ENABLED = True
-
-    def _checkParams(self):
-        RHUserBase._checkParams(self)
+    def _process_args(self):
+        RHUserBase._process_args(self)
         self.category = Category.get_one(request.view_args['category_id'])
         self.suggestion = self.user.suggested_categories.filter_by(category=self.category).first()
 
@@ -224,7 +224,12 @@ class RHUserFavoritesCategoryAPI(RHUserBase):
 
     def _process_DELETE(self):
         if self.category in self.user.favorite_categories:
-            self.user.favorite_categories.remove(self.category)
+            self.user.favorite_categories.discard(self.category)
+            try:
+                db.session.flush()
+            except StaleDataError:
+                # Deleted in another transaction
+                db.session.rollback()
             suggestion = self.user.suggested_categories.filter_by(category=self.category).first()
             if suggestion:
                 self.user.suggested_categories.remove(suggestion)
@@ -232,8 +237,6 @@ class RHUserFavoritesCategoryAPI(RHUserBase):
 
 
 class RHUserSuggestionsRemove(RHUserBase):
-    CSRF_ENABLED = True
-
     def _process(self):
         suggestion = self.user.suggested_categories.filter_by(category_id=request.view_args['category_id']).first()
         if suggestion:
@@ -247,8 +250,8 @@ class RHUserEmails(RHUserBase):
         data = {'email': email, 'user_id': self.user.id}
         token = make_unique_token(lambda t: not token_storage.get(t))
         token_storage.set(token, data, 24 * 3600)
-        GenericMailer.send(make_email(email, template=get_template_module('users/emails/verify_email.txt',
-                                                                          user=self.user, email=email, token=token)))
+        send_email(make_email(email, template=get_template_module('users/emails/verify_email.txt',
+                                                                  user=self.user, email=email, token=token)))
 
     def _process(self):
         form = UserEmailsForm()
@@ -307,8 +310,6 @@ class RHUserEmailsVerify(RHUserBase):
 
 
 class RHUserEmailsDelete(RHUserBase):
-    CSRF_ENABLED = True
-
     def _process(self):
         email = request.view_args['email']
         if email in self.user.secondary_emails:
@@ -317,14 +318,37 @@ class RHUserEmailsDelete(RHUserBase):
 
 
 class RHUserEmailsSetPrimary(RHUserBase):
-    CSRF_ENABLED = True
-
     def _process(self):
         email = request.form['email']
         if email in self.user.secondary_emails:
             self.user.make_email_primary(email)
             flash(_('Your primary email was updated successfully.'), 'success')
         return redirect(url_for('.user_emails'))
+
+
+class RHAdmins(RHAdminBase):
+    """Show Indico administrators"""
+
+    def _process(self):
+        admins = set(User.query
+                     .filter_by(is_admin=True, is_deleted=False)
+                     .order_by(db.func.lower(User.first_name), db.func.lower(User.last_name)))
+
+        form = AdminsForm(admins=admins)
+        if form.validate_on_submit():
+            added = form.admins.data - admins
+            removed = admins - form.admins.data
+            for user in added:
+                user.is_admin = True
+                logger.warn('Admin rights granted to %r by %r [%s]', user, session.user, request.remote_addr)
+                flash(_('Admin added: {name} ({email})').format(name=user.name, email=user.email), 'success')
+            for user in removed:
+                user.is_admin = False
+                logger.warn('Admin rights revoked from %r by %r [%s]', user, session.user, request.remote_addr)
+                flash(_('Admin removed: {name} ({email})').format(name=user.name, email=user.email), 'success')
+            return redirect(url_for('.admins'))
+
+        return WPUsersAdmin.render_template('admins.html', 'admins', form=form)
 
 
 class RHUsersAdmin(RHAdminBase):
@@ -344,30 +368,32 @@ class RHUsersAdmin(RHAdminBase):
             include_pending = form_data.pop('include_pending')
             external = form_data.pop('external')
             form_data = {k: v for (k, v) in form_data.iteritems() if v and v.strip()}
-            matches = search_users(exact=exact, include_deleted=include_deleted,
-                                   include_pending=include_pending, external=external, **form_data)
+            matches = search_users(exact=exact, include_deleted=include_deleted, include_pending=include_pending,
+                                   external=external, allow_system_user=True, **form_data)
             for entry in matches:
                 if isinstance(entry, User):
                     search_results.append(UserEntry(
                         profile_url=url_for('.user_profile', entry),
+                        user=entry,
                         **{k: getattr(entry, k) for k in IDENTITY_ATTRIBUTES}
                     ))
                 else:
                     search_results.append(UserEntry(
                         profile_url=None,
+                        user=None,
                         full_name="{first_name} {last_name}".format(**entry.data.to_dict()),
                         **{k: entry.data.get(k) for k in (IDENTITY_ATTRIBUTES - {'full_name'})}
                     ))
             search_results.sort(key=attrgetter('first_name', 'last_name'))
 
         num_reg_requests = RegistrationRequest.query.count()
-        return WPUsersAdmin.render_template('users_admin.html', form=form, search_results=search_results,
+        return WPUsersAdmin.render_template('users_admin.html', 'users', form=form, search_results=search_results,
                                             num_of_users=num_of_users, num_deleted_users=num_deleted_users,
                                             num_reg_requests=num_reg_requests)
 
 
 class RHUsersAdminSettings(RHAdminBase):
-    """Manage global suer-related settings."""
+    """Manage global user-related settings."""
 
     def _process(self):
         form = AdminUserSettingsForm(obj=FormDefaults(**user_management_settings.get_all()))
@@ -380,13 +406,16 @@ class RHUsersAdminSettings(RHAdminBase):
 class RHUsersAdminCreate(RHAdminBase):
     """Create user (admin)"""
 
-    CSRF_ENABLED = True
-
     def _process(self):
         form = AdminAccountRegistrationForm()
         if form.validate_on_submit():
             data = form.data
-            identity = Identity(provider='indico', identifier=data.pop('username'), password=data.pop('password'))
+            if data.pop('create_identity', False):
+                identity = Identity(provider='indico', identifier=data.pop('username'), password=data.pop('password'))
+            else:
+                identity = None
+                data.pop('username', None)
+                data.pop('password', None)
             user = create_user(data.pop('email'), data, identity, from_moderation=True)
             msg = Markup('{} <a href="{}">{}</a>').format(
                 escape(_('The account has been created.')),
@@ -443,7 +472,7 @@ class RHUsersAdminMerge(RHAdminBase):
             flash(_('The users have been successfully merged.'), 'success')
             return redirect(url_for('.user_profile', user_id=target.id))
 
-        return WPUsersAdmin.render_template('users_merge.html', form=form)
+        return WPUsersAdmin.render_template('users_merge.html', 'users', form=form)
 
 
 class RHUsersAdminMergeCheck(RHAdminBase):
@@ -459,16 +488,14 @@ class RHRegistrationRequestList(RHAdminBase):
 
     def _process(self):
         requests = RegistrationRequest.query.order_by(RegistrationRequest.email).all()
-        return WPUsersAdmin.render_template('registration_requests.html', pending_requests=requests)
+        return WPUsersAdmin.render_template('registration_requests.html', 'users', pending_requests=requests)
 
 
 class RHRegistrationRequestBase(RHAdminBase):
     """Base class to process a registration request"""
 
-    CSRF_ENABLED = True
-
-    def _checkParams(self, params):
-        RHAdminBase._checkParams(self, params)
+    def _process_args(self):
+        RHAdminBase._process_args(self)
         self.request = RegistrationRequest.get_one(request.view_args['request_id'])
 
 
@@ -493,3 +520,20 @@ class RHRejectRegistrationRequest(RHRegistrationRequestBase):
         send_email(make_email(self.request.email, template=tpl))
         flash(_('The request has been rejected.'), 'success')
         return jsonify_data()
+
+
+class RHUserSearch(RHProtected):
+    """Search for users based on given criteria"""
+
+    @use_args({
+        'email': fields.Str(validate=lambda s: len(s) > 3 and '@' in s),
+        'name': fields.Str(validate=validate.Length(min=3)),
+        'favorites_first': fields.Bool(missing=False)
+    })
+    def _process(self, args):
+        if not args:
+            raise BadRequest()
+
+        favorites_first = args.pop('favorites_first')
+        query = build_user_search_query(args, favorites_first=favorites_first)
+        return jsonify(user_schema.dump(query.limit(10).all(), many=True))

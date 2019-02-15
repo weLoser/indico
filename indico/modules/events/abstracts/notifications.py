@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -151,7 +151,7 @@ def get_abstract_notification_tpl_module(email_tpl, abstract):
     body = replace_placeholders('abstract-notification-email', email_tpl.body,
                                 abstract=abstract, escape_html=False)
     return get_template_module('events/abstracts/emails/abstract_notification.txt',
-                               event=email_tpl.event_new, subject=subject, body=body)
+                               event=email_tpl.event, subject=subject, body=body)
 
 
 def send_abstract_notifications(abstract):
@@ -159,11 +159,13 @@ def send_abstract_notifications(abstract):
 
     :param abstract: the abstract that is going to be checked
                      against the event's notification rules
+    :return: whether an email has been sent
     """
-    for email_tpl in abstract.event_new.abstract_email_templates:
+    sent = False
+    for email_tpl in abstract.event.abstract_email_templates:
         matched = False
         for rule in email_tpl.rules:
-            if check_rule('abstract-notifications', rule, abstract=abstract, event=abstract.event_new):
+            if check_rule('abstract-notifications', rule, abstract=abstract, event=abstract.event):
                 matched = True
                 to_recipients = []
                 if email_tpl.include_submitter:
@@ -178,8 +180,10 @@ def send_abstract_notifications(abstract):
                 tpl = get_abstract_notification_tpl_module(email_tpl, abstract)
                 email = make_email(to_list=to_recipients, cc_list=cc_recipients,
                                    reply_address=email_tpl.reply_to_address, template=tpl)
-                send_email(email, event=abstract.event_new, user=session.user)
+                send_email(email, abstract.event, 'Abstracts', session.user)
                 abstract.email_logs.append(AbstractEmailLogEntry.create_from_email(email, email_tpl=email_tpl,
                                                                                    user=session.user))
+                sent = True
         if email_tpl.stop_on_match and matched:
             break
+    return sent

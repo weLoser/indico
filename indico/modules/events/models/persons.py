@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -23,14 +23,14 @@ from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import mapper
 
-from indico.core.db.sqlalchemy import db, PyIntEnum, UTCDateTime
+from indico.core.db.sqlalchemy import PyIntEnum, UTCDateTime, db
 from indico.core.db.sqlalchemy.principals import EmailPrincipal
 from indico.core.db.sqlalchemy.util.models import auto_table_args, override_attr
 from indico.core.db.sqlalchemy.util.session import no_autoflush
-from indico.modules.users.models.users import UserTitle, PersonMixin
+from indico.modules.users.models.users import PersonMixin, UserTitle
 from indico.util.decorators import strict_classproperty
 from indico.util.locators import locator_property
-from indico.util.string import return_ascii, format_repr
+from indico.util.string import format_repr, return_ascii
 
 
 class PersonLinkDataMixin(object):
@@ -45,7 +45,7 @@ class PersonLinkDataMixin(object):
         for person_link in set(self.person_links) - value.viewkeys():
             principal = person_link.person.principal
             if principal:
-                self.update_principal(principal, del_roles={'submit'})
+                self.update_principal(principal, del_permissions={'submit'})
         # Update person links
         self.person_links = value.keys()
         for person_link, is_submitter in value.iteritems():
@@ -53,29 +53,31 @@ class PersonLinkDataMixin(object):
             principal = person.principal
             if not principal:
                 continue
-            action = {'add_roles': {'submit'}} if is_submitter else {'del_roles': {'submit'}}
+            action = {'add_permissions': {'submit'}} if is_submitter else {'del_permissions': {'submit'}}
             self.update_principal(principal, **action)
 
 
 class AuthorsSpeakersMixin(object):
+    AUTHORS_SPEAKERS_DISPLAY_ORDER_ATTR = 'display_order_key'
+
     @property
     def speakers(self):
         return [person_link
-                for person_link in sorted(self.person_links, key=attrgetter('display_order_key'))
+                for person_link in sorted(self.person_links, key=attrgetter(self.AUTHORS_SPEAKERS_DISPLAY_ORDER_ATTR))
                 if person_link.is_speaker]
 
     @property
     def primary_authors(self):
         from indico.modules.events.contributions.models.persons import AuthorType
         return [person_link
-                for person_link in sorted(self.person_links, key=attrgetter('display_order_key'))
+                for person_link in sorted(self.person_links, key=attrgetter(self.AUTHORS_SPEAKERS_DISPLAY_ORDER_ATTR))
                 if person_link.author_type == AuthorType.primary]
 
     @property
     def secondary_authors(self):
         from indico.modules.events.contributions.models.persons import AuthorType
         return [person_link
-                for person_link in sorted(self.person_links, key=attrgetter('display_order_key'))
+                for person_link in sorted(self.person_links, key=attrgetter(self.AUTHORS_SPEAKERS_DISPLAY_ORDER_ATTR))
                 if person_link.author_type == AuthorType.secondary]
 
 
@@ -151,7 +153,7 @@ class EventPerson(PersonMixin, db.Model):
         default=False
     )
 
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -180,7 +182,7 @@ class EventPerson(PersonMixin, db.Model):
 
     @locator_property
     def locator(self):
-        return dict(self.event_new.locator, person_id=self.id)
+        return dict(self.event.locator, person_id=self.id)
 
     @return_ascii
     def __repr__(self):
@@ -196,7 +198,7 @@ class EventPerson(PersonMixin, db.Model):
 
     @classmethod
     def create_from_user(cls, user, event=None, is_untrusted=False):
-        return EventPerson(user=user, event_new=event, first_name=user.first_name, last_name=user.last_name,
+        return EventPerson(user=user, event=event, first_name=user.first_name, last_name=user.last_name,
                            email=user.email, affiliation=user.affiliation, address=user.address, phone=user.phone,
                            is_untrusted=is_untrusted)
 
@@ -217,7 +219,6 @@ class EventPerson(PersonMixin, db.Model):
         for event_person in source.event_persons:
             existing = existing_persons.get(event_person.event_id)
             if existing is None:
-                assert event_person.email in target.all_emails
                 event_person.user = target
             else:
                 existing.merge_person_info(event_person)
@@ -234,7 +235,7 @@ class EventPerson(PersonMixin, db.Model):
         """
         from indico.modules.events.models.events import Event
         query = (cls.query
-                 .join(EventPerson.event_new)
+                 .join(EventPerson.event)
                  .filter(~Event.is_deleted,
                          cls.email.in_(user.all_emails),
                          cls.user_id.is_(None)))
@@ -299,7 +300,7 @@ class EventPerson(PersonMixin, db.Model):
 
         for session_block_link in other.session_block_links:
             existing_session_block_link = next((link for link in self.session_block_links
-                                                if link.session_block_id == session_block_link.contribution_id),
+                                                if link.session_block_id == session_block_link.session_block_id),
                                                None)
             if existing_session_block_link is None:
                 session_block_link.person = self
@@ -310,7 +311,7 @@ class EventPerson(PersonMixin, db.Model):
 
     def has_role(self, role, obj):
         """Whether the person has a role in the ACL list of a given object"""
-        principals = [x for x in obj.acl_entries if x.has_management_role(role, explicit=True)]
+        principals = [x for x in obj.acl_entries if x.has_management_permission(role, explicit=True)]
         return any(x
                    for x in principals
                    if ((self.user_id is not None and self.user_id == x.user_id) or
@@ -431,6 +432,10 @@ class PersonLinkBase(PersonMixin, db.Model):
     def display_order_key(self):
         return self.display_order, self.display_full_name
 
+    @property
+    def display_order_key_lastname(self):
+        return self.display_order, self.last_name, self.first_name
+
     @hybrid_property
     def object(self):
         return getattr(self, self.object_relationship_name)
@@ -487,10 +492,10 @@ def _mapper_configured():
     def _associate_event_person(target, value, *unused):
         if value is None:
             return
-        if target.person.event_new is None:
-            target.person.event_new = value
+        if target.person.event is None:
+            target.person.event = value
         else:
-            assert target.person.event_new == value
+            assert target.person.event == value
 
     @listens_for(EventPerson.event_links, 'append')
     @listens_for(EventPerson.session_block_links, 'append')

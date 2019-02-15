@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -61,7 +61,7 @@ class EventPersonCloner(EventCloner):
     def _clone_persons(self, new_event):
         attrs = get_simple_column_attrs(EventPerson) | {'user'}
         for old_person in self.old_event.persons:
-            person = EventPerson(event_new=new_event)
+            person = EventPerson(event=new_event)
             person.populate_from_attrs(old_person, attrs)
             assert person not in db.session
             self._person_map[old_person] = person
@@ -108,11 +108,15 @@ class EventProtectionCloner(EventCloner):
             self._clone_protection(new_event)
             self._clone_session_coordinator_privs(new_event)
             self._clone_acl(new_event)
+            self._clone_visibility(new_event)
         db.session.flush()
 
     def _clone_protection(self, new_event):
         new_event.protection_mode = self.old_event.protection_mode
         new_event.access_key = self.old_event.access_key
+
+    def _clone_visibility(self, new_event):
+        new_event.visibility = self.old_event.visibility if new_event.category == self.old_event.category else None
 
     def _clone_session_coordinator_privs(self, new_event):
         session_settings_data = session_settings.get_all(self.old_event)

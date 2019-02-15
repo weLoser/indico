@@ -1,4 +1,4 @@
-{% extends 'layout/base.html' %}
+{% extends 'layout/admin_page.html' %}
 
 {% from 'forms/_form.html' import form_footer, form_header, form_row_static, form_rows %}
 {% from 'message_box.html' import message_box %}
@@ -19,10 +19,12 @@
             <li>{% trans %}Server default language{% endtrans %} ({{ language }})</li>
             <li>{% trans %}Indico version installed{% endtrans %} ({{ indico_version }})</li>
             <li>{% trans %}Python version used{% endtrans %} ({{ python_version }})</li>
+            <li>{% trans %}Postgres version used{% endtrans %} ({{ postgres_version }})</li>
+            <li>{% trans %}Operating system used{% endtrans %} ({{ operating_system }})</li>
+            <li>{% trans %}Debug mode{% endtrans %} ({{ _('enabled') if config.DEBUG else _('disabled') }})</li>
             <li>{% trans %}Basic statistics (number of events, contributions and users){% endtrans %}</li>
         </ul>
     {% endcall %}
-    <span id="cephalopod-data" class="hidden" data-tracker-url="{{ tracker_url }}"></span>
 
     <div id="tracking-status" class="action-box">
         <div class="section">
@@ -40,27 +42,28 @@
             </div>
         </div>
     </div>
+    {% if show_local_warning %}
+        {% include 'cephalopod/not_prod_warning.html' %}
+    {% endif %}
     <div class="i-box">
-            {{ form_header(form, id='cephalopod-form')}}
-            {{ form_rows(form, fields=('joined', 'contact_name', 'contact_email')) }}
-            {% call form_row_static(_('URL')) %}
-                <span id="server-url" class="mono">{{ instance_url }}</span>
-                <p class="form-field-description"><em>{% trans %}URL of your Indico server{% endtrans %}</em></p>
-            {% endcall %}
-            {% call form_row_static(_('Affiliation')) %}
-                <span id="affiliation">{{ affiliation }}</span>
-                <p class="form-field-description">
-                    <em>{% trans %}Affiliation of your Indico server{% endtrans %}</em>
-                </p>
-            {% endcall %}
-            {% call form_footer(form) %}
-                    <input class="i-button big highlight" type="submit" value="{% trans %}Save{% endtrans %}">
-            {% endcall %}
+        {{ form_header(form, id='cephalopod-form')}}
+        {{ form_rows(form, fields=('joined', 'contact_name', 'contact_email')) }}
+        {% call form_row_static(_('URL')) %}
+            <span id="server-url" class="mono">{{ instance_url }}</span>
+            <p class="form-field-description"><em>{% trans %}URL of your Indico server{% endtrans %}</em></p>
+        {% endcall %}
+        {% call form_row_static(_('Affiliation')) %}
+            <span id="affiliation">{{ affiliation }}</span>
+            <p class="form-field-description">
+                <em>{% trans %}Affiliation of your Indico server{% endtrans %}</em>
+            </p>
+        {% endcall %}
+        {% call form_footer(form) %}
+            <input class="i-button big highlight" type="submit" value="{% trans %}Save{% endtrans %}">
+        {% endcall %}
     </div>
 
     <script>
-        $(function initCephalopod() {
-            initCephalopdOnSettingsPage({{ tracker_url|tojson }});
-        });
+        setupCephalopodSettings({{ hub_url|tojson }}, {{ enabled|tojson }});
     </script>
 {% endblock %}

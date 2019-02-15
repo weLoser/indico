@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,22 +18,26 @@ from __future__ import unicode_literals
 
 from operator import attrgetter
 
-from flask import request, jsonify, redirect, flash
+from flask import flash, jsonify, redirect, request
 from sqlalchemy.orm import joinedload
+from webargs import fields
+from webargs.flaskparser import use_kwargs
 from werkzeug.exceptions import NotFound
 
 from indico.core.auth import multipass
 from indico.core.db import db
+from indico.modules.admin import RHAdminBase
 from indico.modules.groups import GroupProxy
-from indico.modules.groups.forms import SearchForm, EditGroupForm
+from indico.modules.groups.forms import EditGroupForm, SearchForm
 from indico.modules.groups.models.groups import LocalGroup
+from indico.modules.groups.util import serialize_group
 from indico.modules.groups.views import WPGroupsAdmin
 from indico.modules.users import User
 from indico.util.i18n import _
 from indico.web.flask.templating import get_template_module
 from indico.web.flask.util import url_for
 from indico.web.forms.base import FormDefaults
-from MaKaC.webinterface.rh.admins import RHAdminBase
+from indico.web.rh import RHProtected
 
 
 class RHGroups(RHAdminBase):
@@ -61,7 +65,7 @@ class RHGroups(RHAdminBase):
 
 
 class RHGroupBase(RHAdminBase):
-    def _checkParams(self):
+    def _process_args(self):
         try:
             group = GroupProxy(request.view_args['group_id'], request.view_args['provider'])
         except ValueError:
@@ -92,7 +96,7 @@ class RHGroupMembers(RHGroupBase):
 class RHGroupEdit(RHAdminBase):
     """Admin group modification/creation"""
 
-    def _checkParams(self):
+    def _process_args(self):
         if 'group_id' in request.view_args:
             self.new_group = False
             self.group = LocalGroup.get(request.view_args['group_id'])
@@ -119,7 +123,7 @@ class RHGroupEdit(RHAdminBase):
 
 
 class RHLocalGroupBase(RHAdminBase):
-    def _checkParams(self):
+    def _process_args(self):
         self.group = LocalGroup.get(request.view_args['group_id'])
         if self.group is None:
             raise NotFound
@@ -127,8 +131,6 @@ class RHLocalGroupBase(RHAdminBase):
 
 class RHGroupDelete(RHLocalGroupBase):
     """Admin group deletion"""
-
-    CSRF_ENABLED = True
 
     def _process(self):
         db.session.delete(self.group)
@@ -139,8 +141,15 @@ class RHGroupDelete(RHLocalGroupBase):
 class RHGroupDeleteMember(RHLocalGroupBase):
     """Admin group member deletion (ajax)"""
 
-    CSRF_ENABLED = True
-
     def _process(self):
         self.group.members.discard(User.get(request.view_args['user_id']))
         return jsonify(success=True)
+
+
+class RHGroupSearch(RHProtected):
+    @use_kwargs({
+        'name': fields.Str()
+    })
+    def _process(self, name):
+        groups = GroupProxy.search(name)
+        return jsonify([serialize_group(group) for group in groups])

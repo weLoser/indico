@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,8 +16,11 @@
 
 from __future__ import absolute_import, unicode_literals
 
-from flask import g, render_template, jsonify, request, session, has_request_context
+from datetime import datetime
+
+from flask import g, has_request_context, jsonify, render_template, request, session
 from markupsafe import Markup
+from werkzeug.exceptions import ImATeapot
 
 from indico.util.i18n import _
 from indico.web.flask.templating import get_template_module
@@ -42,7 +45,8 @@ def _pop_injected_js():
 
 
 def jsonify_form(form, fields=None, submit=None, back=None, back_url=None, back_button=True, disabled_until_change=True,
-                 disabled_fields=(), form_header_kwargs=None, skip_labels=False):
+                 disabled_fields=(), form_header_kwargs=None, skip_labels=False, save_reminder=False,
+                 footer_align_right=False, disable_if_locked=True):
     """Returns a json response containing a rendered WTForm.
 
     This ia shortcut to the ``simple_form`` jinja macro to avoid
@@ -61,6 +65,14 @@ def jsonify_form(form, fields=None, submit=None, back=None, back_url=None, back_
     :param form_header_kwargs: Keyword arguments passed to the
                                ``form_header`` macro
     :param skip_labels: Whether to show labels on the fields
+    :param save_reminder: Whether to show a message when the form has
+                          been modified and the save button is not
+                          visible
+    :param footer_align_right: Whether the buttons in the event footer
+                               should be aligned to the right.
+    :param disable_if_locked: Whether the form should be disabled when
+                              the associated event is locked (based on
+                              a CSS class in the DOM structure)
     """
     if submit is None:
         submit = _('Save')
@@ -71,14 +83,18 @@ def jsonify_form(form, fields=None, submit=None, back=None, back_url=None, back_
     tpl = get_template_module('forms/_form.html')
     html = tpl.simple_form(form, fields=fields, submit=submit, back=back, back_url=back_url, back_button=back_button,
                            disabled_until_change=disabled_until_change, disabled_fields=disabled_fields,
-                           form_header_kwargs=form_header_kwargs, skip_labels=skip_labels)
+                           form_header_kwargs=form_header_kwargs, skip_labels=skip_labels, save_reminder=save_reminder,
+                           footer_align_right=footer_align_right, disable_if_locked=disable_if_locked)
     return jsonify(html=html, js=_pop_injected_js())
 
 
-def jsonify_template(template, _render_func=render_template, **context):
+def jsonify_template(template, _render_func=render_template, _success=None, **context):
     """Returns a json response containing a rendered template"""
     html = _render_func(template, **context)
-    return jsonify(html=html, js=_pop_injected_js())
+    jsonify_kw = {}
+    if _success is not None:
+        jsonify_kw['success'] = _success
+    return jsonify(html=html, js=_pop_injected_js(), **jsonify_kw)
 
 
 def jsonify_data(flash=True, **json_data):
@@ -96,7 +112,24 @@ def jsonify_data(flash=True, **json_data):
     return jsonify(**json_data)
 
 
-def _format_request_data(data, hide_passwords):
+class ExpectedError(ImATeapot):
+    """
+    An error that is expected to happen and is guaranteed to be handled
+    by client-side code.
+
+    Use this class in new react-based code together with the AJAX
+    actions when you expect things to go wrong and want to handle
+    them in a nicer way than the usual error dialog.
+
+    :param message: A short message describing the error
+    :param data: Any additional data to return
+    """
+    def __init__(self, message, **data):
+        super(ExpectedError, self).__init__(message or 'Something went wrong')
+        self.data = dict(data, message=message)
+
+
+def _format_request_data(data, hide_passwords=False):
     if not hasattr(data, 'iterlists'):
         data = ((k, [v]) for k, v in data.iteritems())
     else:
@@ -123,20 +156,29 @@ def get_request_info(hide_passwords=True):
     """
     if not has_request_context():
         return None
+    try:
+        user_info = {
+            'id': session.user.id,
+            'name': session.user.full_name,
+            'email': session.user.email
+        } if session.user else None
+    except Exception as exc:
+        user_info = 'ERROR: {}'.format(exc)
     return {
         'id': request.id,
+        'time': datetime.now().isoformat(),
         'url': request.url,
         'endpoint': request.url_rule.endpoint if request.url_rule else None,
         'method': request.method,
         'rh': g.rh.__class__.__name__ if 'rh' in g else None,
-        'user': repr(session.user),
+        'user': user_info,
         'ip': request.remote_addr,
         'user_agent': unicode(request.user_agent),
         'referrer': request.referrer,
         'data': {
-            'url': _format_request_data(request.view_args, False),
-            'get': _format_request_data(request.args, False),
-            'post': _format_request_data(request.form, hide_passwords),
+            'url': _format_request_data(request.view_args) if request.view_args is not None else None,
+            'get': _format_request_data(request.args),
+            'post': _format_request_data(request.form, hide_passwords=hide_passwords),
             'json': request.get_json(silent=True),
             'headers': _format_request_data(request.headers, False),
         }

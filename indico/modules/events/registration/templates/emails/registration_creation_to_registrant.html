@@ -6,7 +6,7 @@
 {%- endblock %}
 
 {% block registration_header -%}
-    {% set event = registration.registration_form.event_new %}
+    {% set event = registration.registration_form.event %}
     <p>Dear {{ registration.full_name }},</p>
     <p>
         {% block registration_header_text %}
@@ -39,6 +39,15 @@
 
 {% macro render_registration_info() %}
     for the event <strong>{{ event.title }}</strong>
+    {% if event.start_dt_local.date() == event.end_dt_local.date() %}
+        ({{ event.start_dt|format_datetime(timezone=event.tzinfo) }}
+        -
+        {{ event.end_dt|format_time(timezone=event.tzinfo) }})
+    {% else %}
+        ({{ event.start_dt|format_datetime(timezone=event.tzinfo) }}
+        -
+        {{ event.end_dt|format_datetime(timezone=event.tzinfo) }})
+    {% endif %}
 {% endmacro %}
 
 

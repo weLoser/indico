@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -134,10 +134,7 @@ def get_default_folder_names():
 
 def get_event(linked_object):
     from indico.modules.categories import Category
-    from MaKaC.conference import Conference
     if isinstance(linked_object, Category):
         return None
-    elif isinstance(linked_object, Conference):
-        return linked_object.as_event
     else:
-        return linked_object.event_new
+        return linked_object.event

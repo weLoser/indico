@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,8 +16,8 @@
 
 import pytest
 
-from indico.modules.rb import settings as rb_settings
-from indico.modules.rb.util import rb_is_admin, rb_check_user_access
+from indico.modules.rb import rb_settings
+from indico.modules.rb.util import rb_check_user_access, rb_is_admin
 from indico.testing.util import bool_matrix
 
 

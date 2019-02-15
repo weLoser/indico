@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,7 +18,7 @@ from __future__ import unicode_literals
 
 import posixpath
 
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.storage import StoredFileMixin
 from indico.util.string import return_ascii, strict_unicode
@@ -45,7 +45,7 @@ class ImageFile(StoredFileMixin, db.Model):
         index=True
     )
 
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=False,
         backref=db.backref(
@@ -59,14 +59,14 @@ class ImageFile(StoredFileMixin, db.Model):
 
     @property
     def locator(self):
-        return dict(self.event_new.locator, image_id=self.id, filename=self.filename)
+        return dict(self.event.locator, image_id=self.id, filename=self.filename)
 
     def _build_storage_path(self):
-        path_segments = ['event', strict_unicode(self.event_new.id), 'images']
+        path_segments = ['event', strict_unicode(self.event.id), 'images']
         self.assign_id()
         filename = '{}-{}'.format(self.id, self.filename)
         path = posixpath.join(*(path_segments + [filename]))
-        return Config.getInstance().getAttachmentStorage(), path
+        return config.ATTACHMENT_STORAGE, path
 
     @return_ascii
     def __repr__(self):

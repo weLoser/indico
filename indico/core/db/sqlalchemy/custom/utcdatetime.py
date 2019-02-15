@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -15,7 +15,7 @@
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
 import pytz
-from sqlalchemy import types, func
+from sqlalchemy import func, types
 from sqlalchemy.sql import operators
 from sqlalchemy.sql.sqltypes import Interval
 from sqlalchemy.util import memoized_property
@@ -64,7 +64,5 @@ class UTCDateTime(types.TypeDecorator):
             return value.replace(tzinfo=pytz.utc)
 
     def alembic_render_type(self, autogen_context):
-        # This method can go away once this change is in the Alembic version we are using:
-        # https://bitbucket.org/zzzeek/alembic/issue/229/#comment-13123225
-        autogen_context['imports'].add('from indico.core.db.sqlalchemy import UTCDateTime')
+        autogen_context.imports.add('from indico.core.db.sqlalchemy import UTCDateTime')
         return type(self).__name__

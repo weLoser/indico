@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,17 +14,19 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals, absolute_import
+from __future__ import absolute_import, unicode_literals
 
 from operator import attrgetter
 
-from wtforms import SelectFieldBase, HiddenField
-from wtforms.widgets import Select, RadioInput
+from wtforms import HiddenField, SelectFieldBase
+from wtforms.widgets import RadioInput, Select
 
 from indico.web.forms.widgets import JinjaWidget
 
 
 class _EnumFieldMixin(object):
+    keep_enum = True
+
     def process_formdata(self, valuelist):
         if valuelist:
             if valuelist[0] in ('', '__None') and self.none is not None:
@@ -34,21 +36,24 @@ class _EnumFieldMixin(object):
                     self.data = self.enum[valuelist[0]]
                 except KeyError:
                     raise ValueError(self.gettext('Not a valid choice'))
+        if self.data is not None and not self.keep_enum:
+            self.data = self.data.value
 
 
 class IndicoEnumSelectField(_EnumFieldMixin, SelectFieldBase):
-    """Select field backed by a :class:`TitledEnum`"""
+    """Select field backed by a :class:`RichEnum`"""
 
     widget = Select()
 
     def __init__(self, label=None, validators=None, enum=None, sorted=False, only=None, skip=None, none=None,
-                 titles=None, **kwargs):
+                 titles=None, keep_enum=True, **kwargs):
         super(IndicoEnumSelectField, self).__init__(label, validators, **kwargs)
         self.enum = enum
         self.sorted = sorted
         self.only = set(only) if only is not None else None
         self.skip = set(skip or set())
         self.none = none
+        self.keep_enum = keep_enum
         self.titles = titles
 
     def iter_choices(self):
@@ -83,3 +88,6 @@ class HiddenEnumField(_EnumFieldMixin, HiddenField):
         if self.data is not None and (self.data in self.skip or (self.only is not None and self.data not in self.only)):
             self.data = old_data
             raise ValueError(self.gettext('Not a valid choice'))
+
+    def _value(self):
+        return getattr(self.data, 'name', self.data) if self.data is not None else ''

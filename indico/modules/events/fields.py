@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,18 +19,19 @@ from __future__ import unicode_literals
 import json
 
 from sqlalchemy import inspect
-from wtforms import SelectField
+from wtforms import RadioField, SelectField
 
+from indico.core import signals
 from indico.core.db.sqlalchemy.util.session import no_autoflush
 from indico.core.errors import UserValueError
 from indico.modules.events.layout import theme_settings
-from indico.modules.events.models.persons import EventPersonLink, EventPerson, PersonLinkBase
+from indico.modules.events.models.persons import EventPerson, EventPersonLink, PersonLinkBase
 from indico.modules.events.models.references import ReferenceType
+from indico.modules.events.persons.util import get_event_person
 from indico.modules.events.util import serialize_person_link
-from indico.modules.users import User
 from indico.modules.users.models.users import UserTitle
 from indico.modules.users.util import get_user_by_email
-from indico.util.i18n import _
+from indico.util.i18n import _, orig_string
 from indico.web.forms.fields import MultipleItemsField, PrincipalListField
 from indico.web.forms.widgets import JinjaWidget
 
@@ -97,46 +98,7 @@ class EventPersonListField(PrincipalListField):
         return getattr(self.get_form(), 'event', None)
 
     def _convert_data(self, data):
-        return map(self._get_event_person, data)
-
-    def _create_event_person(self, data):
-        title = next((x.value for x in UserTitle if data.get('title') == x.title), None)
-        person = EventPerson(event_new=self.event, email=data.get('email', '').lower(), _title=title,
-                             first_name=data.get('firstName'), last_name=data['familyName'],
-                             affiliation=data.get('affiliation'), address=data.get('address'),
-                             phone=data.get('phone'), is_untrusted=self.create_untrusted_persons)
-        # Keep the original data to cancel the conversion if the person is not persisted to the db
-        self.event_person_conversions[person] = data
-        return person
-
-    def _get_event_person_for_user(self, user):
-        person = EventPerson.for_user(user, self.event, is_untrusted=self.create_untrusted_persons)
-        # Keep a reference to the user to cancel the conversion if the person is not persisted to the db
-        self.event_person_conversions[person] = user
-        return person
-
-    def _get_event_person(self, data):
-        person_type = data.get('_type')
-        if person_type is None:
-            if data.get('email'):
-                email = data['email'].lower()
-                user = User.find_first(~User.is_deleted, User.all_emails.contains(email))
-                if user:
-                    return self._get_event_person_for_user(user)
-                elif self.event:
-                    person = self.event.persons.filter_by(email=email).first()
-                    if person:
-                        return person
-            # We have no way to identify an existing event person with the provided information
-            return self._create_event_person(data)
-        elif person_type == 'Avatar':
-            return self._get_event_person_for_user(self._convert_principal(data))
-        elif person_type == 'EventPerson':
-            return self.event.persons.filter_by(id=data['id']).one()
-        elif person_type == 'PersonLink':
-            return self.event.persons.filter_by(id=data['personId']).one()
-        else:
-            raise ValueError(_("Unknown person type '{}'").format(person_type))
+        raise NotImplementedError
 
     def _serialize_principal(self, principal):
         from indico.modules.events.util import serialize_event_person
@@ -181,8 +143,10 @@ class PersonLinkListFieldBase(EventPersonListField):
     @no_autoflush
     def _get_person_link(self, data, extra_data=None):
         extra_data = extra_data or {}
-        person = self._get_event_person(data)
-        person_data = {'title': next((x.value for x in UserTitle if data.get('title') == x.title), UserTitle.none),
+        person = get_event_person(self.event, data, create_untrusted_persons=self.create_untrusted_persons,
+                                  allow_external=True)
+        person_data = {'title': next((x.value for x in UserTitle if data.get('title') == orig_string(x.title)),
+                                     UserTitle.none),
                        'first_name': data.get('firstName', ''), 'last_name': data['familyName'],
                        'affiliation': data.get('affiliation', ''), 'address': data.get('address', ''),
                        'phone': data.get('phone', ''), 'display_order': data['displayOrder']}
@@ -195,9 +159,11 @@ class PersonLinkListFieldBase(EventPersonListField):
         person_link.populate_from_dict(person_data)
         email = data.get('email', '').lower()
         if email != person_link.email:
-            if not self.event.persons.filter_by(email=email).first():
+            if not self.event or not self.event.persons.filter_by(email=email).first():
                 person_link.person.email = email
                 person_link.person.user = get_user_by_email(email)
+                if inspect(person).persistent:
+                    signals.event.person_updated.send(person_link.person)
             else:
                 raise UserValueError(_('There is already a person with the email {}').format(email))
         return person_link
@@ -235,11 +201,11 @@ class EventPersonLinkListField(PersonLinkListFieldBase):
     def _serialize_person_link(self, principal, extra_data=None):
         extra_data = extra_data or {}
         data = dict(extra_data, **serialize_person_link(principal))
-        data['isSubmitter'] = principal.is_submitter
+        data['isSubmitter'] = self.data[principal] if self.get_form().is_submitted() else principal.is_submitter
         return data
 
     def pre_validate(self, form):
-        super(PersonLinkListFieldBase, self).pre_validate(form)
+        super(EventPersonLinkListField, self).pre_validate(form)
         persons = set()
         for person_link in self.data:
             if person_link.person in persons:
@@ -250,12 +216,20 @@ class EventPersonLinkListField(PersonLinkListFieldBase):
 class IndicoThemeSelectField(SelectField):
     def __init__(self, *args, **kwargs):
         allow_default = kwargs.pop('allow_default', False)
-        event_type = kwargs.pop('event_type').legacy_name
+        event_type = kwargs.pop('event_type').name
         super(IndicoThemeSelectField, self).__init__(*args, **kwargs)
         self.choices = sorted([(tid, theme['title'])
-                               for tid, theme in theme_settings.get_themes_for(event_type).viewitems()
-                               if not theme.get('is_xml')],
+                               for tid, theme in theme_settings.get_themes_for(event_type).viewitems()],
                               key=lambda x: x[1].lower())
         if allow_default:
             self.choices.insert(0, ('', _('Category default')))
         self.default = '' if allow_default else theme_settings.defaults[event_type]
+
+
+class RatingReviewField(RadioField):
+    widget = JinjaWidget('events/reviews/rating_widget.html', inline_js=True)
+
+    def __init__(self, *args, **kwargs):
+        self.question = kwargs.pop('question')
+        self.rating_range = kwargs.pop('rating_range')
+        super(RatingReviewField, self).__init__(*args, **kwargs)

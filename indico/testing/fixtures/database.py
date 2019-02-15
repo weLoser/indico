@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -23,17 +23,16 @@ import tempfile
 from contextlib import contextmanager
 
 import pytest
-from sqlalchemy.engine import Engine
 from sqlalchemy import event
+from sqlalchemy.engine import Engine
 
 from indico.core.db import db as db_
-from indico.core.db.sqlalchemy.util.management import delete_all_tables
-from indico.core.db.sqlalchemy.util.session import update_session_options
+from indico.core.db.sqlalchemy.util.management import create_all_tables, delete_all_tables
 from indico.util.process import silent_check_call
 from indico.web.flask.app import configure_db
 
 
-@pytest.yield_fixture(scope='session')
+@pytest.fixture(scope='session')
 def postgresql():
     """Provides a clean temporary PostgreSQL server/database.
 
@@ -54,7 +53,7 @@ def postgresql():
     except Exception as e:
         pytest.skip('Could not retrieve PostgreSQL version: {}'.format(e))
     pg_version = map(int, re.match(r'initdb \(PostgreSQL\) ((?:\d+\.?)+)', version_output).group(1).split('.'))
-    if pg_version[0] < 9 or (pg_version[0] == 9 and pg_version[1] < 2):
+    if pg_version[0] < 9 or (pg_version[0] == 9 and pg_version[1] < 6):
         pytest.skip('PostgreSQL version is too old: {}'.format(version_output))
 
     # Prepare server instance and a test database
@@ -87,7 +86,7 @@ def postgresql():
         shutil.rmtree(temp_dir)
 
 
-@pytest.yield_fixture(scope='session')
+@pytest.fixture(scope='session')
 def database(app, postgresql):
     """Creates a test database which is destroyed afterwards
 
@@ -96,19 +95,18 @@ def database(app, postgresql):
     """
     app.config['SQLALCHEMY_DATABASE_URI'] = postgresql
     configure_db(app)
-    update_session_options(db_)
     if 'INDICO_TEST_DATABASE_URI' in os.environ and os.environ.get('INDICO_TEST_DATABASE_HAS_TABLES') == '1':
         yield db_
         return
     with app.app_context():
-        db_.create_all()
+        create_all_tables(db_)
     yield db_
     db_.session.remove()
     with app.app_context():
         delete_all_tables(db_)
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def db(database, monkeypatch):
     """Provides database access and ensures changes do not persist"""
     # Prevent database/session modifications
@@ -126,7 +124,7 @@ def db(database, monkeypatch):
     database.session.remove()
 
 
-@pytest.yield_fixture
+@pytest.fixture
 @pytest.mark.usefixtures('db')
 def count_queries():
     """Provides a query counter.

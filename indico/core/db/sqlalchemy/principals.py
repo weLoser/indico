@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,15 +18,15 @@ from __future__ import unicode_literals
 
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.ext.declarative import declared_attr
-from sqlalchemy.ext.hybrid import hybrid_method, hybrid_property, Comparator
+from sqlalchemy.ext.hybrid import Comparator, hybrid_method, hybrid_property
 from sqlalchemy.orm import joinedload, noload
 
-from indico.core.db.sqlalchemy import db, PyIntEnum
+from indico.core.db.sqlalchemy import PyIntEnum, db
 from indico.core.db.sqlalchemy.util.models import get_simple_column_attrs
-from indico.core.roles import get_available_roles
-from indico.util.decorators import strict_classproperty, classproperty
-from indico.util.fossilize import fossilizes, Fossilizable, IFossil
-from indico.util.string import return_ascii, format_repr
+from indico.core.permissions import get_available_permissions
+from indico.util.decorators import classproperty, strict_classproperty
+from indico.util.fossilize import Fossilizable, IFossil, fossilizes
+from indico.util.string import format_repr, return_ascii
 from indico.util.struct.enum import IndicoEnum
 
 
@@ -36,20 +36,33 @@ class PrincipalType(int, IndicoEnum):
     multipass_group = 3
     email = 4
     network = 5
+    event_role = 6
 
 
-def _make_check(type_, allow_emails, allow_networks, *cols):
+def _make_check(type_, allow_emails, allow_networks, allow_event_roles, *cols):
     all_cols = {'user_id', 'local_group_id', 'mp_group_provider', 'mp_group_name'}
     if allow_emails:
         all_cols.add('email')
     if allow_networks:
         all_cols.add('ip_network_group_id')
+    if allow_event_roles:
+        all_cols.add('event_role_id')
     required_cols = all_cols & set(cols)
     forbidden_cols = all_cols - required_cols
     criteria = ['{} IS NULL'.format(col) for col in sorted(forbidden_cols)]
     criteria += ['{} IS NOT NULL'.format(col) for col in sorted(required_cols)]
     condition = 'type != {} OR ({})'.format(type_, ' AND '.join(criteria))
     return db.CheckConstraint(condition, 'valid_{}'.format(type_.name))
+
+
+def serialize_email_principal(email):
+    """Serialize email principal to a simple dict"""
+    return {
+        '_type': 'Email',
+        'email': email.email,
+        'id': email.name,
+        'identifier': 'Email:{}'.format(email.email)
+    }
 
 
 class IEmailPrincipalFossil(IFossil):
@@ -76,6 +89,7 @@ class EmailPrincipal(Fossilizable):
     is_network = False
     is_group = False
     is_single_person = True
+    is_event_role = False
     principal_order = 0
     fossilizes(IEmailPrincipalFossil)
 
@@ -88,10 +102,6 @@ class EmailPrincipal(Fossilizable):
 
     @property
     def as_legacy(self):
-        return self
-
-    @property
-    def as_new(self):
         return self
 
     @property
@@ -135,6 +145,8 @@ class PrincipalMixin(object):
     allow_emails = False
     #: Whether it should be allowed to add an IP network.
     allow_networks = False
+    #: Whether it should be allowed to add an event role.
+    allow_event_roles = False
 
     @strict_classproperty
     @classmethod
@@ -152,16 +164,22 @@ class PrincipalMixin(object):
                 uniques.append(db.Index('ix_uq_{}_email'.format(cls.__tablename__), 'email', *cls.unique_columns,
                                         unique=True, postgresql_where=db.text('type = {}'.format(PrincipalType.email))))
         indexes = [db.Index(None, 'mp_group_provider', 'mp_group_name')]
-        checks = [_make_check(PrincipalType.user, cls.allow_emails, cls.allow_networks, 'user_id'),
-                  _make_check(PrincipalType.local_group, cls.allow_emails, cls.allow_networks, 'local_group_id'),
+        checks = [_make_check(PrincipalType.user, cls.allow_emails, cls.allow_networks, cls.allow_event_roles,
+                              'user_id'),
+                  _make_check(PrincipalType.local_group, cls.allow_emails, cls.allow_networks, cls.allow_event_roles,
+                              'local_group_id'),
                   _make_check(PrincipalType.multipass_group, cls.allow_emails, cls.allow_networks,
-                              'mp_group_provider', 'mp_group_name')]
+                              cls.allow_event_roles, 'mp_group_provider', 'mp_group_name')]
         if cls.allow_emails:
-            checks.append(_make_check(PrincipalType.email, cls.allow_emails, cls.allow_networks, 'email'))
+            checks.append(_make_check(PrincipalType.email, cls.allow_emails, cls.allow_networks, cls.allow_event_roles,
+                                      'email'))
             checks.append(db.CheckConstraint('email IS NULL OR email = lower(email)', 'lowercase_email'))
         if cls.allow_networks:
             checks.append(_make_check(PrincipalType.network, cls.allow_emails, cls.allow_networks,
-                                      'ip_network_group_id'))
+                                      cls.allow_event_roles, 'ip_network_group_id'))
+        if cls.allow_event_roles:
+            checks.append(_make_check(PrincipalType.event_role, cls.allow_emails, cls.allow_networks,
+                                      cls.allow_event_roles, 'event_role_id'))
         return tuple(uniques + indexes + checks)
 
 
@@ -172,6 +190,8 @@ class PrincipalMixin(object):
             exclude_values.add(PrincipalType.email)
         if not cls.allow_networks:
             exclude_values.add(PrincipalType.network)
+        if not cls.allow_event_roles:
+            exclude_values.add(PrincipalType.event_role)
         return db.Column(
             PyIntEnum(PrincipalType, exclude_values=(exclude_values or None)),
             nullable=False
@@ -233,6 +253,17 @@ class PrincipalMixin(object):
         )
 
     @declared_attr
+    def event_role_id(cls):
+        if not cls.allow_event_roles:
+            return
+        return db.Column(
+            db.Integer,
+            db.ForeignKey('events.roles.id'),
+            nullable=True,
+            index=True
+        )
+
+    @declared_attr
     def user(cls):
         assert cls.principal_backref_name
         return db.relationship(
@@ -240,7 +271,7 @@ class PrincipalMixin(object):
             lazy=False,
             backref=db.backref(
                 cls.principal_backref_name,
-                cascade='all, delete-orphan',
+                cascade='all, delete',
                 lazy='dynamic'
             )
         )
@@ -253,7 +284,7 @@ class PrincipalMixin(object):
             lazy=False,
             backref=db.backref(
                 cls.principal_backref_name,
-                cascade='all, delete-orphan',
+                cascade='all, delete',
                 lazy='dynamic'
             )
         )
@@ -268,7 +299,22 @@ class PrincipalMixin(object):
             lazy=False,
             backref=db.backref(
                 cls.principal_backref_name,
-                cascade='all, delete-orphan',
+                cascade='all, delete',
+                lazy='dynamic'
+            )
+        )
+
+    @declared_attr
+    def event_role(cls):
+        if not cls.allow_event_roles:
+            return
+        assert cls.principal_backref_name
+        return db.relationship(
+            'EventRole',
+            lazy=False,
+            backref=db.backref(
+                cls.principal_backref_name,
+                cascade='all, delete',
                 lazy='dynamic'
             )
         )
@@ -286,6 +332,8 @@ class PrincipalMixin(object):
             return EmailPrincipal(self.email)
         elif self.type == PrincipalType.network:
             return self.ip_network_group
+        elif self.type == PrincipalType.event_role:
+            return self.event_role
 
     @principal.setter
     def principal(self, value):
@@ -295,12 +343,16 @@ class PrincipalMixin(object):
         self.local_group = None
         self.multipass_group_provider = self.multipass_group_name = None
         self.ip_network_group = None
+        self.event_role = None
         if self.type == PrincipalType.email:
             assert self.allow_emails
             self.email = value.email
         elif self.type == PrincipalType.network:
             assert self.allow_networks
             self.ip_network_group = value
+        elif self.type == PrincipalType.event_role:
+            assert self.allow_event_roles
+            self.event_role = value
         elif self.type == PrincipalType.local_group:
             self.local_group = value.group
         elif self.type == PrincipalType.multipass_group:
@@ -384,7 +436,7 @@ class PrincipalMixin(object):
         return updated
 
 
-class PrincipalRolesMixin(PrincipalMixin):
+class PrincipalPermissionsMixin(PrincipalMixin):
     #: The model for which we are a principal.  May also be a string
     #: containing the model's class name.
     principal_for = None
@@ -392,11 +444,12 @@ class PrincipalRolesMixin(PrincipalMixin):
     @strict_classproperty
     @classmethod
     def __auto_table_args(cls):
-        checks = [db.CheckConstraint('read_access OR full_access OR array_length(roles, 1) IS NOT NULL', 'has_privs')]
+        checks = [db.CheckConstraint('read_access OR full_access OR array_length(permissions, 1) IS NOT NULL',
+                                     'has_privs')]
         if cls.allow_networks:
             # you can match a network acl entry without being logged in.
             # we never want that for anything but simple read access
-            checks.append(db.CheckConstraint('type != {} OR (NOT full_access AND array_length(roles, 1) IS NULL)'
+            checks.append(db.CheckConstraint('type != {} OR (NOT full_access AND array_length(permissions, 1) IS NULL)'
                                              .format(PrincipalType.network),
                                              'networks_read_only'))
         return tuple(checks)
@@ -411,7 +464,7 @@ class PrincipalRolesMixin(PrincipalMixin):
         nullable=False,
         default=False
     )
-    roles = db.Column(
+    permissions = db.Column(
         ARRAY(db.String),
         nullable=False,
         default=[]
@@ -426,42 +479,44 @@ class PrincipalRolesMixin(PrincipalMixin):
             return cls.principal_for
 
     @hybrid_method
-    def has_management_role(self, role=None, explicit=False):
-        """Checks whether a principal has a certain management role.
+    def has_management_permission(self, permission=None, explicit=False):
+        """Checks whether a principal has a certain management permission.
 
         The check always succeeds if the user is a full manager; in
-        that case the list of roles is ignored.
+        that case the list of permissions is ignored.
 
-        :param role: The role to check for or 'ANY' to check for any
-                     management role.
-        :param explicit: Whether to check for the role itself even if
+        :param permission: The permission to check for or 'ANY' to check for any
+                     management permission.
+        :param explicit: Whether to check for the permission itself even if
                          the user has full management privileges.
         """
-        if role is None:
+        if permission is None:
             if explicit:
-                raise ValueError('role must be specified if explicit=True')
+                raise ValueError('permission must be specified if explicit=True')
             return self.full_access
         elif not explicit and self.full_access:
             return True
-        valid_roles = get_available_roles(self.principal_for_obj).viewkeys()
-        current_roles = set(self.roles) & valid_roles
-        if role == 'ANY':
-            return bool(current_roles)
-        assert role in valid_roles, "invalid role '{}' for object '{}'".format(role, self.principal_for_obj)
-        return role in current_roles
+        valid_permissions = get_available_permissions(self.principal_for_obj).viewkeys()
+        current_permissions = set(self.permissions) & valid_permissions
+        if permission == 'ANY':
+            return bool(current_permissions)
+        assert permission in valid_permissions, "invalid permission '{}' for object '{}'".format(permission,
+                                                                                                 self.principal_for_obj)
+        return permission in current_permissions
 
-    @has_management_role.expression
-    def has_management_role(cls, role=None, explicit=False):
-        if role is None:
+    @has_management_permission.expression
+    def has_management_permission(cls, permission=None, explicit=False):
+        if permission is None:
             if explicit:
-                raise ValueError('role must be specified if explicit=True')
+                raise ValueError('permission must be specified if explicit=True')
             return cls.full_access
-        valid_roles = get_available_roles(cls.principal_for_obj).viewkeys()
-        if role == 'ANY':
-            crit = (cls.roles.op('&&')(db.func.cast(valid_roles, ARRAY(db.String))))
+        valid_permissions = get_available_permissions(cls.principal_for_obj).viewkeys()
+        if permission == 'ANY':
+            crit = (cls.permissions.op('&&')(db.func.cast(valid_permissions, ARRAY(db.String))))
         else:
-            assert role in valid_roles, "invalid role '{}' for object '{}'".format(role, cls.principal_for_obj)
-            crit = (cls.roles.op('&&')(db.func.cast([role], ARRAY(db.String))))
+            assert permission in valid_permissions, \
+                "invalid permission '{}' for object '{}'".format(permission, cls.principal_for_obj)
+            crit = (cls.permissions.op('&&')(db.func.cast([permission], ARRAY(db.String))))
         if explicit:
             return crit
         else:
@@ -470,11 +525,11 @@ class PrincipalRolesMixin(PrincipalMixin):
     def merge_privs(self, other):
         self.read_access = self.read_access or other.read_access
         self.full_access = self.full_access or other.full_access
-        self.roles = sorted(set(self.roles) | set(other.roles))
+        self.permissions = sorted(set(self.permissions) | set(other.permissions))
 
     @property
     def current_data(self):
-        return {'roles': set(self.roles),
+        return {'permissions': set(self.permissions),
                 'read_access': self.read_access,
                 'full_access': self.full_access}
 
@@ -492,6 +547,8 @@ class PrincipalComparator(Comparator):
             criteria = [self.cls.email == other.email]
         elif other.principal_type == PrincipalType.network:
             criteria = [self.cls.ip_network_group_id == other.id]
+        elif other.principal_type == PrincipalType.event_role:
+            criteria = [self.cls.event_role_id == other.id]
         elif other.principal_type == PrincipalType.local_group:
             criteria = [self.cls.local_group_id == other.id]
         elif other.principal_type == PrincipalType.multipass_group:
@@ -513,7 +570,7 @@ def clone_principals(cls, principals):
     """
     rv = set()
     assert all(isinstance(x, cls) for x in principals)
-    attrs = get_simple_column_attrs(cls) | {'user', 'local_group', 'ip_network_group'}
+    attrs = get_simple_column_attrs(cls) | {'user', 'local_group', 'ip_network_group', 'event_role'}
     for old_principal in principals:
         principal = cls()
         principal.populate_from_dict({attr: getattr(old_principal, attr) for attr in attrs})

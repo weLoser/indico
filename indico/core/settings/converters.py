@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -58,12 +58,7 @@ class DatetimeConverter(SettingConverter):
 
 
 class TimedeltaConverter(SettingConverter):
-    """Convert a tz-aware datetime object from/to an ISO-8601 string.
-
-    The datetime is always stored as UTC, but any ISO-8601 string can
-    be converted back to a datetime object as long as it has timezone
-    information attached.
-    """
+    """Convert a timedelta object from/to seconds."""
 
     @staticmethod
     def from_python(value):

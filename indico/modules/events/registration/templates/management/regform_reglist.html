@@ -1,4 +1,4 @@
-{% extends 'layout/full_content_base.html' %}
+{% extends 'events/management/full_width_base.html' %}
 {% from 'events/registration/management/_reglist.html' import render_registration_list %}
 
 {% block title %}
@@ -31,7 +31,7 @@
                         {% trans %}Customize list{% endtrans %}
                     </button>
                 </div>
-                <div class="group">
+                <div class="group hide-if-locked">
                     <div id="indico-user-to-add" class="hidden"></div>
                     <a class="i-button arrow icon-plus" data-toggle="dropdown">
                         {% trans %}Register{% endtrans %}
@@ -90,23 +90,50 @@
                                data-href="{{ url_for('.registrations_excel_export', regform) }}">XLSX (Excel)</a>
                         </li>
                     </ul>
+                    <a href="#" class="i-button"
+                       data-href="{{ url_for('.registrations_import', regform) }}"
+                       data-title="{% trans %}Import registrants from CSV File{% endtrans %}"
+                       data-ajax-dialog>
+                        {%- trans %}Import{% endtrans -%}
+                    </a>
                     <a href="#" class="i-button arrow button js-requires-selected-row disabled" data-toggle="dropdown">
                         {%- trans %}Actions{% endtrans -%}
                     </a>
                     <ul class="dropdown">
-                        <li>
-                            <a href="#" class="icon-mail js-dialog-send-email js-requires-selected-row disabled"
+                        <li class="hide-if-locked">
+                            <a href="#" class="icon-mail js-requires-selected-row disabled"
                                data-href="{{ url_for('.email_registrants', regform) }}"
-                               data-title="{% trans %}Send email{% endtrans %}">
+                               data-title="{% trans %}Send email{% endtrans %}"
+                               data-params-selector="#registration-list tr input[type=checkbox]:checked"
+                               data-method="POST"
+                               data-ajax-dialog>
                                 {%- trans %}Email{% endtrans -%}
                             </a>
                         </li>
-                        <li>
-                            <a href="#" class="icon-tag js-requires-selected-row disabled js-submit-list-form"
-                               data-href="{{ url_for('.registrations_print_badges', regform) }}">
-                                {%- trans %}Print Badges{% endtrans -%}
-                            </a>
-                        </li>
+                        {% if has_badges %}
+                            <li>
+                                <a href="#" class="icon-tag js-requires-selected-row disabled"
+                                   data-href="{{ url_for('.registrations_config_badges', regform) }}"
+                                   data-title="{% trans %}Print Badges{% endtrans %}"
+                                   data-params-selector="#registration-list tr input[type=checkbox]:checked"
+                                   data-method="POST"
+                                   data-ajax-dialog>
+                                    {%- trans %}Print Badges{% endtrans -%}
+                                </a>
+                            </li>
+                        {% endif %}
+                        {% if has_tickets %}
+                            <li>
+                                <a href="#" class="icon-ticket js-requires-selected-row disabled"
+                                   data-href="{{ url_for('.registrations_config_tickets', regform) }}"
+                                   data-title="{% trans %}Print Tickets{% endtrans %}"
+                                   data-params-selector="#registration-list tr input[type=checkbox]:checked"
+                                   data-method="POST"
+                                   data-ajax-dialog>
+                                    {%- trans %}Print Tickets{% endtrans -%}
+                                </a>
+                            </li>
+                        {% endif %}
                         <li>
                             <a href="#"
                                class="icon-attachment js-requires-selected-row disabled js-submit-list-form regform-download-attachments"
@@ -116,7 +143,7 @@
                         </li>
                     </ul>
                     {% set pending_registrations = registrations | selectattr('state.name', 'equalto', 'pending') | list %}
-                    {% if regform.moderation_enabled or pending_registrations %}
+                    {% if (regform.moderation_enabled or pending_registrations) and not event.is_locked %}
                         <a class="i-button arrow button js-requires-selected-row disabled" data-toggle="dropdown">
                             {%- trans %}Moderation{% endtrans -%}
                         </a>
@@ -124,7 +151,7 @@
                             <li>
                                 <a href="#" class="icon-checkmark js-requires-selected-row disabled js-modify-status"
                                    data-href="{{ url_for('.registrations_modify_status', regform) }}"
-                                   data-approve="1"
+                                   data-flag="1"
                                    data-method="POST"
                                    data-confirm="{% trans %}Do you really want to approve the selected registrations?{% endtrans %}">
                                     {%- trans %}Approve registrations{% endtrans -%}
@@ -133,7 +160,7 @@
                             <li>
                                 <a href="#" class="icon-close js-requires-selected-row disabled js-modify-status"
                                    data-href="{{ url_for('.registrations_modify_status', regform) }}"
-                                   data-approve="0"
+                                   data-flag="0"
                                    data-method="POST"
                                    data-confirm="{% trans %}Do you really want to reject the selected registrations?{% endtrans %}">
                                     {%- trans %}Reject registrations{% endtrans -%}
@@ -141,29 +168,32 @@
                             </li>
                         </ul>
                     {% endif %}
-                    <a class="i-button arrow button js-requires-selected-row disabled" data-toggle="dropdown">
-                        {%- trans %}Check-in control{% endtrans -%}
-                    </a>
-                    <ul class="dropdown">
-                        <li>
-                            <a href="#" class="icon-location js-requires-selected-row disabled js-modify-status"
-                               data-method="POST"
-                               data-check-in="1"
-                               data-href="{{ url_for('.registrations_check_in', regform) }}">
-                                {%- trans %}Check-in{% endtrans -%}
-                            </a>
-                        </li>
-                        <li>
-                            <a href="#" class="icon-close js-requires-selected-row disabled js-modify-status"
-                               data-href="{{ url_for('.registrations_check_in', regform) }}"
-                               data-method="POST"
-                               data-check-in="0"
-                               data-confirm="{% trans %}Are you sure you want to reset the check-in info? The original check-in time will be lost.{% endtrans %}"
-                               data-title="{% trans %}Reset check-in{% endtrans %}">
-                                {%- trans %}Reset check-in{% endtrans -%}
-                            </a>
-                        </li>
-                    </ul>
+                    {% if not event.is_locked %}
+                        <a class="i-button arrow button js-requires-selected-row disabled" data-toggle="dropdown">
+                            {%- trans %}Check-in control{% endtrans -%}
+                        </a>
+                        <ul class="dropdown">
+                            <li>
+                                <a href="#" class="icon-location js-requires-selected-row disabled js-modify-status"
+                                   data-method="POST"
+                                   data-flag="1"
+                                   data-href="{{ url_for('.registrations_check_in', regform) }}">
+                                    {%- trans %}Check-in{% endtrans -%}
+                                </a>
+                            </li>
+                            <li>
+                                <a href="#" class="icon-close js-requires-selected-row disabled js-modify-status"
+                                   data-href="{{ url_for('.registrations_check_in', regform) }}"
+                                   data-method="POST"
+                                   data-flag="0"
+                                   data-confirm="{% trans %}Are you sure you want to reset the check-in info? The original check-in time will be lost.{% endtrans %}"
+                                   data-title="{% trans %}Reset check-in{% endtrans %}">
+                                    {%- trans %}Reset check-in{% endtrans -%}
+                                </a>
+                            </li>
+                        </ul>
+                    {% endif %}
+                    {{ template_hook('registration-status-action-button', regform=regform) }}
                 </div>
                 <div class="group">
                     <a class="i-button button change-columns-width" title="{% trans %}Adapt columns width{% endtrans %}"></a>
@@ -178,12 +208,15 @@
                 <div class="group">
                     <span class="i-button label icon-user" title="{% trans %}Total registrations{% endtrans %}">
                         {{ regform.active_registrations|length }}
+                        {%- if regform.registration_limit %}
+                            / {{ regform.registration_limit }}
+                        {%- endif -%}
                     </span>
                 </div>
             </div>
         </div>
         <div class="list-content" id="registration-list">
-            {{ render_registration_list(registrations, dynamic_columns, static_columns, total_registrations) }}
+            {{ render_registration_list(regform, registrations, dynamic_columns, static_columns, total_registrations) }}
         </div>
         <div class="toolbar right">
             <a href="{{ url_for('.manage_regform', regform) }}" class="i-button big">

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -23,24 +23,23 @@ from collections import OrderedDict, defaultdict, namedtuple
 
 from sqlalchemy.orm import joinedload, load_only
 
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.db.sqlalchemy.util.session import no_autoflush
+from indico.legacy.pdfinterface.conference import AbstractBook
 from indico.modules.events import Event
 from indico.modules.events.abstracts.models.abstracts import Abstract, AbstractState
 from indico.modules.events.abstracts.models.email_templates import AbstractEmailTemplate
 from indico.modules.events.abstracts.models.persons import AbstractPersonLink
 from indico.modules.events.abstracts.models.reviews import AbstractReview
 from indico.modules.events.abstracts.settings import abstracts_settings, boa_settings
+from indico.modules.events.contributions.models.fields import ContributionFieldVisibility
 from indico.modules.events.models.persons import EventPerson
 from indico.modules.events.tracks.models.tracks import Track
 from indico.modules.users import User
-from indico.util.date_time import format_datetime
 from indico.util.i18n import _
 from indico.util.spreadsheets import unique_col
-from indico.util.string import to_unicode
 from indico.web.flask.templating import get_template_module
-from MaKaC.PDFinterface.conference import AbstractBook
 
 
 def build_default_email_template(event, tpl_type):
@@ -48,7 +47,7 @@ def build_default_email_template(event, tpl_type):
     email = get_template_module('events/abstracts/emails/default_{}_notification.txt'.format(tpl_type))
     tpl = AbstractEmailTemplate(body=email.get_body(),
                                 extra_cc_emails=[],
-                                reply_to_address=to_unicode(event.as_legacy.getSupportInfo().getEmail()) or '',
+                                reply_to_address=event.contact_emails[0] if event.contact_emails else '',
                                 subject=email.get_subject(),
                                 include_authors=True,
                                 include_submitter=True,
@@ -77,9 +76,8 @@ def generate_spreadsheet_from_abstracts(abstracts, static_item_ids, dynamic_item
         ('submitted_contrib_type', ('Submitted type',
                                     lambda x: x.submitted_contrib_type.name if x.submitted_contrib_type else None)),
         ('score', ('Score', lambda x: round(x.score, 1) if x.score is not None else None)),
-        ('submitted_dt', ('Submission date', lambda x: to_unicode(format_datetime(x.submitted_dt)))),
-        ('modified_dt', ('Modification date', lambda x: (to_unicode(format_datetime(x.modified_dt)) if x.modified_dt
-                                                         else '')))
+        ('submitted_dt', ('Submission date', lambda x: x.submitted_dt)),
+        ('modified_dt', ('Modification date', lambda x: x.modified_dt if x.modified_dt else ''))
     ])
     field_names.extend(unique_col(item.title, item.id) for item in dynamic_items)
     field_names.extend(title for name, (title, fn) in static_item_mapping.iteritems() if name in static_item_ids)
@@ -113,9 +111,9 @@ def create_mock_abstract(event):
     Session = namedtuple('Session', ['title'])
     ContributionType = namedtuple('ContributionType', ['name'])
     Contribution = namedtuple('Contribution', ['title', 'track', 'session', 'type', 'locator'])
-    Abstract = namedtuple('Abstract', ['friendly_id', 'title', 'event_new', 'submitter', 'contribution',
+    Abstract = namedtuple('Abstract', ['friendly_id', 'title', 'event', 'submitter', 'contribution',
                                        'primary_authors', 'secondary_authors', 'locator', 'judgment_comment',
-                                       'accepted_track', 'accepted_contrib_type', 'state'])
+                                       'accepted_track', 'accepted_contrib_type', 'state', 'merged_into'])
 
     englert = User(full_name="Fran\xe7ois Englert", first_name="Fran\xe7ois", last_name="Englert", title="Prof.")
     brout = User(full_name="Robert Brout", first_name="Robert", last_name="Brout", title="Prof.")
@@ -132,32 +130,49 @@ def create_mock_abstract(event):
                                 session=session,
                                 type=contribution_type,
                                 locator={'confId': -314, 'contrib_id': 1234})
+
+    target_abstract = Abstract(friendly_id=315,
+                               title="Broken Symmetry",
+                               accepted_track=track,
+                               accepted_contrib_type=contribution_type,
+                               event=event,
+                               submitter=brout,
+                               state=AbstractState.accepted,
+                               contribution=contribution,
+                               primary_authors=[englert, brout],
+                               secondary_authors=[guralnik, hagen, kibble, higgs],
+                               locator={'confId': -314, 'abstract_id': 1235},
+                               judgment_comment='Vague but interesting!',
+                               merged_into=None)
+
     abstract = Abstract(friendly_id=314,
                         title="Broken Symmetry and the Mass of Gauge Vector Mesons",
                         accepted_track=track,
                         accepted_contrib_type=contribution_type,
-                        event_new=event,
+                        event=event,
                         submitter=brout,
                         state=AbstractState.accepted,
                         contribution=contribution,
                         primary_authors=[englert, brout],
                         secondary_authors=[guralnik, hagen, kibble, higgs],
                         locator={'confId': -314, 'abstract_id': 1234},
-                        judgment_comment='Vague but interesting!')
+                        judgment_comment='Vague but interesting!',
+                        merged_into=target_abstract)
 
     return abstract
 
 
-def make_abstract_form(event, notification_option=False, management=False):
+def make_abstract_form(event, user, notification_option=False, management=False):
     """Extends the abstract WTForm to add the extra fields.
 
     Each extra field will use a field named ``custom_ID``.
 
     :param event: The `Event` for which to create the abstract form.
+    :param user: The user who is going to use the form.
     :param notification_option: Whether to add a field to the form to
                                 disable triggering notifications for
                                 the abstract submission.
-    :param management Whether it's a manager using the abstract form
+    :param management: Whether the form is used in the management area
     :return: An `AbstractForm` subclass.
     """
     from indico.modules.events.abstracts.forms import (AbstractForm, MultiTrackMixin, SingleTrackMixin, NoTrackMixin,
@@ -178,8 +193,9 @@ def make_abstract_form(event, notification_option=False, management=False):
         if field_impl is None:
             # field definition is not available anymore
             continue
-        name = 'custom_{}'.format(custom_field.id)
-        setattr(form_class, name, field_impl.create_wtf_field())
+        if custom_field.is_user_editable or event.can_manage(user):
+            name = 'custom_{}'.format(custom_field.id)
+            setattr(form_class, name, field_impl.create_wtf_field())
     return form_class
 
 
@@ -214,7 +230,7 @@ def get_user_abstracts(event, user):
 
 
 def get_visible_reviewed_for_tracks(abstract, user):
-    event = abstract.event_new
+    event = abstract.event
     if abstract.can_judge(user, check_state=True) or user in event.global_conveners:
         return abstract.reviewed_for_tracks
     convener_tracks = {track for track in event.tracks if track.can_convene(user)}
@@ -263,7 +279,8 @@ def get_track_reviewer_abstract_counts(event, user):
                             count_reviewable - count_reviewable_reviewed)
              .outerjoin(Track.abstracts_reviewed)
              .outerjoin(AbstractReview, db.and_(AbstractReview.abstract_id == Abstract.id,
-                                                AbstractReview.user_id == user.id))
+                                                AbstractReview.user_id == user.id,
+                                                AbstractReview.track_id == Track.id))
              .group_by(Track.id))
     return {track: {'total': total, 'reviewed': reviewed, 'unreviewed': unreviewed}
             for track, total, reviewed, unreviewed in query}
@@ -275,12 +292,16 @@ def create_boa(event):
     :return: The path to the PDF file
     """
     path = boa_settings.get(event, 'cache_path')
-    if path and os.path.exists(path):
-        return path
+    if path:
+        path = os.path.join(config.CACHE_DIR, path)
+        if os.path.exists(path):
+            # update file mtime so it's not deleted during cache cleanup
+            os.utime(path, None)
+            return path
     pdf = AbstractBook(event)
     tmp_path = pdf.generate()
     filename = 'boa-{}.pdf'.format(event.id)
-    full_path = os.path.join(Config.getInstance().getXMLCacheDir(), filename)
+    full_path = os.path.join(config.CACHE_DIR, filename)
     shutil.move(tmp_path, full_path)
     boa_settings.set(event, 'cache_path', filename)
     return full_path
@@ -291,7 +312,7 @@ def clear_boa_cache(event):
     path = boa_settings.get(event, 'cache_path')
     if path:
         try:
-            os.remove(os.path.join(Config.getInstance().getXMLCacheDir(), path))
+            os.remove(os.path.join(config.CACHE_DIR, path))
         except OSError as e:
             if e.errno != errno.ENOENT:
                 raise
@@ -321,7 +342,7 @@ def get_events_with_abstract_reviewer_convener(user, dt=None):
                'convener_for_tracks': 'track_convener'}
     for rel, role in mapping.iteritems():
         query = (Track.query.with_parent(user, rel)
-                 .join(Track.event_new)
+                 .join(Track.event)
                  .filter(Event.ends_after(dt), ~Event.is_deleted)
                  .options(load_only('event_id')))
         for track in query:
@@ -346,7 +367,7 @@ def get_events_with_abstract_persons(user, dt=None):
                      ~Abstract.state.in_(bad_states),
                      Event.ends_after(dt),
                      Abstract.submitter == user)
-             .join(Abstract.event_new)
+             .join(Abstract.event)
              .options(load_only('event_id')))
     for abstract in query:
         data[abstract.event_id].add('abstract_submitter')
@@ -356,8 +377,19 @@ def get_events_with_abstract_persons(user, dt=None):
              .filter(~Event.is_deleted,
                      Event.ends_after(dt),
                      EventPerson.abstract_links.any(AbstractPersonLink.abstract.has(abstract_criterion)))
-             .join(EventPerson.event_new)
+             .join(EventPerson.event)
              .options(load_only('event_id')))
     for person in query:
         data[person.event_id].add('abstract_person')
     return data
+
+
+def filter_field_values(fields, can_manage, owns_abstract):
+    active_fields = {field for field in fields if field.contribution_field.is_active}
+    if can_manage:
+        return active_fields
+    if owns_abstract:
+        return {field for field in active_fields
+                if field.contribution_field.visibility != ContributionFieldVisibility.managers_only}
+    return {field for field in active_fields
+            if field.contribution_field.visibility == ContributionFieldVisibility.public}

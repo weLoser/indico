@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,11 +16,12 @@
 
 from __future__ import unicode_literals
 
-from flask import session, redirect, request
+from flask import redirect, request, session
 from flask_multipass import MultipassException
 
 from indico.core import signals
 from indico.core.auth import multipass
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.logger import Logger
 from indico.modules.auth.models.identities import Identity
@@ -30,7 +31,6 @@ from indico.modules.users import User
 from indico.util.i18n import _
 from indico.web.flask.util import url_for
 from indico.web.menu import SideMenuItem
-from MaKaC.common.timezoneUtils import SessionTZ
 
 
 logger = Logger.get('auth')
@@ -83,8 +83,8 @@ def process_identity(identity_info):
     login_user(user, identity)
 
 
-def login_user(user, identity=None):
-    """Sets the session user and performs on-login logic
+def login_user(user, identity=None, admin_impersonation=False):
+    """Set the session user and performs on-login logic
 
     When specifying `identity`, the provider/identitifer information
     is saved in the session so the identity management page can prevent
@@ -92,22 +92,28 @@ def login_user(user, identity=None):
 
     :param user: The :class:`~indico.modules.users.User` to log in to.
     :param identity: The :class:`Identity` instance used to log in.
+    :param admin_impersonation: Whether the login is an admin
+                                impersonating the user and thus should not
+                                be considered a login by the user.
     """
-    avatar = user.as_avatar
-    session.timezone = SessionTZ(avatar).getSessionTZ()
+    if user.settings.get('force_timezone'):
+        session.timezone = user.settings.get('timezone', config.DEFAULT_TIMEZONE)
+    else:
+        session.timezone = 'LOCAL'
     session.user = user
     session.lang = user.settings.get('lang')
-    if identity:
-        identity.register_login(request.remote_addr)
-        session['login_identity'] = identity.id
-    else:
-        session.pop('login_identity', None)
-    user.synchronize_data()
+    if not admin_impersonation:
+        if identity:
+            identity.register_login(request.remote_addr)
+            session['login_identity'] = identity.id
+        else:
+            session.pop('login_identity', None)
+        user.synchronize_data()
 
 
 @signals.menu.items.connect_via('user-profile-sidemenu')
-def _extend_profile_sidemenu(sender, **kwargs):
-    yield SideMenuItem('accounts', _('Accounts'), url_for('auth.accounts'), 50)
+def _extend_profile_sidemenu(sender, user, **kwargs):
+    yield SideMenuItem('accounts', _('Accounts'), url_for('auth.accounts'), 50, disabled=user.is_system)
 
 
 @signals.users.registered.connect

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -38,7 +38,7 @@ def create_agreement(db, dummy_event, dummy_person):
     """Returns a a callable which lets you create agreements"""
 
     def _create_agreement(state):
-        agreement = Agreement(uuid=str(uuid4()), event_id=dummy_event.getId(), type='dummy',
+        agreement = Agreement(uuid=str(uuid4()), event=dummy_event, type='dummy',
                               person_email=dummy_person.email, person_name=dummy_person.name, state=state,
                               identifier=dummy_person.identifier)
         db.session.add(agreement)

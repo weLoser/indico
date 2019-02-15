@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,13 +14,13 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals, absolute_import
+from __future__ import absolute_import, unicode_literals
 
 from flask import json
 from werkzeug.datastructures import FileStorage
 from wtforms import Field
 
-from indico.core.config import Config
+from indico.core.config import config
 from indico.web.flask.templating import get_template_module
 from indico.web.forms.widgets import JinjaWidget
 
@@ -41,11 +41,10 @@ class FileField(Field):
     def __init__(self, *args, **kwargs):
         self.lightweight = kwargs.pop('lightweight', self.default_options['lightweight'])
 
-        config = Config.getInstance()
         max_file_size = kwargs.pop('max_file_size', None)
         if max_file_size is None:
-            max_file_size = min(config.getMaxUploadFileSize() or 10240,
-                                config.getMaxUploadFilesTotalSize() or 10240)  # in MB
+            max_file_size = min(config.MAX_UPLOAD_FILE_SIZE or 10240,
+                                config.MAX_UPLOAD_FILES_TOTAL_SIZE or 10240)  # in MB
         self.allow_multiple_files = kwargs.pop('multiple_files', self.default_options['multiple_files'])
         self.widget_options = {
             'url': kwargs.pop('post_url', None),
@@ -88,6 +87,7 @@ class EditableFileField(FileField):
 
     def __init__(self, *args, **kwargs):
         self.get_metadata = kwargs.pop('get_metadata', get_file_metadata)
+        self.added_only = kwargs.pop('added_only', False)
         super(EditableFileField, self).__init__(*args, **kwargs)
         self.widget_options['editable'] = True
 
@@ -103,7 +103,7 @@ class EditableFileField(FileField):
         if not self.allow_multiple_files:
             uploaded = uploaded[0] if uploaded else None
             deleted = deleted[0] if deleted else None
-        self.data = {
+        self.data = uploaded if self.added_only else {
             'added': uploaded,
             'deleted': deleted
         }

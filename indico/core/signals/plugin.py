@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,13 +16,15 @@
 
 from blinker import Namespace
 
+
 _signals = Namespace()
 
 
 cli = _signals.signal('cli', """
-Called before running the Flask-Script manager of the `indico`
-commandline script. *sender* is the Flask-Script manager which
-can be used to register additional commands/managers
+Expected to return one or more click commands/groups.
+If they use `indico.cli.core.cli_command` / `indico.cli.core.cli_group`
+they will be automatically executed within a plugin context and run
+within a Flask app context by default.
 """)
 
 shell_context = _signals.signal('shell-context', """
@@ -37,14 +39,9 @@ which will be registered on the application. The Blueprint must be named
 either *PLUGINNAME* or *compat_PLUGINNAME*.
 """)
 
-inject_css = _signals.signal('inject-css', """
-Expected to return a list of CSS URLs which are loaded after all
-other CSS. The *sender* is the WP class of the page.
-""")
-
-inject_js = _signals.signal('inject-js', """
-Expected to return a list of JS URLs which are loaded after all
-other JS. The *sender* is the WP class of the page.
+inject_bundle = _signals.signal('inject-bundle', """
+Expected to return a list of bundle names which are loaded after all
+the rest. The *sender* is the WP class of the page.
 """)
 
 template_hook = _signals.signal('template-hook', """
@@ -60,4 +57,25 @@ depend on the hook.
 
 get_event_request_definitions = _signals.signal('get-event-request-definitions', """
 Expected to return one or more RequestDefinition subclasses.
+""")
+
+get_event_themes_files = _signals.signal('get-event-themes-files', """
+Expected to return the path of a themes yaml containing event theme
+definitions.
+""")
+
+get_conference_themes = _signals.signal('get-conference-themes', """
+Expected to return ``(name, css, title)`` tuples for conference stylesheets.
+``name`` is the internal name used for the stylesheet which will be
+stored when the theme is selected in an event.  ``css`` is the location
+of the CSS file, relative to the plugin's ``static`` folder.  ``title``
+is the title displayed to the user when selecting the theme.
+""")
+
+get_template_customization_paths = _signals.signal('get-template-customization-paths', """
+Expected to return the absolute path to a directory containing template overrides.
+This signal is called once during initialization so it should not use any
+data that may change at runtime.  The behavior of a customization path returned
+by this function is exactly like ``<CUSTOMIZATION_DIR>/templates``, but
+it has lower priority than the one from the global customization dir.
 """)

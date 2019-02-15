@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,20 +16,19 @@
 
 from __future__ import unicode_literals
 
-from flask import render_template, has_request_context, session
+from flask import has_request_context, render_template, session
 
 from indico.core import signals
-from indico.core.config import Config
 from indico.modules.events.layout.util import MenuEntryData
 from indico.modules.users import User
-from indico.modules.vc.models.vc_rooms import VCRoomEventAssociation, VCRoomLinkType, VCRoom
 from indico.modules.vc.forms import VCPluginSettingsFormBase
+from indico.modules.vc.models.vc_rooms import VCRoom, VCRoomEventAssociation, VCRoomLinkType
 from indico.modules.vc.plugins import VCPluginMixin
-from indico.modules.vc.util import get_vc_plugins, get_managed_vc_plugins
+from indico.modules.vc.util import get_managed_vc_plugins, get_vc_plugins
+from indico.util.i18n import _
 from indico.web.flask.templating import get_overridable_template_name, template_hook
 from indico.web.flask.util import url_for
-from indico.web.menu import HeaderMenuEntry, SideMenuItem
-from indico.util.i18n import _
+from indico.web.menu import SideMenuItem, TopMenuItem
 
 
 __all__ = ('VCPluginMixin', 'VCPluginSettingsFormBase')
@@ -40,7 +39,7 @@ def _inject_event_header(event, **kwargs):
     res = VCRoomEventAssociation.find_for_event(event, only_linked_to_event=True)
     event_vc_rooms = [event_vc_room for event_vc_room in res.all() if event_vc_room.vc_room.plugin is not None]
     if event_vc_rooms:
-        return render_template('vc/event_header.html', event=event.as_event, event_vc_rooms=event_vc_rooms)
+        return render_template('vc/event_header.html', event=event, event_vc_rooms=event_vc_rooms)
 
 
 @template_hook('vc-actions')
@@ -74,7 +73,7 @@ def _extend_event_menu(sender, **kwargs):
 @signals.event.session_block_deleted.connect
 def _link_object_deleted(obj, **kwargs):
     for event_vc_room in obj.vc_room_associations:
-        event_vc_room.link_object = obj.event_new
+        event_vc_room.link_object = obj.event
 
 
 @signals.event.session_deleted.connect
@@ -85,16 +84,16 @@ def _session_deleted(sess, **kwargs):
 
 @signals.event.deleted.connect
 def _event_deleted(event, **kwargs):
-    user = session.user if has_request_context() and session.user else User.get(Config.getInstance().getJanitorUserId())
+    user = session.user if has_request_context() and session.user else User.get_system_user()
     for event_vc_room in VCRoomEventAssociation.find_for_event(event, include_hidden=True, include_deleted=True):
         event_vc_room.delete(user)
 
 
-@signals.indico_menu.connect
-def extend_header_menu(sender, **kwargs):
+@signals.menu.items.connect_via('top-menu')
+def _topmenu_items(sender, **kwargs):
     if not session.user or not get_managed_vc_plugins(session.user):
         return
-    return HeaderMenuEntry(url_for('vc.vc_room_list'), _('Videoconference'), _('Services'))
+    return TopMenuItem('services-vc', _('Videoconference'), url_for('vc.vc_room_list'), section='services')
 
 
 @signals.event_management.get_cloners.connect

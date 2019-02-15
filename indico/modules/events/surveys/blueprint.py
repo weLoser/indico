@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,23 +16,24 @@
 
 from __future__ import unicode_literals
 
-from indico.modules.events.surveys.controllers.display import RHSurveyList, RHSubmitSurvey
-from indico.modules.events.surveys.controllers.management.questionnaire import (RHManageSurveyQuestionnaire,
+from indico.modules.events.surveys.controllers.display import RHSaveSurveyAnswers, RHSubmitSurvey, RHSurveyList
+from indico.modules.events.surveys.controllers.management.questionnaire import (RHAddSurveyQuestion, RHAddSurveySection,
+                                                                                RHAddSurveyText, RHDeleteSurveyQuestion,
+                                                                                RHDeleteSurveySection,
+                                                                                RHDeleteSurveyText,
+                                                                                RHEditSurveyQuestion,
+                                                                                RHEditSurveySection, RHEditSurveyText,
                                                                                 RHExportSurveyQuestionnaire,
                                                                                 RHImportSurveyQuestionnaire,
-                                                                                RHAddSurveyText, RHEditSurveyText,
-                                                                                RHDeleteSurveyText, RHAddSurveyQuestion,
-                                                                                RHEditSurveyQuestion,
-                                                                                RHDeleteSurveyQuestion,
-                                                                                RHAddSurveySection, RHEditSurveySection,
-                                                                                RHDeleteSurveySection,
+                                                                                RHManageSurveyQuestionnaire,
                                                                                 RHSortSurveyItems)
-from indico.modules.events.surveys.controllers.management.results import (RHSurveyResults, RHExportSubmissionsCSV,
-                                                                          RHExportSubmissionsExcel, RHDeleteSubmissions,
-                                                                          RHDisplaySubmission)
-from indico.modules.events.surveys.controllers.management.survey import (RHManageSurveys, RHManageSurvey, RHEditSurvey,
-                                                                         RHDeleteSurvey, RHCreateSurvey,
-                                                                         RHScheduleSurvey, RHCloseSurvey, RHOpenSurvey)
+from indico.modules.events.surveys.controllers.management.results import (RHDeleteSubmissions, RHDisplaySubmission,
+                                                                          RHExportSubmissionsCSV,
+                                                                          RHExportSubmissionsExcel, RHSurveyResults)
+from indico.modules.events.surveys.controllers.management.survey import (RHCloseSurvey, RHCreateSurvey, RHDeleteSurvey,
+                                                                         RHEditSurvey, RHManageSurvey, RHManageSurveys,
+                                                                         RHOpenSurvey, RHScheduleSurvey,
+                                                                         RHSendSurveyLinks)
 from indico.web.flask.wrappers import IndicoBlueprint
 
 
@@ -42,6 +43,7 @@ _bp = IndicoBlueprint('surveys', __name__, template_folder='templates', virtual_
 # survey display/submission
 _bp.add_url_rule('/surveys/', 'display_survey_list', RHSurveyList)
 _bp.add_url_rule('/surveys/<int:survey_id>', 'display_survey_form', RHSubmitSurvey, methods=('GET', 'POST'))
+_bp.add_url_rule('/surveys/<int:survey_id>/save', 'display_save_answers', RHSaveSurveyAnswers, methods=('POST',))
 
 # survey management
 _bp.add_url_rule('/manage/surveys/', 'manage_survey_list', RHManageSurveys)
@@ -64,6 +66,7 @@ _bp.add_url_rule('/manage/surveys/<int:survey_id>/submissions', 'delete_submissi
                  methods=('DELETE',))
 _bp.add_url_rule('/manage/surveys/<int:survey_id>/submission/<int:submission_id>', 'display_submission',
                  RHDisplaySubmission)
+_bp.add_url_rule('/manage/surveys/<int:survey_id>/send-links', 'send_links', RHSendSurveyLinks, methods=('POST',))
 
 # Survey questionnaire management
 _bp.add_url_rule('/manage/surveys/<int:survey_id>/questionnaire/', 'manage_questionnaire', RHManageSurveyQuestionnaire)

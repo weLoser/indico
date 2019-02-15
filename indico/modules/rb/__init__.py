@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,6 +19,7 @@ from __future__ import unicode_literals
 from flask import session
 
 from indico.core import signals
+from indico.core.config import config
 from indico.core.logger import Logger
 from indico.core.settings import SettingsProxy
 from indico.modules.rb.models.blocking_principals import BlockingPrincipal
@@ -27,20 +28,25 @@ from indico.modules.rb.models.locations import Location
 from indico.modules.rb.models.reservations import Reservation
 from indico.modules.rb.models.rooms import Room
 from indico.modules.rb.util import rb_is_admin
-from indico.web.flask.util import url_for
 from indico.util.i18n import _
-from indico.web.menu import SideMenuSection, SideMenuItem
+from indico.web.flask.util import url_for
+from indico.web.menu import SideMenuItem, SideMenuSection, TopMenuItem
 
 
 logger = Logger.get('rb')
 
 
-settings = SettingsProxy('roombooking', {
+rb_settings = SettingsProxy('roombooking', {
+    'google_maps_api_key': '',
     'assistance_emails': [],
     'vc_support_emails': [],
-    'notification_hour': 6,
-    'notification_before_days': 1,
-    'notifications_enabled': True
+    'excluded_categories': [],
+    'notification_before_days': 2,
+    'notification_before_days_weekly': 5,
+    'notification_before_days_monthly': 7,
+    'notifications_enabled': True,
+    'booking_limit': 365,
+    'tileserver_url': ''
 }, acls={'admin_principals', 'authorized_principals'})
 
 
@@ -51,7 +57,26 @@ def _import_tasks(sender, **kwargs):
 
 @signals.menu.items.connect_via('admin-sidemenu')
 def _extend_admin_menu(sender, **kwargs):
-    return SideMenuItem('rb', _("Rooms"), url_for('rooms_admin.settings'), 70, icon='location')
+    if not config.ENABLE_ROOMBOOKING:
+        return
+    if session.user.is_admin:
+        yield SideMenuItem('rb-settings', _("Settings"), url_for('rooms_admin.settings'),
+                           section='roombooking', icon='location')
+        yield SideMenuItem('rb-rooms', _("Rooms"), url_for('rooms_admin.roomBooking-admin'),
+                           section='roombooking', icon='location')
+    else:
+        yield SideMenuItem('rb-rooms', _("Rooms"), url_for('rooms_admin.roomBooking-admin'), 70, icon='location')
+
+
+@signals.menu.items.connect_via('top-menu')
+def _topmenu_items(sender, **kwargs):
+    if config.ENABLE_ROOMBOOKING:
+        yield TopMenuItem('rb', _('Room booking'), url_for('rooms.roomBooking'), 80)
+
+
+@signals.menu.sections.connect_via('admin-sidemenu')
+def _sidemenu_sections(sender, **kwargs):
+    yield SideMenuSection('roombooking', _("Room Booking"), 70, icon='location')
 
 
 @signals.users.merged.connect
@@ -61,14 +86,15 @@ def _merge_users(target, source, **kwargs):
     Reservation.find(created_by_id=source.id).update({Reservation.created_by_id: target.id})
     Reservation.find(booked_for_id=source.id).update({Reservation.booked_for_id: target.id})
     Room.find(owner_id=source.id).update({Room.owner_id: target.id})
-    settings.acls.merge_users(target, source)
+    rb_settings.acls.merge_users(target, source)
 
 
 @signals.event.deleted.connect
 def _event_deleted(event, user, **kwargs):
-    reservations = Reservation.find(Reservation.event_id == int(event.id),
-                                    ~Reservation.is_cancelled,
-                                    ~Reservation.is_rejected)
+    reservations = (Reservation.query.with_parent(event)
+                    .filter(~Reservation.is_cancelled,
+                            ~Reservation.is_rejected)
+                    .all())
     for resv in reservations:
         resv.cancel(user or session.user, 'Associated event was deleted')
 

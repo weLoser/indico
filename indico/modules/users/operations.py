@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,6 +17,7 @@
 from __future__ import unicode_literals
 
 from indico.core import signals
+from indico.core.config import config
 from indico.core.db import db
 from indico.modules.users import User
 
@@ -39,6 +40,11 @@ def create_user(email, data, identity=None, settings=None, other_emails=None, fr
     """
     if other_emails is None:
         other_emails = set()
+    if settings is None:
+        settings = {}
+    settings.setdefault('timezone', config.DEFAULT_TIMEZONE)
+    settings.setdefault('lang', config.DEFAULT_LOCALE)
+    settings.setdefault('suggest_categories', False)
     # Get a pending user if there is one
     user = User.find_first(~User.is_deleted, User.is_pending,
                            User.all_emails.contains(db.func.any(list({email} | set(other_emails)))))
@@ -58,8 +64,7 @@ def create_user(email, data, identity=None, settings=None, other_emails=None, fr
     if identity is not None:
         user.identities.add(identity)
     db.session.add(user)
-    if settings:
-        user.settings.set_multi(settings)
+    user.settings.set_multi(settings)
     db.session.flush()
     signals.users.registered.send(user, from_moderation=from_moderation, identity=identity)
     db.session.flush()

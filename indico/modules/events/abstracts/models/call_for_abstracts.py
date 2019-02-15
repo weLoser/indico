@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,7 +17,7 @@
 from __future__ import unicode_literals
 
 from indico.core.db.sqlalchemy.descriptions import RENDER_MODE_WRAPPER_MAP
-from indico.modules.events.abstracts.settings import abstracts_settings, abstracts_reviewing_settings
+from indico.modules.events.abstracts.settings import abstracts_reviewing_settings, abstracts_settings
 from indico.modules.events.settings import EventSettingProperty
 from indico.util.date_time import now_utc
 from indico.util.string import return_ascii
@@ -98,4 +98,4 @@ class CallForAbstracts(object):
         now = now_utc(False)
         abstracts_settings.set(self.event, 'end_dt', now)
         if not self.has_started:
-            abstracts_settings.set(self.event_new, 'start_dt', now)
+            abstracts_settings.set(self.event, 'start_dt', now)

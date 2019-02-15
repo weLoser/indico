@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,10 +20,10 @@ from indico.core.db.sqlalchemy.descriptions import RenderMode
 from indico.core.settings.converters import DatetimeConverter, EnumConverter
 from indico.modules.events.settings import EventSettingsProxy
 from indico.util.i18n import _
-from indico.util.struct.enum import TitledEnum
+from indico.util.struct.enum import RichEnum
 
 
-class BOASortField(TitledEnum):
+class BOASortField(RichEnum):
     id = 'id'
     abstract_title = 'title'
     session_title = 'session_title'
@@ -31,7 +31,7 @@ class BOASortField(TitledEnum):
     schedule = 'schedule'
 
 
-class BOACorrespondingAuthorType(TitledEnum):
+class BOACorrespondingAuthorType(RichEnum):
     none = 'none'
     submitter = 'submitter'
     speakers = 'speakers'
@@ -68,6 +68,7 @@ abstracts_settings = EventSettingsProxy('abstracts', {
     'allow_multiple_tracks': True,
     'tracks_required': False,
     'allow_attachments': False,
+    'copy_attachments': False,
     'allow_speakers': True,
     'speakers_required': True,
     'contrib_type_required': False,

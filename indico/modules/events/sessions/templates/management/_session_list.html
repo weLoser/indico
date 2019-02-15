@@ -1,7 +1,7 @@
 {% from 'message_box.html' import message_box %}
 {% from 'attachments/_management_info_column.html' import render_attachment_info %}
 
-{% macro render_session_list(event, sessions, default_colors) -%}
+{% macro render_session_list(event, sessions, default_colors, types) -%}
     {% if sessions -%}
         <form method="POST">
             <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
@@ -43,13 +43,20 @@
                                 <span class="vertical-aligner">{{ sess.code }}</span>
                             </td>
                             <td class="i-table">
-                                <span class="vertical-aligner">
-                                    {%- if sess.is_poster %}
-                                        {%- trans %}Poster{% endtrans -%}
-                                    {% else %}
-                                        {%- trans %}Standard{% endtrans -%}
-                                    {% endif -%}
-                                </span>
+                                <a class="i-button {{ 'session-type-picker' if not event.is_locked else 'disabled' }}"
+                                   data-items="{{ types | tojson | forceescape }}"
+                                   data-href="{{ url_for('.session_rest', sess) }}"
+                                   data-method="PATCH"
+                                   data-selected-item-id="{{ (sess.type.id if sess.type else none) | tojson }}">
+                                    <span class="label">
+                                        {% if sess.type %}
+                                            {{ sess.type.name }}
+                                        {% else %}
+                                            {% trans %}No type{% endtrans %}
+                                        {% endif %}
+                                    </span>
+                                    {% if not event.is_locked %}<span class="icon-arrow-down"></span>{% endif %}
+                                </a>
                             </td>
                             <td class="i-table">
                                 <span class="i-label show-session-blocks" data-count="{{ sess.blocks | length }}"
@@ -62,20 +69,21 @@
                             {{ render_attachment_info(sess) }}
                             <td class="i-table">
                                 <div class="group right entry-action-buttons vertical-aligner">
-                                    <a class="i-button color-button palette-picker-trigger"
+                                    <a class="i-button color-button
+                                              {{ 'palette-picker-trigger' if not event.is_locked else 'disabled' }}"
                                        style="{{ sess.colors.css }}"
                                        data-method="PATCH"
                                        data-href="{{ url_for('.session_rest', sess) }}"
                                        data-colors="{{ default_colors | tojson | forceescape }}"
                                        data-color="{{ sess.colors | tojson | forceescape }}"
-                                       title="{% trans %}Change colour{% endtrans %}"></a>
-                                    <a href="#" class="i-link highlight icon-edit edit-session"
+                                       title="{% if not event.is_locked %}{% trans %}Change colour{% endtrans %}{% endif %}"></a>
+                                    <a href="#" class="i-link highlight icon-edit edit-session hide-if-locked"
                                        title="{% trans %}Edit this session{% endtrans %}"
                                        data-title="{% trans title=sess.title %}Edit session '{{ title }}'{% endtrans %}"
                                        data-href="{{ url_for('.modify_session', sess) }}"
                                        data-update="#sessions-wrapper"
                                        data-ajax-dialog></a>
-                                    <a href="#" class="i-link icon-shield"
+                                    <a href="#" class="i-link icon-shield hide-if-locked"
                                        title="{% trans %}Manage protection{% endtrans %}"
                                        data-href="{{ url_for('.session_protection', sess) }}"
                                        data-title="{% trans %}Manage session protection{% endtrans %}"
@@ -84,7 +92,7 @@
                                     <a href="{{ url_for('timetable.manage_session', sess) }}"
                                        class="i-link highlight icon-time"
                                        title="{% trans %}Go to this session timetable{% endtrans %}"></a>
-                                    <a href="#" class="i-link highlight icon-remove"
+                                    <a href="#" class="i-link highlight icon-remove hide-if-locked"
                                        title="{% trans %}Remove this session{% endtrans %}"
                                        data-method="DELETE"
                                        data-href="{{ url_for('.session_rest', sess)}}"

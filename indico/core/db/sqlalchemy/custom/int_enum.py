@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -15,6 +15,7 @@
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import unicode_literals
+
 from sqlalchemy import type_coerce
 from sqlalchemy.event import listens_for
 from sqlalchemy.sql.schema import CheckConstraint
@@ -74,9 +75,8 @@ class PyIntEnum(TypeDecorator, SchemaType):
         return self.enum(value)
 
     def alembic_render_type(self, autogen_context):
-        imports = autogen_context['imports']
-        imports.add('from indico.core.db.sqlalchemy import PyIntEnum')
-        imports.add('from {} import {}'.format(self.enum.__module__, self.enum.__name__))
+        autogen_context.imports.add('from indico.core.db.sqlalchemy import PyIntEnum')
+        autogen_context.imports.add('from {} import {}'.format(self.enum.__module__, self.enum.__name__))
         if self.exclude_values:
             return '{}({}, exclude_values={{{}}})'.format(type(self).__name__, self.enum.__name__, ', '.join(
                 '{}.{}'.format(self.enum.__name__, x.name) for x in sorted(self.exclude_values)

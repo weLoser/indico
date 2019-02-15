@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,12 +18,12 @@ from __future__ import unicode_literals
 
 from datetime import datetime
 
-from sqlalchemy.dialects.postgresql import JSON, INET
+from sqlalchemy.dialects.postgresql import INET, JSON
 from werkzeug.datastructures import MultiDict
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy import UTCDateTime
-from indico.util.date_time import now_utc, as_utc
+from indico.util.date_time import as_utc, now_utc
 from indico.util.passwords import PasswordProperty
 from indico.util.string import return_ascii
 

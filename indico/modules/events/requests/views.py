@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,16 +16,8 @@
 
 from __future__ import unicode_literals
 
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.conferences import WPConferenceModifBase
+from indico.modules.events.management.views import WPEventManagement
 
 
-class WPRequestsJinjaMixin(WPJinjaMixin):
-    template_prefix = 'events/requests/'
-
-
-class WPRequestsEventManagement(WPConferenceModifBase, WPRequestsJinjaMixin):
+class WPRequestsEventManagement(WPEventManagement):
     sidemenu_option = 'requests'
-
-    def _getPageContent(self, params):
-        return WPRequestsJinjaMixin._getPageContent(self, params)

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,44 +18,45 @@ from __future__ import unicode_literals
 
 from platform import python_version
 
-import transaction
 from flask import flash, redirect, render_template, request, session
 from markupsafe import Markup
 from requests.exceptions import HTTPError, RequestException, Timeout
 
-from indico.core.config import Config
+import indico
+from indico.core.config import config
 from indico.core.db import db
+from indico.core.db.sqlalchemy.util.queries import get_postgres_version
 from indico.modules.auth import Identity, login_user
 from indico.modules.bootstrap.forms import BootstrapForm
 from indico.modules.cephalopod.util import register_instance
+from indico.modules.core.settings import core_settings
 from indico.modules.users import User
-from indico.util.i18n import _
+from indico.util.i18n import _, get_all_locales
+from indico.util.network import is_private_url
 from indico.util.string import to_unicode
+from indico.util.system import get_os
 from indico.web.flask.templating import get_template_module
 from indico.web.flask.util import url_for
+from indico.web.rh import RH
 from indico.web.util import url_for_index
-
-import MaKaC
-from MaKaC.webinterface.rh.base import RH
-from MaKaC.common.info import HelperMaKaCInfo
-
-# TODO: set the time zone here once communities settings are available.
 
 
 class RHBootstrap(RH):
-    CSRF_ENABLED = True
-
     def _process_GET(self):
-        if User.query.has_rows():
+        if User.query.filter_by(is_system=False).has_rows():
             return redirect(url_for_index())
         return render_template('bootstrap/bootstrap.html',
                                form=BootstrapForm(),
-                               timezone=Config.getInstance().getDefaultTimezone(),
-                               indico_version=MaKaC.__version__,
-                               python_version=python_version())
+                               timezone=config.DEFAULT_TIMEZONE,
+                               languages=get_all_locales(),
+                               operating_system=get_os(),
+                               postgres_version=get_postgres_version(),
+                               indico_version=indico.__version__,
+                               python_version=python_version(),
+                               show_local_warning=(config.DEBUG or is_private_url(request.url_root)))
 
     def _process_POST(self):
-        if User.query.has_rows():
+        if User.query.filter_by(is_system=False).has_rows():
             return redirect(url_for_index())
         setup_form = BootstrapForm(request.form)
         if not setup_form.validate():
@@ -76,17 +77,16 @@ class RHBootstrap(RH):
         db.session.add(user)
         db.session.flush()
 
-        user.settings.set('timezone', Config.getInstance().getDefaultTimezone())
-        user.settings.set('lang', session.lang or Config.getInstance().getDefaultLocale())
+        user.settings.set('timezone', config.DEFAULT_TIMEZONE)
+        user.settings.set('lang', session.lang or config.DEFAULT_LOCALE)
 
         login_user(user, identity)
         full_name = user.full_name  # needed after the session closes
 
-        transaction.commit()
+        db.session.commit()
 
         # Configuring server's settings
-        minfo = HelperMaKaCInfo.getMaKaCInfoInstance()
-        minfo.setOrganisation(setup_form.affiliation.data)
+        core_settings.set('site_organization', setup_form.affiliation.data)
 
         message = get_template_module('bootstrap/flash_messages.html').bootstrap_success(name=full_name)
         flash(Markup(message), 'success')

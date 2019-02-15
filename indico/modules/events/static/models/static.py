@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,18 +16,19 @@
 
 from __future__ import unicode_literals
 
-import errno
-import os
+import posixpath
 
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.db.sqlalchemy import PyIntEnum, UTCDateTime
+from indico.core.storage import StoredFileMixin
 from indico.util.date_time import now_utc
 from indico.util.i18n import _
-from indico.util.string import return_ascii
-from indico.util.struct.enum import TitledIntEnum
+from indico.util.string import format_repr, return_ascii, strict_unicode
+from indico.util.struct.enum import RichIntEnum
 
 
-class StaticSiteState(TitledIntEnum):
+class StaticSiteState(RichIntEnum):
     __titles__ = [_("Pending"), _("Running"), _("Success"), _("Failed"), _("Expired")]
     pending = 0
     running = 1
@@ -36,10 +37,15 @@ class StaticSiteState(TitledIntEnum):
     expired = 4
 
 
-class StaticSite(db.Model):
+class StaticSite(StoredFileMixin, db.Model):
     """Static site for an Indico event."""
+
     __tablename__ = 'static_sites'
     __table_args__ = {'schema': 'events'}
+
+    # StoredFileMixin settings
+    add_file_date_column = False
+    file_required = False
 
     #: Entry ID
     id = db.Column(
@@ -65,11 +71,6 @@ class StaticSite(db.Model):
         default=now_utc,
         nullable=False
     )
-    #: path to the zip archive of the static site
-    path = db.Column(
-        db.String,
-        nullable=True
-    )
     #: ID of the user who created the static site
     creator_id = db.Column(
         db.Integer,
@@ -88,7 +89,7 @@ class StaticSite(db.Model):
         )
     )
     #: The Event this static site is associated with
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -99,24 +100,15 @@ class StaticSite(db.Model):
 
     @property
     def locator(self):
-        return {'confId': self.event_id,
-                'id': self.id}
+        return {'confId': self.event_id, 'id': self.id}
 
-    def delete_file(self):
-        if not self.path:
-            return
-        try:
-            os.remove(self.path)
-        except OSError as err:
-            if err.errno != errno.ENOENT:
-                raise
-
-    def __committed__(self, change):
-        super(StaticSite, self).__committed__(change)
-        if change == 'delete':
-            self.delete_file()
+    def _build_storage_path(self):
+        path_segments = ['event', strict_unicode(self.event.id), 'static']
+        self.assign_id()
+        filename = '{}-{}'.format(self.id, self.filename)
+        path = posixpath.join(*(path_segments + [filename]))
+        return config.STATIC_SITE_STORAGE, path
 
     @return_ascii
     def __repr__(self):
-        state = self.state.name if self.state is not None else None
-        return '<StaticSite({}, {}, {})>'.format(self.id, self.event_id, state)
+        return format_repr(self, 'id', 'event_id', 'state')

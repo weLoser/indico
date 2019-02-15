@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,7 +21,7 @@ from io import BytesIO
 
 from flask import flash, redirect, request, session
 from PIL import Image
-from sqlalchemy.orm import joinedload, undefer_group, load_only
+from sqlalchemy.orm import joinedload, load_only, undefer_group
 from werkzeug.exceptions import BadRequest, Forbidden
 
 from indico.core.db import db
@@ -34,14 +34,13 @@ from indico.modules.categories.operations import create_category, delete_categor
 from indico.modules.categories.util import get_image_data
 from indico.modules.categories.views import WPCategoryManagement
 from indico.modules.events import Event
-from indico.modules.events.operations import delete_event
 from indico.modules.events.util import update_object_principals
 from indico.util.fs import secure_filename
 from indico.util.i18n import _, ngettext
 from indico.util.string import crc32
 from indico.web.flask.util import url_for
 from indico.web.forms.base import FormDefaults
-from indico.web.util import jsonify_data, jsonify_form, jsonify_template
+from indico.web.util import jsonify_data, jsonify_form, jsonify_template, url_for_index
 
 
 CATEGORY_ICON_DIMENSIONS = (16, 16)
@@ -199,10 +198,11 @@ class RHManageCategoryProtection(RHManageCategoryBase):
             update_category(self.category,
                             {'protection_mode': form.protection_mode.data,
                              'own_no_access_contact': form.own_no_access_contact.data,
-                             'event_creation_restricted': form.event_creation_restricted.data})
+                             'event_creation_restricted': form.event_creation_restricted.data,
+                             'visibility': form.visibility.data})
             update_object_principals(self.category, form.acl.data, read_access=True)
             update_object_principals(self.category, form.managers.data, full_access=True)
-            update_object_principals(self.category, form.event_creators.data, role='create')
+            update_object_principals(self.category, form.event_creators.data, permission='create')
             flash(_('Protection settings of the category have been updated'), 'success')
             return redirect(url_for('.manage_protection', self.category))
         return WPCategoryManagement.render_template('management/category_protection.html', self.category, 'protection',
@@ -212,7 +212,7 @@ class RHManageCategoryProtection(RHManageCategoryBase):
         acl = {x.principal for x in self.category.acl_entries if x.read_access}
         managers = {x.principal for x in self.category.acl_entries if x.full_access}
         event_creators = {x.principal for x in self.category.acl_entries
-                          if x.has_management_role('create', explicit=True)}
+                          if x.has_management_permission('create', explicit=True)}
         return FormDefaults(self.category, acl=acl, managers=managers, event_creators=event_creators)
 
 
@@ -233,17 +233,23 @@ class RHDeleteCategory(RHManageCategoryBase):
         if not self.category.is_empty:
             raise BadRequest('Cannot delete a non-empty category')
         delete_category(self.category)
-        url = url_for('.manage_content', self.category.parent)
+        parent = self.category.parent
+        if parent.can_manage(session.user):
+            url = url_for('.manage_content', parent)
+        elif parent.can_access(session.user):
+            url = url_for('.display', parent)
+        else:
+            url = url_for_index()
         if request.is_xhr:
-            return jsonify_data(flash=False, redirect=url, is_parent_empty=self.category.parent.is_empty)
+            return jsonify_data(flash=False, redirect=url, is_parent_empty=parent.is_empty)
         else:
             flash(_('Category "{}" has been deleted.').format(self.category.title), 'success')
             return redirect(url)
 
 
 class RHMoveCategoryBase(RHManageCategoryBase):
-    def _checkParams(self):
-        RHManageCategoryBase._checkParams(self)
+    def _process_args(self):
+        RHManageCategoryBase._process_args(self)
         target_category_id = request.form.get('target_category_id')
         if target_category_id is None:
             self.target_category = None
@@ -258,8 +264,8 @@ class RHMoveCategoryBase(RHManageCategoryBase):
 class RHMoveCategory(RHMoveCategoryBase):
     """Move a category."""
 
-    def _checkParams(self):
-        RHMoveCategoryBase._checkParams(self)
+    def _process_args(self):
+        RHMoveCategoryBase._process_args(self)
         if self.category.is_root:
             raise BadRequest(_("Cannot move the root category."))
         if self.target_category is not None:
@@ -277,8 +283,8 @@ class RHMoveCategory(RHMoveCategoryBase):
 class RHDeleteSubcategories(RHManageCategoryBase):
     """Bulk-delete subcategories"""
 
-    def _checkParams(self):
-        RHManageCategoryBase._checkParams(self)
+    def _process_args(self):
+        RHManageCategoryBase._process_args(self)
         self.subcategories = (Category.query
                               .with_parent(self.category)
                               .filter(Category.id.in_(map(int, request.form.getlist('category_id'))))
@@ -298,8 +304,8 @@ class RHDeleteSubcategories(RHManageCategoryBase):
 class RHMoveSubcategories(RHMoveCategoryBase):
     """Bulk-move subcategories"""
 
-    def _checkParams(self):
-        RHMoveCategoryBase._checkParams(self)
+    def _process_args(self):
+        RHMoveCategoryBase._process_args(self)
         subcategory_ids = map(int, request.values.getlist('category_id'))
         self.subcategories = (Category.query.with_parent(self.category)
                               .filter(Category.id.in_(subcategory_ids))
@@ -329,8 +335,8 @@ class RHSortSubcategories(RHManageCategoryBase):
 class RHManageCategorySelectedEventsBase(RHManageCategoryBase):
     """Base RH to manage selected events in a category"""
 
-    def _checkParams(self):
-        RHManageCategoryBase._checkParams(self)
+    def _process_args(self):
+        RHManageCategoryBase._process_args(self)
         query = (Event.query
                  .with_parent(self.category)
                  .order_by(Event.start_dt.desc()))
@@ -347,15 +353,15 @@ class RHDeleteEvents(RHManageCategorySelectedEventsBase):
         if not is_submitted:
             return jsonify_template('events/management/delete_events.html', events=self.events)
         for ev in self.events[:]:
-            delete_event(ev)
+            ev.delete('Bulk-deleted by category manager', session.user)
         flash(ngettext('You have deleted one event', 'You have deleted {} events', len(self.events))
               .format(len(self.events)), 'success')
         return jsonify_data(flash=False, redirect=url_for('.manage_content', self.category))
 
 
 class RHSplitCategory(RHManageCategorySelectedEventsBase):
-    def _checkParams(self):
-        RHManageCategorySelectedEventsBase._checkParams(self)
+    def _process_args(self):
+        RHManageCategorySelectedEventsBase._process_args(self)
         self.cat_events = set(self.category.events)
         self.sel_events = set(self.events)
 
@@ -382,8 +388,8 @@ class RHSplitCategory(RHManageCategorySelectedEventsBase):
 
 
 class RHMoveEvents(RHManageCategorySelectedEventsBase):
-    def _checkParams(self):
-        RHManageCategorySelectedEventsBase._checkParams(self)
+    def _process_args(self):
+        RHManageCategorySelectedEventsBase._process_args(self)
         self.target_category = Category.get_one(int(request.form['target_category_id']), is_deleted=False)
         if not self.target_category.can_create_events(session.user):
             raise Forbidden(_("You may only move events to categories where you are allowed to create events."))

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,14 +19,14 @@ from __future__ import unicode_literals
 from sqlalchemy.dialects.postgresql import JSON
 
 from indico.core.db import db
-from indico.core.db.sqlalchemy import UTCDateTime, PyIntEnum
+from indico.core.db.sqlalchemy import PyIntEnum, UTCDateTime
 from indico.util.date_time import now_utc
 from indico.util.i18n import _
 from indico.util.string import return_ascii
-from indico.util.struct.enum import TitledIntEnum, IndicoEnum
+from indico.util.struct.enum import IndicoEnum, RichIntEnum
 
 
-class EventLogRealm(TitledIntEnum):
+class EventLogRealm(RichIntEnum):
     __titles__ = (None, _('Event'), _('Management'), _('Participants'), _('Reviewing'), _('Emails'))
     event = 1
     management = 2
@@ -116,7 +116,7 @@ class EventLogEntry(db.Model):
         )
     )
     #: The Event this log entry is associated with
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -127,7 +127,7 @@ class EventLogEntry(db.Model):
 
     @property
     def logged_date(self):
-        return self.logged_dt.date()
+        return self.logged_dt.astimezone(self.event.tzinfo).date()
 
     @property
     def renderer(self):

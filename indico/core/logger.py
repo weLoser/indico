@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,258 +14,226 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-import copy
-import os
+from __future__ import unicode_literals
+
 import logging
-import logging.handlers
 import logging.config
-import ConfigParser
+import logging.handlers
+import os
+import smtplib
+import warnings
+from email.mime.text import MIMEText
+from email.utils import formatdate
 from pprint import pformat
 
-from flask import request, has_request_context
+import yaml
+from flask import current_app, has_request_context, request, session
+
+from indico.core.config import config
+from indico.util.i18n import set_best_lang
 from indico.web.util import get_request_info
 
-from indico.core.config import Config
+
+try:
+    from raven import setup_logging
+    from raven.contrib.celery import register_logger_signal, register_signal
+    from raven.contrib.flask import Sentry
+    from raven.handlers.logging import SentryHandler
+except ImportError:
+    Sentry = object  # so we can subclass
+    has_sentry = False
+else:
+    has_sentry = True
 
 
-class AddIDFilter(logging.Filter):
+class AddRequestIDFilter(object):
     def filter(self, record):
-        if not logging.Filter.filter(self, record):
-            return False
-        # Add request ID if available
-        record.request_id = request.id if has_request_context() else '0' * 12
+        # Add our request ID if available
+        record.request_id = request.id if has_request_context() else '0' * 16
         return True
 
 
-class ExtraIndicoFilter(AddIDFilter):
-    def filter(self, record):
-        if record.name.split('.')[0] == 'indico':
-            return False
-        return AddIDFilter.filter(self, record)
-
-
-class CeleryFilter(AddIDFilter):
-    def filter(self, record):
-        if not AddIDFilter.filter(self, record):
-            return False
-        return record.name.split('.')[0] == 'celery'
-
-
-class IndicoMailFormatter(logging.Formatter):
+class RequestInfoFormatter(logging.Formatter):
     def format(self, record):
-        s = logging.Formatter.format(self, record)
-        if isinstance(s, unicode):
-            s = s.encode('utf-8')
-        return s + self._getRequestInfo()
-
-    def _getRequestInfo(self):
-        return '\n\n\nRequest data:\n\n{}'.format(pformat(get_request_info()))
+        rv = super(RequestInfoFormatter, self).format(record)
+        info = get_request_info()
+        if info:
+            rv += '\n\n' + pformat(info)
+        return rv
 
 
-class LoggerUtils:
+class FormattedSubjectSMTPHandler(logging.handlers.SMTPHandler):
+    def getSubject(self, record):
+        return self.subject % record.__dict__
 
-    @classmethod
-    def _bootstrap_cp(cls, cp, defaultArgs):
-        """
-        Creates a very basic logging config for cases in which
-        logging.conf does not yet exist
-        """
-        if not cp.has_section('loggers'):
-            cp.add_section('loggers')
-            cp.add_section('logger_root')
-            cp.add_section('handlers')
-            cp.set('loggers', 'keys', 'root')
-            cp.set('logger_root', 'handlers', ','.join(defaultArgs))
-            cp.set('handlers', 'keys', ','.join(defaultArgs))
-            for handler_name in defaultArgs:
-                section_name = 'handler_' + handler_name
-                cp.add_section(section_name)
-                cp.set(section_name, 'formatter', 'defaultFormatter')
-
-    @classmethod
-    def configFromFile(cls, fname, defaultArgs, filters):
-        """
-        Read the logging configuration from the logging.conf file.
-        Fetch default values if the logging.conf file is not set.
-        """
-        cp = ConfigParser.ConfigParser()
-        parsed_files = cp.read(fname)
-
-        if cp.has_section('formatters'):
-            formatters = logging.config._create_formatters(cp)
-        else:
-            formatters = {}
-
-        # Really ugly.. but logging fails to import MaKaC.common.logger.IndicoMailFormatter
-        # when using it in the class= option...
-        if 'mailFormatter' in formatters:
-            f = formatters.get('mailFormatter')
-            if f:
-                formatters['mailFormatter'] = IndicoMailFormatter(f._fmt, f.datefmt)
-
-        # if there is a problem with the config file, set some sane defaults
-        if not parsed_files:
-            formatters['defaultFormatter'] = logging.Formatter(
-                '%(asctime)s  %(levelname)-7s  %(request_id)s  %(name)-25s %(message)s')
-            cls._bootstrap_cp(cp, defaultArgs)
-
-        logging._acquireLock()
+    def emit(self, record):
+        # This is the same as the original SMTPHandler's method, but
+        # using MIMEText instead of string operations (which are not
+        # compatible with unicode)
         try:
-            logging._handlers.clear()
-            del logging._handlerList[:]
+            port = self.mailport
+            if not port:
+                port = smtplib.SMTP_PORT
+            smtp = smtplib.SMTP(self.mailhost, port, timeout=self._timeout)
+            msg = MIMEText(self.format(record), 'plain', 'utf-8')
+            msg['From'] = self.fromaddr
+            msg['To'] = ', '.join(self.toaddrs)
+            msg['Subject'] = self.getSubject(record)
+            msg['Date'] = formatdate()
+            if self.username:
+                if self.secure is not None:
+                    smtp.ehlo()
+                    smtp.starttls(*self.secure)
+                    smtp.ehlo()
+                smtp.login(self.username, self.password)
+            smtp.sendmail(self.fromaddr, self.toaddrs, msg.as_string())
+            smtp.quit()
+        except (KeyboardInterrupt, SystemExit):
+            raise
+        except:
+            self.handleError(record)
 
-            handlers = cls._install_handlers(cp, defaultArgs, formatters, filters)
-            logging.config._install_loggers(cp, handlers, False)
 
-        finally:
-            logging._releaseLock()
-        return handlers
+class BlacklistFilter(logging.Filter):
+    def __init__(self, names):
+        self.filters = [logging.Filter(name) for name in names]
+
+    def filter(self, record):
+        return not any(x.filter(record) for x in self.filters)
+
+
+class Logger(object):
+    @classmethod
+    def init(cls, app):
+        path = config.LOGGING_CONFIG_PATH
+        if not path:
+            return
+        if not os.path.exists(path):
+            default_path = os.path.join(app.root_path, 'logging.yaml.sample')
+            warnings.warn('Logging config file not found; using defaults. '
+                          'Copy {default_path} to {path} to get rid of this warning.'
+                          .format(path=path, default_path=default_path))
+            path = default_path
+        with open(path) as f:
+            data = yaml.safe_load(f)
+        data['disable_existing_loggers'] = False
+        data['incremental'] = False
+        # Make the request ID available in all loggers
+        data.setdefault('filters', {})['_add_request_id'] = {'()': AddRequestIDFilter}
+        for handler in data['handlers'].itervalues():
+            handler.setdefault('filters', []).insert(0, '_add_request_id')
+            if handler['class'] == 'logging.FileHandler' and handler['filename'][0] != '/':
+                # Make relative paths relative to the log dir
+                handler['filename'] = os.path.join(config.LOG_DIR, handler['filename'])
+            elif handler['class'] in ('logging.handlers.SMTPHandler', 'indico.core.logger.FormattedSubjectSMTPHandler'):
+                # Configure email handlers with the data from the config
+                if not handler.get('mailhost'):
+                    handler['mailhost'] = config.SMTP_SERVER
+                    handler['secure'] = () if config.SMTP_USE_TLS else None  # yuck, empty tuple == STARTTLS
+                    if config.SMTP_LOGIN and config.SMTP_PASSWORD:
+                        handler['credentials'] = (config.SMTP_LOGIN, config.SMTP_PASSWORD)
+                handler.setdefault('fromaddr', 'logger@{}'.format(config.WORKER_NAME))
+                handler.setdefault('toaddrs', [config.SUPPORT_EMAIL])
+                subject = ('Unexpected Exception occurred at {}: %(message)s'
+                           if handler['class'] == 'indico.core.logger.FormattedSubjectSMTPHandler' else
+                           'Unexpected Exception occurred at {}')
+                handler.setdefault('subject', subject.format(config.WORKER_NAME))
+        for formatter in data['formatters'].itervalues():
+            # Make adding request info to log entries less ugly
+            if formatter.pop('append_request_info', False):
+                assert '()' not in formatter
+                formatter['()'] = RequestInfoFormatter
+        # Enable the database logger for our db_log util
+        if config.DB_LOG:
+            data['loggers']['indico._db'] = {'level': 'DEBUG', 'propagate': False, 'handlers': ['_db']}
+            data['handlers']['_db'] = {'class': 'logging.handlers.SocketHandler', 'host': '127.0.0.1', 'port': 9020}
+        # If customization debugging is enabled, ensure we get the debug log messages from it
+        if config.CUSTOMIZATION_DEBUG and config.CUSTOMIZATION_DIR:
+            data['loggers'].setdefault('indico.customization', {})['level'] = 'DEBUG'
+        logging.config.dictConfig(data)
+        if config.SENTRY_DSN:
+            if not has_sentry:
+                raise Exception('`raven` must be installed to use sentry logging')
+            init_sentry(app)
 
     @classmethod
-    def _install_handlers(cls, cp, defaultArgs, formatters, filters=None):
+    def get(cls, name=None):
+        """Get a logger with the given name.
+
+        This behaves pretty much like `logging.getLogger`, except for
+        prefixing any logger name with ``indico.`` (if not already
+        present).
         """
-        Install and return handlers. If a handler configuration
-        is missing its args, fetches the default values from the
-        indico.conf file
-        """
-        hlist = cp.get("handlers", "keys")
-        hlist = hlist.split(",")
-        handlers = {}
-        fixups = []  # for inter-handler references
-
-        for hand in hlist:
-            sectname = "handler_%s" % hand.strip()
-            opts = cp.options(sectname)
-            if "class" in opts:
-                klass = cp.get(sectname, "class")
-            else:
-                klass = defaultArgs[hand.strip()][0]
-            if "formatter" in opts:
-                fmt = cp.get(sectname, "formatter")
-            else:
-                fmt = ""
-            klass = eval(klass, vars(logging))
-            if "args" in opts:
-                # if the args are not present in the file,
-                # take default values
-                args = cp.get(sectname, "args")
-            else:
-                try:
-                    args = defaultArgs[hand.strip()][1]
-                except KeyError:
-                    continue
-            args = eval(args, vars(logging))
-            h = apply(klass, args)
-            if "level" in opts:
-                level = cp.get(sectname, "level")
-                h.setLevel(logging._levelNames[level])
-            else:
-                h.setLevel(logging._levelNames[defaultArgs[hand.strip()][2]])
-            if len(fmt):
-                h.setFormatter(formatters[fmt])
-            if filters and hand.strip() in filters:
-                for fltr in filters[hand.strip()]:
-                    h.addFilter(fltr)
-            #temporary hack for FileHandler and MemoryHandler.
-            if klass == logging.handlers.MemoryHandler:
-                if "target" in opts:
-                    target = cp.get(sectname,"target")
-                else:
-                    target = ""
-                if len(target): #the target handler may not be loaded yet, so keep for later...
-                    fixups.append((h, target))
-            handlers[hand] = h
-        #now all handlers are loaded, fixup inter-handler references...
-        for h, t in fixups:
-            h.setTarget(handlers[t])
-        return handlers
+        if name is None:
+            name = 'indico'
+        elif name != 'indico' and not name.startswith('indico.'):
+            name = 'indico.' + name
+        return logging.getLogger(name)
 
 
-class Logger:
+class IndicoSentry(Sentry):
+    def get_user_info(self, request):
+        if not has_request_context() or not session.user:
+            return None
+        return {'id': session.user.id,
+                'email': session.user.email,
+                'name': session.user.full_name}
+
+    def before_request(self, *args, **kwargs):
+        super(IndicoSentry, self).before_request()
+        if not has_request_context():
+            return
+        self.client.extra_context({'Endpoint': str(request.url_rule.endpoint) if request.url_rule else None,
+                                   'Request ID': request.id})
+        self.client.tags_context({'locale': set_best_lang()})
+
+
+def init_sentry(app):
+    sentry = IndicoSentry(wrap_wsgi=False, register_signal=True, logging=False)
+    sentry.init_app(app)
+    # setup logging manually and exclude uncaught indico exceptions.
+    # these are logged manually in the flask error handler logic so
+    # we get the X-Sentry-ID header which is not populated in the
+    # logging handlers
+    handler = SentryHandler(sentry.client, level=getattr(logging, config.SENTRY_LOGGING_LEVEL))
+    handler.addFilter(BlacklistFilter({'indico.flask', 'celery.redirected'}))
+    setup_logging(handler)
+    # connect to the celery logger
+    register_logger_signal(sentry.client)
+    register_signal(sentry.client)
+
+
+def sentry_log_exception():
+    try:
+        sentry = current_app.extensions['sentry']
+    except KeyError:
+        return
+    sentry.captureException()
+
+
+def sentry_set_extra(data):
     """
-    Encapsulates the features provided by the standard logging module
+    Set extra data to be logged in sentry if the current request
+    results in something to be sent to sentry.
+
+    :param data: A dict containing data.
     """
-
-    handlers = {}
-
-    @classmethod
-    def initialize(cls):
-        # Lists of filters for each handler
-        filters = {'indico': [AddIDFilter('indico')],
-                   'other': [ExtraIndicoFilter()],
-                   'celery': [CeleryFilter()],
-                   'smtp': [AddIDFilter('indico')]}
-
-        config = Config.getInstance()
-
-        if 'files' in config.getLoggers():
-            logConfFilepath = os.path.join(config.getConfigurationDir(), 'logging.conf')
-            smtpServer = config.getSmtpServer()
-            serverName = config.getWorkerName()
-            if not serverName:
-                serverName = config.getHostNameURL()
-
-            # Default arguments for the handlers, taken mostly for the configuration
-            defaultArgs = {
-                'indico': ("FileHandler", "('%s', 'a')" % cls._log_path('indico.log'), 'DEBUG'),
-                'other': ("FileHandler", "('%s', 'a')" % cls._log_path('other.log'), 'DEBUG'),
-                'celery': ("FileHandler", "('%s', 'a')" % cls._log_path('celery.log'), 'DEBUG'),
-                'stderr': ('StreamHandler', '()', 'DEBUG'),
-                'smtp': (
-                    "handlers.SMTPHandler", "(%s, 'logger@%s', ['%s'], 'Unexpected Exception occurred at %s')"
-                    % (smtpServer, serverName, config.getSupportEmail(), serverName), "ERROR")
-            }
-
-            cls.handlers.update(LoggerUtils.configFromFile(logConfFilepath, defaultArgs, filters))
-
-    @classmethod
-    def init_app(cls, app):
-        """
-        Initialize Flask app logging (add Sentry if needed)
-        """
-        config = Config.getInstance()
-
-        if 'sentry' in config.getLoggers():
-            from raven.contrib.flask import Sentry
-            app.config['SENTRY_DSN'] = config.getSentryDSN()
-
-            # Plug into both Flask and `logging`
-            Sentry(app, logging=True, level=getattr(logging, config.getSentryLoggingLevel()))
-
-    @classmethod
-    def reset(cls):
-        """
-        Reset the config, using new paths, etc (useful for testing)
-        """
-        if cls.handlers:
-            for handler in copy.copy(cls.handlers):
-                cls.removeHandler(handler)
-
-        cls.initialize()
-
-    @classmethod
-    def removeHandler(cls, handlerName):
-        if cls.handlers:
-            handler = cls.handlers.get(handlerName)
-
-            if handler and handler in cls.handlers:
-                del cls.handlers[handlerName]
-                logging.root.handlers.remove(handler)
-
-    @classmethod
-    def get(cls, module=None):
-        return logging.getLogger('indico' if module is None else 'indico.' + module)
-
-    @classmethod
-    def _log_path(cls, fname):
-        config = Config.getInstance()
-        configDir = config.getLogDir()
-
-        for fpath in (os.path.join(configDir, fname), os.path.join(os.getcwd(), '.indico.log')):
-            if os.access(os.path.dirname(fpath), os.W_OK):
-                return fpath.replace('\\', '\\\\')
-        else:
-            raise IOError("Log file can't be written")
+    try:
+        sentry = current_app.extensions['sentry']
+    except KeyError:
+        return
+    sentry.client.extra_context(data)
 
 
-Logger.initialize()
+def sentry_set_tags(data):
+    """
+    Set extra tag data to be logged in sentry if the current request
+    results in something to be sent to sentry.
+
+    :param data: A dict containing tag data.
+    """
+    try:
+        sentry = current_app.extensions['sentry']
+    except KeyError:
+        return
+    sentry.client.tags_context(data)

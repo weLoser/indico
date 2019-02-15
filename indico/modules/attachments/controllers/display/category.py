@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,6 +21,6 @@ from indico.modules.categories.controllers.base import RHDisplayCategoryBase
 
 
 class RHDownloadCategoryAttachment(DownloadAttachmentMixin, RHDisplayCategoryBase):
-    def _checkParams(self):
-        RHDisplayCategoryBase._checkParams(self)
-        DownloadAttachmentMixin._checkParams(self)
+    def _process_args(self):
+        RHDisplayCategoryBase._process_args(self)
+        DownloadAttachmentMixin._process_args(self)

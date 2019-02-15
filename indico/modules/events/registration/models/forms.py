@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,23 +20,27 @@ from uuid import UUID
 
 from babel.numbers import format_currency
 from flask import session
+from sqlalchemy import orm, select
 from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.event import listens_for
 from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.orm import column_property, subqueryload
 from werkzeug.exceptions import BadRequest
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy import PyIntEnum, UTCDateTime
-from indico.modules.events.registration.models.registrations import Registration
+from indico.modules.designer.models.templates import DesignerTemplate
 from indico.modules.events.registration.models.form_fields import RegistrationFormPersonalDataField
+from indico.modules.events.registration.models.registrations import Registration
 from indico.util.caching import memoize_request
 from indico.util.date_time import now_utc
 from indico.util.i18n import L_
 from indico.util.string import return_ascii
-from indico.util.struct.enum import TitledIntEnum
+from indico.util.struct.enum import RichIntEnum
 
 
-class ModificationMode(TitledIntEnum):
-    __titles__ = [None, L_('Always'), L_('Until payment'), L_('Never')]
+class ModificationMode(RichIntEnum):
+    __titles__ = [None, L_('Until modification deadline'), L_('Until payment'), L_('Never')]
     allowed_always = 1
     allowed_until_payment = 2
     not_allowed = 3
@@ -68,6 +72,7 @@ class RegistrationForm(db.Model):
         db.String,
         nullable=False
     )
+    #: Whether it's the 'Participants' form of a meeting/lecture
     is_participation = db.Column(
         db.Boolean,
         nullable=False,
@@ -131,6 +136,12 @@ class RegistrationForm(db.Model):
     )
     #: Whether registrations should be displayed in the participant list
     publish_registrations_enabled = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False
+    )
+    #: Whether to display the number of registrations
+    publish_registration_count = db.Column(
         db.Boolean,
         nullable=False,
         default=False
@@ -217,14 +228,33 @@ class RegistrationForm(db.Model):
         nullable=False,
         default=True
     )
+    #: The ID of the template used to generate tickets
+    ticket_template_id = db.Column(
+        db.Integer,
+        db.ForeignKey(DesignerTemplate.id),
+        nullable=True,
+        index=True
+    )
 
     #: The Event containing this registration form
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
             'registration_forms',
-            lazy='dynamic'
+            primaryjoin='(RegistrationForm.event_id == Event.id) & ~RegistrationForm.is_deleted',
+            cascade='all, delete-orphan',
+            lazy=True
+        )
+    )
+    #: The template used to generate tickets
+    ticket_template = db.relationship(
+        'DesignerTemplate',
+        lazy=True,
+        foreign_keys=ticket_template_id,
+        backref=db.backref(
+            'ticket_for_regforms',
+            lazy=True
         )
     )
     # The items (sections, text, fields) in the form
@@ -304,7 +334,7 @@ class RegistrationForm(db.Model):
 
     @property
     def locator(self):
-        return dict(self.event_new.locator, reg_form_id=self.id)
+        return dict(self.event.locator, reg_form_id=self.id)
 
     @property
     def active_fields(self):
@@ -319,6 +349,10 @@ class RegistrationForm(db.Model):
         return [x for x in self.form_items if x.is_section]
 
     @property
+    def disabled_sections(self):
+        return [x for x in self.sections if not x.is_visible and not x.is_deleted]
+
+    @property
     def limit_reached(self):
         return self.registration_limit and len(self.active_registrations) >= self.registration_limit
 
@@ -327,12 +361,17 @@ class RegistrationForm(db.Model):
         return self.is_open and not self.limit_reached
 
     @property
+    @memoize_request
     def active_registrations(self):
-        return [r for r in self.registrations if r.is_active]
+        return (Registration.query.with_parent(self)
+                .filter(Registration.is_active)
+                .options(subqueryload('data'))
+                .all())
 
     @property
     def sender_address(self):
-        return self.notification_sender_address or self.event_new.as_legacy.getSupportInfo().getEmail()
+        contact_email = self.event.contact_emails[0] if self.event.contact_emails else None
+        return self.notification_sender_address or contact_email
 
     @return_ascii
     def __repr__(self):
@@ -377,3 +416,11 @@ class RegistrationForm(db.Model):
             if (isinstance(field, RegistrationFormPersonalDataField) and
                     field.personal_data_type == personal_data_type):
                 return field.id
+
+
+@listens_for(orm.mapper, 'after_configured', once=True)
+def _mappers_configured():
+    query = (select([db.func.count(Registration.id)])
+             .where((Registration.registration_form_id == RegistrationForm.id) & Registration.is_active)
+             .correlate_except(Registration))
+    RegistrationForm.active_registration_count = column_property(query, deferred=True)

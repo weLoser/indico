@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,33 +14,38 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import unicode_literals
+
 import functools
 import itertools
+import posixpath
 import re
-from heapq import heappush
+from operator import itemgetter
 
-import bleach
-from flask import current_app as app
+from flask import current_app
+from flask_pluginengine.util import get_state
 from jinja2 import environmentfilter
 from jinja2.ext import Extension
-from jinja2.filters import make_attrgetter, _GroupTuple
+from jinja2.filters import _GroupTuple, make_attrgetter
 from jinja2.lexer import Token
+from jinja2.loaders import BaseLoader, FileSystemLoader, TemplateNotFound, split_template_path
+from jinja2.utils import internalcode
 from markupsafe import Markup
 
 from indico.core import signals
 from indico.util.signals import values_from_signal
-from indico.util.string import render_markdown, natural_sort_key
+from indico.util.string import natural_sort_key, render_markdown
 
 
 indentation_re = re.compile(r'^ +', re.MULTILINE)
 
 
 def underline(s, sep='-'):
-    return u'{0}\n{1}'.format(s, sep * len(s))
+    return '{0}\n{1}'.format(s, sep * len(s))
 
 
 def markdown(value):
-    return Markup(EnsureUnicodeExtension.ensure_unicode(render_markdown(value, extensions=('nl2br',))))
+    return Markup(EnsureUnicodeExtension.ensure_unicode(render_markdown(value, extensions=('nl2br', 'tables'))))
 
 
 def dedent(value):
@@ -80,12 +85,8 @@ def natsort(environment, value, reverse=False, case_sensitive=False, attribute=N
 def groupby(environment, value, attribute, reverse=False):
     """Like Jinja's builtin `groupby` filter, but allows reversed order."""
     expr = make_attrgetter(environment, attribute)
-    return sorted(map(_GroupTuple, itertools.groupby(sorted(value, key=expr), expr)), reverse=reverse)
-
-
-def strip_tags(value):
-    """Strips provided text of html tags"""
-    return bleach.clean(value, tags=[], strip=True).strip() if u'<' in value else value
+    return [_GroupTuple(key, list(values))
+            for key, values in itertools.groupby(sorted(value, key=expr, reverse=reverse), expr)]
 
 
 def instanceof(value, type_):
@@ -126,8 +127,8 @@ def get_template_module(template_name_or_list, **context):
     """Returns the python module of a template.
 
     This allows you to call e.g. macros inside it from Python code."""
-    app.update_template_context(context)
-    tpl = app.jinja_env.get_or_select_template(template_name_or_list)
+    current_app.update_template_context(context)
+    tpl = current_app.jinja_env.get_or_select_template(template_name_or_list)
     return tpl.make_module(context)
 
 
@@ -142,7 +143,7 @@ def register_template_hook(name, receiver, priority=50, markup=True, plugin=None
             return do_stuff(something)
 
     It needs to return a unicode string. If you intend to return plaintext
-    it is adviable to set the `markup` param to `False` which results in the
+    it is advisable to set the `markup` param to `False` which results in the
     string being considered "unsafe" which will cause it to be HTML-escaped.
 
     :param name: The name of the template hook.
@@ -182,15 +183,71 @@ def call_template_hook(*name, **kwargs):
     as_list = kwargs.pop('as_list', False)
     values = []
     for is_markup, priority, value in values_from_signal(signals.plugin.template_hook.send(unicode(name), **kwargs),
-                                                         single_value=True):
+                                                         single_value=True, as_list=as_list):
         if value:
             if is_markup:
                 value = Markup(value)
-            heappush(values, (priority, value))
+            values.append((priority, value))
+    values.sort(key=itemgetter(0))
     if as_list:
         return [x[1] for x in values]
     else:
-        return Markup(u'\n').join(x[1] for x in values) if values else u''
+        return Markup('\n').join(x[1] for x in values) if values else ''
+
+
+class CustomizationLoader(BaseLoader):
+    def __init__(self, fallback_loader, customization_dir, customization_debug=False):
+        from indico.core.logger import Logger
+        self.logger = Logger.get('customization')
+        self.debug = customization_debug
+        self.fallback_loader = fallback_loader
+        self.fs_loader = FileSystemLoader(customization_dir, followlinks=True)
+
+    def _get_fallback(self, environment, template, path, customization_ignored=False):
+        rv = self.fallback_loader.get_source(environment, template)
+        if not customization_ignored and self.debug:
+            try:
+                orig_path = rv[1]
+            except TemplateNotFound:
+                orig_path = None
+            self.logger.debug('Customizable: %s (original: %s, reference: ~%s)', path, orig_path, template)
+        return rv
+
+    def get_source(self, environment, template):
+        path = posixpath.join(*split_template_path(template))
+        if template[0] == '~':
+            return self._get_fallback(environment, template[1:], path[1:], customization_ignored=True)
+        try:
+            plugin, path = path.split(':', 1)
+        except ValueError:
+            plugin = None
+        prefix = posixpath.join('plugins', plugin) if plugin else 'core'
+        path = posixpath.join(prefix, path)
+        try:
+            rv = self.fs_loader.get_source(environment, path)
+            if self.debug:
+                self.logger.debug('Customized: %s', path)
+            return rv
+        except TemplateNotFound:
+            return self._get_fallback(environment, template, path)
+
+    @internalcode
+    def load(self, environment, name, globals=None):
+        tpl = super(CustomizationLoader, self).load(environment, name, globals)
+        if ':' not in name:
+            return tpl
+        # This is almost exactly what PluginPrefixLoader.load() does, but we have
+        # to replicate it here since we need to handle `~` and use our custom
+        # `get_source` to get the overridden template
+        plugin_name, tpl_name = name.split(':', 1)
+        if plugin_name[0] == '~':
+            plugin_name = plugin_name[1:]
+        plugin = get_state(current_app).plugin_engine.get_plugin(plugin_name)
+        if plugin is None:
+            # that should never happen
+            raise RuntimeError('Plugin template {} has no plugin'.format(name))
+        tpl.plugin = plugin
+        return tpl
 
 
 class EnsureUnicodeExtension(Extension):

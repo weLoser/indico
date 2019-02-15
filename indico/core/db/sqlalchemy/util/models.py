@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,20 +14,23 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import unicode_literals
+
 import os
-import pkg_resources
+from copy import copy
 from importlib import import_module
 
 from flask import g
-from flask_sqlalchemy import Model, BaseQuery, Pagination
-from sqlalchemy import inspect, orm
-from sqlalchemy.event import listens_for, listen
+from flask_sqlalchemy import BaseQuery, Model, Pagination
+from sqlalchemy import Column, inspect, orm
+from sqlalchemy.event import listen, listens_for
 from sqlalchemy.ext.hybrid import hybrid_property
-from sqlalchemy.orm import joinedload, contains_eager
+from sqlalchemy.orm import contains_eager, joinedload
 from sqlalchemy.orm.attributes import get_history, set_committed_value
 from sqlalchemy.orm.exc import NoResultFound
 
 from indico.core import signals
+from indico.util.packaging import get_package_root_path
 
 
 class IndicoBaseQuery(BaseQuery):
@@ -213,7 +216,8 @@ class IndicoModel(Model):
                 raise ValueError("{} has no attribute '{}'".format(cls.__name__, key))
             old_value = getattr(self, key, None)
             if old_value != value:
-                changed[key] = (old_value, value)
+                # XXX: we copy because of https://bitbucket.org/zzzeek/sqlalchemy/issues/3913/
+                changed[key] = (copy(old_value), value)
                 setattr(self, key, value)
         return changed
 
@@ -249,21 +253,16 @@ def _mappers_configured():
             listen(model, 'load', model._populate_preloaded_relationships)
 
 
-def import_all_models(package_name=None):
+def import_all_models(package_name='indico'):
     """Utility that imports all modules in indico/**/models/
 
     :param package_name: Package name to scan for models. If unset,
                          the top-level package containing this file
                          is used.
     """
-    if package_name:
-        distribution = pkg_resources.get_distribution(package_name)
-        package_root = os.path.join(distribution.location, package_name)
-    else:
-        # Don't use pkg_resources since `indico` is still a namespace package...`
-        package_name = 'indico'
-        up_segments = ['..'] * __name__.count('.')
-        package_root = os.path.normpath(os.path.join(__file__, *up_segments))
+    package_root = get_package_root_path(package_name)
+    if not package_root:
+        return
     modules = []
     for root, dirs, files in os.walk(package_root):
         if os.path.basename(root) == 'models':
@@ -301,7 +300,7 @@ def get_simple_column_attrs(model):
     attributes which map to a table column and are neither primary
     key nor foreign key.
 
-    This is useful if you want to get a list of attributes are are
+    This is useful if you want to get a list of attributes that are
     usually safe to copy without extra processing when creating a
     copy of a database object.
 
@@ -310,7 +309,8 @@ def get_simple_column_attrs(model):
     """
     return {attr.key
             for attr in inspect(model).column_attrs
-            if len(attr.columns) == 1 and not attr.columns[0].primary_key and not attr.columns[0].foreign_keys}
+            if len(attr.columns) == 1 and isinstance(attr.columns[0], Column) and not attr.columns[0].primary_key
+            and not attr.columns[0].foreign_keys}
 
 
 def auto_table_args(cls, **extra_kwargs):
@@ -418,10 +418,3 @@ def override_attr(attr_name, parent_name, fget=None):
         return getattr(cls, own_attr_name)
 
     return hybrid_property(_get, _set, expr=_expr)
-
-
-def get_model_by_table_name(table_name):
-    """Get the model class based on the name of the table"""
-    from indico.core.db import db
-    return next((x for x in db.Model._decl_class_registry.itervalues()
-                 if hasattr(x, '__table__') and x.__table__.fullname == 'events.events'), None)

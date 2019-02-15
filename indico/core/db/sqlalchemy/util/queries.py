@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,8 +18,9 @@ from __future__ import unicode_literals
 
 import re
 
-from sqlalchemy import over, func, inspect
+from sqlalchemy import func, inspect, over
 from sqlalchemy.sql import update
+
 
 TS_REGEX = re.compile(r'([@<>!()&|:\'])')
 
@@ -77,7 +78,13 @@ def has_extension(conn, name):
     return conn.execute("SELECT EXISTS(SELECT TRUE FROM pg_extension WHERE extname = %s)", (name,)).scalar()
 
 
-def increment_and_get(col, filter_):
+def get_postgres_version():
+    from indico.core.db import db
+    version = db.engine.execute("SELECT current_setting('server_version_num')::int").scalar()
+    return '{}.{}.{}'.format(version // 10000, version % 10000 // 100, version % 100)
+
+
+def increment_and_get(col, filter_, n=1):
     """Increments and returns a numeric column.
 
     This is committed to the database immediately in a separate
@@ -91,10 +98,11 @@ def increment_and_get(col, filter_):
     :param col: The column to update, e.g. ``SomeModel.last_num``
     :param filter_: A filter expression such as ``SomeModel.id == n``
                     to restrict which columns to update.
+    :param n: The number of units to increment the ID of.
     """
     from indico.core.db import db
     with db.tmp_session() as s:
-        rv = s.execute(update(col.class_).where(filter_).values({col: col + 1}).returning(col)).fetchone()[0]
+        rv = s.execute(update(col.class_).where(filter_).values({col: col + n}).returning(col)).fetchone()[0]
         s.commit()
     return rv
 
@@ -160,3 +168,21 @@ def get_n_matching(query, n, predicate):
             break
         results.extend(x for x in objects if predicate(x))
     return results[:n]
+
+
+def with_total_rows(query, single_entity=True):
+    """Get the result of a query and its total row count.
+
+    :param query: a sqlalchemy query
+    :param single_entity: whether the original query only returns
+                          a single entity. In this case, each
+                          returned result will just be that entity
+                          instead of a tuple.
+    :return: a ``(results, total_count)`` tuple
+    """
+    res = query.add_columns(func.count().over()).all()
+    if not res:
+        return [], 0
+    total = res[0][-1]
+    rows = [row[0] for row in res] if single_entity else [row[:-1] for row in res]
+    return rows, total

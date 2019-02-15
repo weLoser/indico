@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -22,28 +22,64 @@ from __future__ import absolute_import
 
 import binascii
 import functools
-from operator import attrgetter
-
+import os
 import re
 import string
 import unicodedata
+from enum import Enum
 from itertools import chain
+from operator import attrgetter
 from uuid import uuid4
 
 import bleach
+import email_validator
 import markdown
 import translitcodec  # this is NOT unused. it needs to be imported to register the codec.
-from enum import Enum
 from html2text import HTML2Text
-from lxml import html, etree
+from jinja2.filters import do_striptags
+from lxml import etree, html
 from markupsafe import Markup, escape
 from speaklater import _LazyString, is_lazy_string
 from sqlalchemy import ForeignKeyConstraint, inspect
 
 
-BLEACH_ALLOWED_TAGS = bleach.ALLOWED_TAGS + ['sup', 'sub', 'small', 'br', 'p', 'table', 'thead', 'tbody', 'th', 'tr',
-                                             'td', 'img', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'pre']
-BLEACH_ALLOWED_ATTRIBUTES = dict(bleach.ALLOWED_ATTRIBUTES, img=['src', 'alt'])
+# basic list of tags, used for markdown content
+BLEACH_ALLOWED_TAGS = bleach.ALLOWED_TAGS + [
+    'sup', 'sub', 'small', 'br', 'p', 'table', 'thead', 'tbody', 'th', 'tr', 'td', 'img', 'hr', 'h1', 'h2', 'h3', 'h4',
+    'h5', 'h6', 'pre', 'dl', 'dd', 'dt'
+]
+BLEACH_ALLOWED_ATTRIBUTES = dict(bleach.ALLOWED_ATTRIBUTES, img=['src', 'alt', 'style'])
+# extended list of tags, used for HTML content
+BLEACH_ALLOWED_TAGS_HTML = BLEACH_ALLOWED_TAGS + [
+    'address', 'area', 'bdo', 'big', 'caption', 'center', 'cite', 'col', 'colgroup', 'del', 'dfn', 'dir', 'div',
+    'fieldset', 'font', 'ins', 'kbd', 'legend', 'map', 'menu', 'q', 's', 'samp', 'span', 'strike', 'tfoot', 'tt', 'u',
+    'var'
+]
+# yuck, this is ugly, but all these attributes were allowed in legacy...
+BLEACH_ALLOWED_ATTRIBUTES_HTML = dict(BLEACH_ALLOWED_ATTRIBUTES, **{'*': [
+    'align', 'abbr', 'alt', 'border', 'bgcolor', 'class', 'cellpadding', 'cellspacing', 'color', 'char', 'charoff',
+    'cite', 'clear', 'colspan', 'compact', 'dir', 'disabled', 'face', 'href', 'height', 'headers', 'hreflang', 'hspace',
+    'id', 'ismap', 'lang', 'name', 'noshade', 'nowrap', 'rel', 'rev', 'rowspan', 'rules', 'size', 'scope', 'shape',
+    'span', 'src', 'start', 'style', 'summary', 'tabindex', 'target', 'title', 'type', 'valign', 'value', 'vspace',
+    'width', 'wrap'
+]})
+BLEACH_ALLOWED_STYLES_HTML = [
+    'background-color', 'border-top-color', 'border-top-style', 'border-top-width', 'border-top', 'border-right-color',
+    'border-right-style', 'border-right-width', 'border-right', 'border-bottom-color', 'border-bottom-style',
+    'border-bottom-width', 'border-bottom', 'border-left-color', 'border-left-style', 'border-left-width',
+    'border-left', 'border-color', 'border-style', 'border-width', 'border', 'bottom', 'border-collapse',
+    'border-spacing', 'color', 'clear', 'clip', 'caption-side', 'display', 'direction', 'empty-cells', 'float',
+    'font-size', 'font-family', 'font-style', 'font', 'font-variant', 'font-weight', 'font-size-adjust', 'font-stretch',
+    'height', 'left', 'list-style-type', 'list-style-position', 'line-height', 'letter-spacing', 'marker-offset',
+    'margin', 'margin-left', 'margin-right', 'margin-top', 'margin-bottom', 'max-height', 'min-height', 'max-width',
+    'min-width', 'marks', 'overflow', 'outline-color', 'outline-style', 'outline-width', 'outline', 'orphans',
+    'position', 'padding-top', 'padding-right', 'padding-bottom', 'padding-left', 'padding', 'page', 'page-break-after',
+    'page-break-before', 'page-break-inside', 'quotes', 'right', 'size', 'text-align', 'top', 'table-layout',
+    'text-decoration', 'text-indent', 'text-shadow', 'text-transform', 'unicode-bidi', 'visibility', 'vertical-align',
+    'width', 'widows', 'white-space', 'word-spacing', 'word-wrap', 'z-index'
+]
+
+
 LATEX_MATH_PLACEHOLDER = u"\uE000"
 
 
@@ -53,23 +89,11 @@ def encode_if_unicode(s):
     return s.encode('utf-8') if isinstance(s, unicode) else s
 
 
-def unicodeOrNone(s):
-    return None if s is None else s.decode('utf-8')
-
-
 def safe_upper(text):
     if isinstance(text, unicode):
         return text.upper()
     else:
         return text.decode('utf-8').upper().encode('utf-8')
-
-
-def safe_slice(text, start, stop=None):
-    slice_ = slice(start, stop)
-    if isinstance(text, unicode):
-        return text[slice_]
-    else:
-        return text.decode('utf-8')[slice_].encode('utf-8')
 
 
 def remove_accents(text, reencode=True):
@@ -96,19 +120,6 @@ def fix_broken_string(text, as_unicode=False):
 def to_unicode(text):
     """Converts a string to unicode if it isn't already unicode."""
     return fix_broken_string(text, as_unicode=True) if isinstance(text, str) else unicode(text)
-
-
-def fix_broken_obj(obj):
-    if isinstance(obj, dict):
-        return dict((k, fix_broken_obj(v)) for k, v in obj.iteritems())
-    elif isinstance(obj, list):
-        return map(fix_broken_obj, obj)
-    elif isinstance(obj, str):
-        return fix_broken_string(obj)
-    elif isinstance(obj, unicode):
-        pass  # nothing to do
-    else:
-        raise ValueError('Invalid object type in fix_broken_obj: {0}'.format(type(obj)))
 
 
 def remove_non_alpha(text):
@@ -182,10 +193,6 @@ def return_ascii(f):
     return wrapper
 
 
-def html_line_breaks(text):
-    return '<p>' + text.replace('\n\n', '</p><p>').replace('\n', '<br/>') + '</p>'
-
-
 def truncate(text, max_size, ellipsis='...', encoding='utf-8'):
     """
     Truncate text, taking unicode chars into account
@@ -205,22 +212,14 @@ def truncate(text, max_size, ellipsis='...', encoding='utf-8'):
     return text
 
 
-def remove_extra_spaces(text):
-    """
-    Removes multiple spaces within text and removes whitespace around the text
-    'Text     with    spaces ' becomes 'Text with spaces'
-    """
-    pattern = re.compile(r"  +")
-    return pattern.sub(' ', text).strip()
-
-
-def remove_tags(text):
-    """
-    Removes html-like tags from given text. Tag names aren't checked,
-    <no-valid-tag></no-valid-tag> pair will be removed.
-    """
-    pattern = re.compile(r"<(\w|\/)[^<\s\"']*?>")
-    return remove_extra_spaces(pattern.sub(' ', text))
+def strip_tags(text):
+    """Strip HTML tags and replace adjacent whitespace by one space."""
+    encode = False
+    if isinstance(text, str):
+        encode = True
+        text = text.decode('utf-8')
+    text = do_striptags(text)
+    return text.encode('utf-8') if encode else text
 
 
 def render_markdown(text, escape_latex_math=True, md=None, **kwargs):
@@ -269,40 +268,43 @@ def sanitize_for_platypus(text):
         'font': ['size', 'face', 'color'],
         'img': ['src', 'width', 'height', 'valign']
     }
-    res = bleach.clean(text, tags=tags, attributes=attrs, strip=True)
+    res = bleach.clean(text, tags=tags, attributes=attrs, strip=True).strip()
+    if not res:
+        return ''
     # Convert to XHTML
     doc = html.fromstring(res)
     return etree.tostring(doc)
 
 
-# TODO: reference implementation from MaKaC
-# but, it's not totally correct according to RFC, see test cases
-# However, this regex is pretty good in term of practicality
-# but it may be updated to cover all cases
-VALID_EMAIL_REGEX = re.compile(r"""[-a-zA-Z0-9!#$%&'*+/=?\^_`{|}~]+
-                                   (?:.[-a-zA-Z0-9!#$%&'*+/=?^_`{|}~]+)*
-                                   @
-                                   (?:[a-zA-Z0-9](?:[-a-zA-Z0-9]*[a-zA-Z0-9])?.)+
-                                   [a-zA-Z0-9](?:[-a-zA-Z0-9]*[a-zA-Z0-9])?""", re.X)
-
-
 def is_valid_mail(emails_string, multi=True):
-    """
-    Checks the validity of an email address or a series of email addresses
-
-    - emails_string: a string representing a single email address or several
-    email addresses separated by separators
-    - multi: flag if multiple email addresses are allowed
-
-    Returns True if emails are valid.
-    """
-
+    # XXX: This is deprecated, use `validate_email` or `validate_emails` instead!
+    # Remove this in 2.2 when the 'multi' mode is not needed anymore (only used in RB)
+    # and don't forget to update the paypal plugin as well!
     if not emails_string:
         return False
-    emails = re.split(r'[\s;,]+', emails_string)
-    if not multi and len(emails) > 1:
+    return validate_emails(emails_string) if multi else validate_email(emails_string)
+
+
+def validate_email(email):
+    """Validate the given email address.
+
+    This checks both if it looks valid and if it has valid
+    MX (or A/AAAA) records.
+    """
+    email = to_unicode(email)
+    try:
+        email_validator.validate_email(email)
+    except email_validator.EmailNotValidError:
         return False
-    return all(re.match(VALID_EMAIL_REGEX, email) for email in emails if email)
+    else:
+        return True
+
+
+def validate_emails(emails):
+    """Validate a space/semicolon/comma-separated list of email addresses."""
+    emails = to_unicode(emails)
+    emails = re.split(ur'[\s;,]+', emails)
+    return all(validate_email(email) for email in emails if email)
 
 
 def natural_sort_key(s, _nsre=re.compile('([0-9]+)')):
@@ -549,10 +551,19 @@ def sanitize_email(email, require_valid=False):
     if '<' in email:
         m = re.search(r'<([^>]+)>', email)
         email = email if m is None else m.group(1)
-    if not require_valid or is_valid_mail(email, False):
+    if not require_valid or validate_email(email):
         return email
     else:
         return None
+
+
+def sanitize_html(string):
+    return bleach.clean(string, tags=BLEACH_ALLOWED_TAGS_HTML, attributes=BLEACH_ALLOWED_ATTRIBUTES_HTML,
+                        styles=BLEACH_ALLOWED_STYLES_HTML)
+
+
+def html_to_plaintext(string):
+    return html.html5parser.fromstring(string).xpath('string()')
 
 
 def inject_unicode_debug(s, level=1):
@@ -563,12 +574,27 @@ def inject_unicode_debug(s, level=1):
     without touching it.
 
     :param s: a unicode string
-    :param level: the minimum level of the DebugUnicode mode needed
-                  to inject the spaces.  the more likely it is to
-                  break things the higher it should be.
+    :param level: the minimum unicode debug level needed to inject
+                  the spaces.  the more likely it is to break things
+                  the higher it should be.
     """
-    from indico.core.config import Config
-    if Config.getInstance().getDebugUnicode() < level:
+
+    # Enabling unicode debugging injects an invisible zero-width space at the
+    # beginning and end of every translated string.  This will cause errors in case
+    # of implicit conversions from bytes to unicode or vice versa instead of
+    # silently succeeding for english (ascii) strings and then failing in languages
+    # where the same string is not plain ascii.  This setting should be enabled only
+    # during development and never in production.
+    # Level 1 will inject it only in translated strings and is usually safe while
+    # level 2 will inject it in formatted date/time values too which may result in
+    # strange/broken behavior in certain form fields.
+
+    try:
+        unicode_debug_level = int(os.environ.get('INDICO_UNICODE_DEBUG', '0'))
+    except ValueError:
+        unicode_debug_level = 0
+
+    if unicode_debug_level < level:
         return s
     else:
         return u'\N{ZERO WIDTH SPACE}' + s + u'\N{ZERO WIDTH SPACE}'
@@ -593,10 +619,13 @@ class RichMarkup(Markup):
         return obj
 
     def __html__(self):
-        if self._preformatted:
-            return u'<div class="preformatted">{}</div>'.format(self)
+        # XXX: ensure we have no harmful HTML - there are certain malicious values that
+        # are not caught by the legacy sanitizer that runs at submission time
+        string = RichMarkup(sanitize_html(unicode(self)), preformatted=self._preformatted)
+        if string._preformatted:
+            return u'<div class="preformatted">{}</div>'.format(string)
         else:
-            return self
+            return string
 
     def __getstate__(self):
         return {slot: getattr(self, slot) for slot in self.__slots__ if hasattr(self, slot)}

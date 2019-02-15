@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -29,8 +29,7 @@ from pygments import highlight
 from pygments.formatters import Terminal256Formatter
 from pygments.lexers import HtmlLexer
 
-from indico.core.db import DBMgr, db
-from indico.core.db.sqlalchemy.util.session import update_session_options
+from indico.core.db import db
 from indico.util.string import render_markdown
 from indico.web.flask.app import make_app
 
@@ -367,7 +366,5 @@ cli.add_command(contribution_descriptions)
 
 
 if __name__ == '__main__':
-    update_session_options(db)
     with make_app().app_context():
-        with DBMgr.getInstance().global_connection():
-            cli(obj={})
+        cli(obj={})

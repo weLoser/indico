@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,24 +21,24 @@ import posixpath
 from flask import g
 from sqlalchemy.ext.associationproxy import association_proxy
 
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.db.sqlalchemy import PyIntEnum, UTCDateTime
 from indico.core.db.sqlalchemy.links import LinkType
 from indico.core.db.sqlalchemy.protection import ProtectionMixin
 from indico.core.db.sqlalchemy.util.session import no_autoflush
-from indico.core.storage import VersionedResourceMixin, StoredFileMixin
+from indico.core.storage import StoredFileMixin, VersionedResourceMixin
 from indico.modules.attachments.models.principals import AttachmentPrincipal
 from indico.modules.attachments.preview import get_file_previewer
 from indico.modules.attachments.util import can_manage_attachments
 from indico.util.date_time import now_utc
 from indico.util.i18n import _
 from indico.util.string import return_ascii, strict_unicode
-from indico.util.struct.enum import TitledIntEnum
+from indico.util.struct.enum import RichIntEnum
 from indico.web.flask.util import url_for
 
 
-class AttachmentType(TitledIntEnum):
+class AttachmentType(RichIntEnum):
     __titles__ = [None, _('File'), _('Link')]
     file = 1
     link = 2
@@ -96,7 +96,7 @@ class AttachmentFile(StoredFileMixin, db.Model):
             path_segments = ['category', strict_unicode(folder.category.id)]
         else:
             # event/<id>/event/...
-            path_segments = ['event', strict_unicode(folder.event_new.id), folder.link_type.name]
+            path_segments = ['event', strict_unicode(folder.event.id), folder.link_type.name]
             if folder.link_type == LinkType.session:
                 # event/<id>/session/<session_id>/...
                 path_segments.append(strict_unicode(folder.session.id))
@@ -110,7 +110,7 @@ class AttachmentFile(StoredFileMixin, db.Model):
         self.assign_id()
         filename = '{}-{}-{}'.format(self.attachment.id, self.id, self.filename)
         path = posixpath.join(*(path_segments + [filename]))
-        return Config.getInstance().getAttachmentStorage(), path
+        return config.ATTACHMENT_STORAGE, path
 
     @return_ascii
     def __repr__(self):
@@ -285,15 +285,15 @@ def _offline_download_url(attachment):
     # Legacy offline download link generation
     if attachment.type == AttachmentType.file:
         if isinstance(attachment.folder.object, db.m.Event):
-            path = "events/conference"
+            path = ""
         elif isinstance(attachment.folder.object, db.m.Session):
-            path = "agenda/{}-session".format(attachment.folder.session_id)
+            path = "{}-session".format(attachment.folder.session.friendly_id)
         elif isinstance(attachment.folder.object, db.m.Contribution):
-            path = "agenda/{}-contribution".format(attachment.folder.contribution_id)
+            path = "{}-contribution".format(attachment.folder.contribution.friendly_id)
         elif isinstance(attachment.folder.object, db.m.SubContribution):
-            path = "agenda/{}-subcontribution".format(attachment.folder.subcontribution_id)
+            path = "{}-subcontribution".format(attachment.folder.subcontribution.friendly_id)
         else:
             return ''
-        return posixpath.join("files", path, str(attachment.id) + "-" + attachment.file.filename)
+        return posixpath.join("material", path, str(attachment.id) + "-" + attachment.file.filename)
     else:
         return attachment.link_url

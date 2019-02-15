@@ -1,9 +1,13 @@
 babel
 pojson>=0.4
 termcolor
-nodeenv
-fabric
 sphinx
+sphinx-autobuild
+sphinx-rtd-theme
+sphinx-issues
 repoze.sphinx.autointerface
 pygments
 sqlparse
+isort
+pycodestyle
+flask_url_map_serializer

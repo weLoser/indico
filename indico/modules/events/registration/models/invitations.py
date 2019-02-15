@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,15 +20,15 @@ from uuid import uuid4
 
 from sqlalchemy.dialects.postgresql import UUID
 
+from indico.core.db import db
 from indico.core.db.sqlalchemy import PyIntEnum
 from indico.util.i18n import L_
 from indico.util.locators import locator_property
 from indico.util.string import format_repr, return_ascii
-from indico.util.struct.enum import TitledIntEnum
-from indico.core.db import db
+from indico.util.struct.enum import RichIntEnum
 
 
-class InvitationState(TitledIntEnum):
+class InvitationState(RichIntEnum):
     __titles__ = [L_('Pending'), L_('Accepted'), L_('Declined')]
     pending = 0
     accepted = 1

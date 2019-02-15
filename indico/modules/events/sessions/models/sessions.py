@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -31,7 +31,7 @@ from indico.core.db.sqlalchemy.protection import ProtectionManagersMixin
 from indico.core.db.sqlalchemy.util.models import auto_table_args
 from indico.core.db.sqlalchemy.util.queries import increment_and_get
 from indico.modules.events.management.util import get_non_inheriting_objects
-from indico.modules.events.timetable.models.entries import TimetableEntryType, TimetableEntry
+from indico.modules.events.timetable.models.entries import TimetableEntry, TimetableEntryType
 from indico.util.caching import memoize_request
 from indico.util.locators import locator_property
 from indico.util.string import format_repr, return_ascii
@@ -82,6 +82,12 @@ class Session(DescriptionMixin, ColorMixin, ProtectionManagersMixin, LocationMix
         index=True,
         nullable=False
     )
+    type_id = db.Column(
+        db.Integer,
+        db.ForeignKey('events.session_types.id'),
+        index=True,
+        nullable=True
+    )
     title = db.Column(
         db.String,
         nullable=False
@@ -96,18 +102,13 @@ class Session(DescriptionMixin, ColorMixin, ProtectionManagersMixin, LocationMix
         nullable=False,
         default=timedelta(minutes=20)
     )
-    is_poster = db.Column(
-        db.Boolean,
-        nullable=False,
-        default=False
-    )
     is_deleted = db.Column(
         db.Boolean,
         nullable=False,
         default=False
     )
 
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -133,10 +134,19 @@ class Session(DescriptionMixin, ColorMixin, ProtectionManagersMixin, LocationMix
             lazy=False
         )
     )
+    type = db.relationship(
+        'SessionType',
+        lazy=True,
+        backref=db.backref(
+            'sessions',
+            lazy=True
+        )
+    )
 
     # relationship backrefs:
     # - attachment_folders (AttachmentFolder.session)
     # - contributions (Contribution.session)
+    # - default_for_tracks (Track.default_session)
     # - legacy_mapping (LegacySessionMapping.session)
     # - note (EventNote.session)
 
@@ -153,11 +163,11 @@ class Session(DescriptionMixin, ColorMixin, ProtectionManagersMixin, LocationMix
 
     @property
     def location_parent(self):
-        return self.event_new
+        return self.event
 
     @property
     def protection_parent(self):
-        return self.event_new
+        return self.event
 
     @property
     def session(self):
@@ -168,7 +178,7 @@ class Session(DescriptionMixin, ColorMixin, ProtectionManagersMixin, LocationMix
     @memoize_request
     def start_dt(self):
         from indico.modules.events.sessions.models.blocks import SessionBlock
-        start_dt = (self.event_new.timetable_entries
+        start_dt = (self.event.timetable_entries
                     .with_entities(TimetableEntry.start_dt)
                     .join('session_block')
                     .filter(TimetableEntry.type == TimetableEntryType.SESSION_BLOCK,
@@ -195,9 +205,13 @@ class Session(DescriptionMixin, ColorMixin, ProtectionManagersMixin, LocationMix
                 .distinct(SessionBlockPersonLink.person_id)
                 .all())
 
+    @property
+    def is_poster(self):
+        return self.type.is_poster if self.type else False
+
     @locator_property
     def locator(self):
-        return dict(self.event_new.locator, session_id=self.id)
+        return dict(self.event.locator, session_id=self.id)
 
     def get_non_inheriting_objects(self):
         """Get a set of child objects that do not inherit protection"""
@@ -205,7 +219,7 @@ class Session(DescriptionMixin, ColorMixin, ProtectionManagersMixin, LocationMix
 
     @return_ascii
     def __repr__(self):
-        return format_repr(self, 'id', is_poster=False, is_deleted=False, _text=self.title)
+        return format_repr(self, 'id', is_deleted=False, _text=self.title)
 
     def can_manage_contributions(self, user, allow_admin=True):
         """Check whether a user can manage contributions within the session."""
@@ -215,7 +229,7 @@ class Session(DescriptionMixin, ColorMixin, ProtectionManagersMixin, LocationMix
         elif self.session.can_manage(user, allow_admin=allow_admin):
             return True
         elif (self.session.can_manage(user, 'coordinate') and
-                session_coordinator_priv_enabled(self.event_new, 'manage-contributions')):
+                session_coordinator_priv_enabled(self.event, 'manage-contributions')):
             return True
         else:
             return False
@@ -233,7 +247,7 @@ class Session(DescriptionMixin, ColorMixin, ProtectionManagersMixin, LocationMix
             return True
         # session coordiator if block management is allowed
         elif (self.session.can_manage(user, 'coordinate') and
-                session_coordinator_priv_enabled(self.event_new, 'manage-blocks')):
+                session_coordinator_priv_enabled(self.event, 'manage-blocks')):
             return True
         else:
             return False

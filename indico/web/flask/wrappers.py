@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,23 +14,26 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
 
 import os
 from contextlib import contextmanager
 from uuid import uuid4
 
-from flask import Flask, Blueprint, request
+from flask import Blueprint, Flask, g, request
 from flask.blueprints import BlueprintSetupState
 from flask.helpers import locked_cached_property
 from flask.wrappers import Request
 from flask_pluginengine import PluginFlaskMixin
+from flask_webpackext import current_webpack
 from jinja2 import FileSystemLoader, TemplateNotFound
 from werkzeug.datastructures import ImmutableOrderedMultiDict
 from werkzeug.utils import cached_property
 
+from indico.core.config import config
 from indico.util.json import IndicoJSONEncoder
 from indico.web.flask.session import IndicoSessionInterface
+from indico.web.flask.templating import CustomizationLoader
 from indico.web.flask.util import make_view_func
 
 
@@ -46,12 +49,8 @@ class IndicoRequest(Request):
 
     @cached_property
     def relative_url(self):
-        """The request's path including its query string if applicable.
-
-        This basically `full_path` but without the ugly trailing
-        questionmark if there is no query string.
-        """
-        return self.full_path.rstrip(u'?')
+        """The request's path including its query string if applicable."""
+        return self.script_root + self.full_path.rstrip('?')
 
     @cached_property
     def remote_addr(self):
@@ -60,6 +59,11 @@ class IndicoRequest(Request):
             # convert ipv6-style ipv4 to the regular ipv4 notation
             ip = ip[7:]
         return ip
+
+    @property
+    def json(self):
+        # Override to avoid deprecation warning
+        return self.get_json()
 
     def __repr__(self):
         rv = super(IndicoRequest, self).__repr__()
@@ -80,14 +84,49 @@ class IndicoFlask(PluginFlaskMixin, Flask):
             name += '_http'
         return name
 
+    def create_global_jinja_loader(self):
+        default_loader = super(IndicoFlask, self).create_global_jinja_loader()
+        # use an empty list if there's no global customization dir so we can
+        # add directories of plugins later once they are available
+        customization_dir = os.path.join(config.CUSTOMIZATION_DIR, 'templates') if config.CUSTOMIZATION_DIR else []
+        return CustomizationLoader(default_loader, customization_dir, config.CUSTOMIZATION_DEBUG)
+
     def add_url_rule(self, rule, endpoint=None, view_func=None, **options):
-        from MaKaC.webinterface.rh.base import RHSimple
+        from indico.web.rh import RHSimple
         # Endpoints from Flask-Multipass need to be wrapped in the RH
         # logic to get the autocommit logic and error handling for code
         # running inside the identity handler.
         if endpoint is not None and endpoint.startswith('_flaskmultipass'):
             view_func = RHSimple.wrap_function(view_func)
         return super(IndicoFlask, self).add_url_rule(rule, endpoint=endpoint, view_func=view_func, **options)
+
+    def _find_error_handler(self, e):
+        # XXX: this is a backport from flask 1.0
+        # remove this method once flask 1.0 is out and we updated
+        exc_class, code = self._get_exc_class_and_code(type(e))
+        for name, c in ((request.blueprint, code), (None, code),
+                        (request.blueprint, None), (None, None)):
+            handler_map = self.error_handler_spec.setdefault(name, {}).get(c)
+            if not handler_map:
+                continue
+            for cls in exc_class.__mro__:
+                handler = handler_map.get(cls)
+                if handler is not None:
+                    return handler
+
+    @property
+    def static_folder(self):
+        return os.path.join(self.root_path, 'web', 'static')
+
+    @property
+    def static_url_path(self):
+        return '/'
+
+    @property
+    def manifest(self):
+        if 'custom_manifests' in g:
+            return g.custom_manifests[None]
+        return current_webpack.manifest
 
 
 class IndicoBlueprintSetupState(BlueprintSetupState):

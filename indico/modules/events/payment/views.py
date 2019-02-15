@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,29 +16,20 @@
 
 from __future__ import unicode_literals
 
-from MaKaC.webinterface.pages.admins import WPAdminsBase
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.conferences import WPConferenceDefaultDisplayBase, WPConferenceModifBase
+from indico.modules.admin.views import WPAdmin
+from indico.modules.events.management.views import WPEventManagement
+from indico.modules.events.views import WPConferenceDisplayBase
 
 
-class WPPaymentJinjaMixin(WPJinjaMixin):
+class WPPaymentAdmin(WPAdmin):
     template_prefix = 'events/payment/'
 
 
-class WPPaymentAdmin(WPPaymentJinjaMixin, WPAdminsBase):
-    sidemenu_option = 'payment'
-
-
-class WPPaymentEventManagement(WPConferenceModifBase, WPPaymentJinjaMixin):
+class WPPaymentEventManagement(WPEventManagement):
     template_prefix = 'events/payment/'
     sidemenu_option = 'payment'
 
-    def _getPageContent(self, params):
-        return WPPaymentJinjaMixin._getPageContent(self, params)
 
-
-class WPPaymentEvent(WPConferenceDefaultDisplayBase, WPPaymentJinjaMixin):
+class WPPaymentEvent(WPConferenceDisplayBase):
+    template_prefix = 'events/payment/'
     menu_entry_name = 'registration'
-
-    def _getBody(self, params):
-        return WPPaymentJinjaMixin._getPageContent(self, params)

@@ -1,4 +1,4 @@
-{% extends 'layout/base.html' %}
+{% extends 'events/management/base.html' %}
 {% from '_switch.html' import switch %}
 {% from 'message_box.html' import message_box %}
 {% from 'forms/_form.html' import form_header, form_footer, form_rows %}
@@ -23,7 +23,7 @@
             <div class="section">
                 <div class="text">
                     <div class="label">
-                        {% trans %}There are no registration form for this event.{% endtrans %}
+                        {% trans %}There are no registration forms for this event.{% endtrans %}
                     </div>
                     {% trans %}Start by creating a registration form.{% endtrans %}
                 </div>
@@ -42,7 +42,7 @@
         </div>
         <div class="form-field">
             {{ switch(id='merge-forms', name='merge-forms', checked=merge_forms) }}
-            <div classs="form-field-description">
+            <div class="form-field-description">
                 {% trans %}Show all the registrations together, regardless of which form they came from.{% endtrans %}
             </div>
         </div>
@@ -57,7 +57,7 @@
         <div id="publish-registrations">
             {{ sortable_lists(_("Shown registration forms"), enabled_forms|sort(attribute='title'),
                               _("Hidden registration forms"), disabled_forms|sort(attribute='title'),
-                              classes="i-box titled",
+                              classes="i-box titled disable-if-locked",
                               draggable=false) }}
         </div>
         <p>
@@ -70,7 +70,7 @@
         </p>
         {{ sortable_lists(_("Shown columns"), enabled_columns,
                           _("Hidden columns"), disabled_columns,
-                          classes="i-box titled two-columns js-participant-list-columns") }}
+                          classes="i-box titled two-columns js-participant-list-columns disable-if-locked") }}
     </div>
 
     <div id="registration-forms">
@@ -81,7 +81,7 @@
         </p>
         {% call(form) sortable_lists(_("Shown registration forms"), enabled_forms,
                                      _("Hidden registration forms"), disabled_forms,
-                                     classes="i-box titled") %}
+                                     classes="i-box titled disable-if-locked") %}
             <a class="icon-settings js-settings-dialog"
                data-href="{{ url_for('.manage_regform_display', event, form) }}"
                data-title="{% trans title=form.title %}Customize columns for {{title}}{% endtrans %}"
@@ -90,12 +90,10 @@
         {% endcall %}
     </div>
 
-    <button class="i-button big highlight" type="submit">{% trans %}Save{% endtrans %}</button>
-    <a class="i-button big" href="{{ url_for('.manage_regform_list', event) }}">
-        {% trans %}Back{% endtrans %}
-    </a>
-
-    {{ form_footer(form) }}
+    {% call form_footer(form, align_right=true) %}
+        <input class="i-button big highlight" type="submit" value="{% trans %}Save{% endtrans %}">
+        <a class="i-button big" href="{{ url_for('.manage_regform_list', event) }}">{% trans %}Back{% endtrans %}</a>
+    {% endcall %}
 
     <script>
         (function () {

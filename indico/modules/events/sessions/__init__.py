@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,7 +20,7 @@ from flask import flash, session
 
 from indico.core import signals
 from indico.core.logger import Logger
-from indico.core.roles import ManagementRole, check_roles
+from indico.core.permissions import ManagementPermission, check_permissions
 from indico.modules.events.sessions.models.sessions import Session
 from indico.modules.events.sessions.util import has_sessions_for_user
 from indico.modules.events.settings import EventSettingsProxy
@@ -44,7 +44,7 @@ COORDINATOR_PRIV_TITLES = {'manage-contributions': _('Contributions'),
                            'manage-blocks': _('Session blocks')}
 COORDINATOR_PRIV_DESCS = {'manage-contributions': _('Allows coordinators to modify contributions in their sessions.'),
                           'manage-blocks': _('Allows coordinators to manage/reschedule session blocks of their '
-                                             'sessions.  This includes creating new session blocks..')}
+                                             'sessions.  This includes creating new session blocks.')}
 
 
 @signals.users.merged.connect
@@ -80,19 +80,20 @@ def _get_session_cloner(sender, **kwargs):
 
 
 @signals.app_created.connect
-def _check_roles(app, **kwargs):
-    check_roles(Session)
+def _check_permissions(app, **kwargs):
+    check_permissions(Session)
 
 
-@signals.acl.get_management_roles.connect_via(Session)
-def _get_management_roles(sender, **kwargs):
-    return CoordinatorRole
+@signals.acl.get_management_permissions.connect_via(Session)
+def _get_management_permissions(sender, **kwargs):
+    return CoordinatorPermission
 
 
-class CoordinatorRole(ManagementRole):
+class CoordinatorPermission(ManagementPermission):
     name = 'coordinate'
     friendly_name = _('Coordination')
     description = _('Grants coordination access to the session.')
+    user_selectable = True
 
 
 @signals.event.sidemenu.connect

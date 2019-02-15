@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -31,7 +31,8 @@ logger = Logger.get('events.persons')
 @signals.menu.items.connect_via('event-management-sidemenu')
 def _sidemenu_items(sender, event, **kwargs):
     if event.can_manage(session.user):
-        return SideMenuItem('persons', _('Roles'), url_for('persons.person_list', event), section='reports')
+        return SideMenuItem('persons', _('Participant Roles'), url_for('persons.person_list', event),
+                            section='organization')
 
 
 @signals.get_placeholders.connect_via('event-persons-email')

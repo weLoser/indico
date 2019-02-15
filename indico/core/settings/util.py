@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,8 +17,6 @@
 from __future__ import unicode_literals
 
 from copy import copy
-
-from indico.core.settings.proxy import SettingsProxyBase
 
 
 _not_in_db = object()
@@ -60,6 +58,8 @@ def get_all_settings(cls, acl_cls, proxy, no_defaults, **kwargs):
 
 def get_setting(cls, proxy, name, default, cache, **kwargs):
     """Helper function for SettingsProxy.get"""
+    from indico.core.settings import SettingsProxyBase
+
     cache_key = _get_cache_key(proxy, name, kwargs)
     try:
         value = cache[cache_key]

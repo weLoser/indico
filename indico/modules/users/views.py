@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,16 +18,14 @@ from __future__ import unicode_literals
 
 from flask import request
 
+from indico.modules.admin.views import WPAdmin
 from indico.modules.users import User
 from indico.util.i18n import _
-
-from MaKaC.webinterface.pages.admins import WPAdminsBase
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.main import WPMainBase
-from MaKaC.webinterface.wcomponents import WSimpleNavigationDrawer
+from indico.web.breadcrumbs import render_breadcrumbs
+from indico.web.views import WPDecorated, WPJinjaMixin
 
 
-class WPUser(WPJinjaMixin, WPMainBase):
+class WPUser(WPJinjaMixin, WPDecorated):
     """Base WP for user profile pages.
 
     Whenever you use this, you MUST include `user` in the params passed to
@@ -40,28 +38,20 @@ class WPUser(WPJinjaMixin, WPMainBase):
 
     def __init__(self, rh, active_menu_item, **kwargs):
         kwargs['active_menu_item'] = active_menu_item
-        WPMainBase.__init__(self, rh, **kwargs)
+        WPDecorated.__init__(self, rh, **kwargs)
 
-    def _getNavigationDrawer(self):
+    def _get_breadcrumbs(self):
         if 'user_id' in request.view_args:
             user = User.get(request.view_args['user_id'])
             profile_breadcrumb = _('Profile of {name}').format(name=user.full_name)
         else:
             profile_breadcrumb = _('My Profile')
-        return WSimpleNavigationDrawer(profile_breadcrumb)
+        return render_breadcrumbs(profile_breadcrumb)
 
     def _getBody(self, params):
         return self._getPageContent(params)
 
 
-class WPUserDashboard(WPUser):
-    def getCSSFiles(self):
-        return WPUser.getCSSFiles(self) + self._asset_env['dashboard_sass'].urls()
-
-
-class WPUsersAdmin(WPJinjaMixin, WPAdminsBase):
-    sidemenu_option = 'users'
+class WPUsersAdmin(WPAdmin):
     template_prefix = 'users/'
-
-    def getJSFiles(self):
-        return WPAdminsBase.getJSFiles(self) + self._asset_env['modules_users_js'].urls()
+    bundles = ('module_users.js',)

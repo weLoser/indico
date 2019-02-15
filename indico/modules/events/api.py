@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,37 +16,38 @@
 
 import fnmatch
 import re
-import pytz
 from datetime import datetime
 from hashlib import md5
 from operator import attrgetter
 
+import pytz
 from flask import request
 from sqlalchemy import Date, cast
 from sqlalchemy.orm import joinedload, subqueryload, undefer
 from werkzeug.exceptions import ServiceUnavailable
 
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.db.sqlalchemy.principals import PrincipalType
 from indico.core.db.sqlalchemy.protection import ProtectionMode
 from indico.modules.attachments.api.util import build_folders_api_data, build_material_legacy_api_data
-from indico.modules.categories import LegacyCategoryMapping, Category
+from indico.modules.categories import Category, LegacyCategoryMapping
 from indico.modules.categories.serialize import serialize_categories_ical
 from indico.modules.events import Event
 from indico.modules.events.models.persons import PersonLinkBase
 from indico.modules.events.notes.util import build_note_api_data, build_note_legacy_api_data
 from indico.modules.events.sessions.models.sessions import Session
-from indico.modules.events.timetable.models.entries import TimetableEntry
 from indico.modules.events.timetable.legacy import TimetableSerializer
+from indico.modules.events.timetable.models.entries import TimetableEntry
 from indico.util.date_time import iterdays
 from indico.util.fossilize import fossilize
 from indico.util.fossilize.conversion import Conversion
 from indico.util.string import to_unicode
-from indico.web.flask.util import url_for, send_file
+from indico.web.flask.util import send_file, url_for
 from indico.web.http_api.fossils import IPeriodFossil
+from indico.web.http_api.hooks.base import HTTPAPIHook, IteratedDataFetcher
 from indico.web.http_api.responses import HTTPAPIError
 from indico.web.http_api.util import get_query_parameter
-from indico.web.http_api.hooks.base import HTTPAPIHook, IteratedDataFetcher
 
 
 utc = pytz.timezone('UTC')
@@ -74,15 +75,16 @@ def find_event_day_bounds(obj, day):
 class EventTimeTableHook(HTTPAPIHook):
     TYPES = ('timetable',)
     RE = r'(?P<idlist>\w+(?:-\w+)*)'
+    VALID_FORMATS = ('json', 'jsonp', 'xml')
 
     def _getParams(self):
         super(EventTimeTableHook, self)._getParams()
         self._idList = self._pathParams['idlist'].split('-')
 
-    def export_timetable(self, aw):
-        serializer = TimetableSerializer(management=False)
+    def export_timetable(self, user):
         events = Event.find_all(Event.id.in_(map(int, self._idList)), ~Event.is_deleted)
-        return {event.id: serializer.serialize_timetable(event) for event in events}
+        return {event.id: TimetableSerializer(event, management=False, user=user).serialize_timetable()
+                for event in events}
 
 
 @HTTPAPIHook.register
@@ -96,8 +98,8 @@ class EventSearchHook(HTTPAPIHook):
         search = self._pathParams['search_term']
         self._query = search
 
-    def export_event(self, aw):
-        expInt = EventSearchFetcher(aw, self)
+    def export_event(self, user):
+        expInt = EventSearchFetcher(user, self)
         return expInt.event(self._query)
 
 
@@ -121,29 +123,29 @@ class CategoryEventHook(HTTPAPIHook):
             self._idList.remove('favorites')
             self._wantFavorites = True
         self._eventType = get_query_parameter(self._queryParams, ['T', 'type'])
-        if self._eventType == 'lecture':
-            self._eventType = 'simple_event'
+        if self._eventType == 'simple_event':
+            self._eventType = 'lecture'
         self._occurrences = get_query_parameter(self._queryParams, ['occ', 'occurrences'], 'no') == 'yes'
         self._location = get_query_parameter(self._queryParams, ['l', 'location'])
         self._room = get_query_parameter(self._queryParams, ['r', 'room'])
 
-    def export_categ(self, aw):
-        expInt = CategoryEventFetcher(aw, self)
+    def export_categ(self, user):
+        expInt = CategoryEventFetcher(user, self)
         id_list = set(self._idList)
-        if self._wantFavorites and aw.getUser():
-            id_list.update(str(c.id) for c in aw.getUser().user.favorite_categories)
+        if self._wantFavorites and user:
+            id_list.update(str(c.id) for c in user.favorite_categories)
         legacy_id_map = {m.legacy_category_id: m.category_id
                          for m in LegacyCategoryMapping.find(LegacyCategoryMapping.legacy_category_id.in_(id_list))}
         id_list = {str(legacy_id_map.get(id_, id_)) for id_ in id_list}
         return expInt.category(id_list, self._format)
 
-    def export_categ_extra(self, aw, resultList):
-        expInt = CategoryEventFetcher(aw, self)
+    def export_categ_extra(self, user, resultList):
+        expInt = CategoryEventFetcher(user, self)
         ids = set((event['categoryId'] for event in resultList))
         return expInt.category_extra(ids)
 
-    def export_event(self, aw):
-        expInt = CategoryEventFetcher(aw, self)
+    def export_event(self, user):
+        expInt = CategoryEventFetcher(user, self)
         return expInt.event(self._idList)
 
 
@@ -180,7 +182,7 @@ class SerializerBase(object):
                 'fullName': person.get_full_name(last_name_upper=False, abbrev_first_name=False),
                 'id': unicode(person.id),
                 'affiliation': person.affiliation,
-                'emailHash': md5(person.email).hexdigest() if person.email else None
+                'emailHash': md5(person.email.encode('utf-8')).hexdigest() if person.email else None
             }
             if isinstance(person, PersonLinkBase):
                 data['db_id'] = person.id
@@ -211,7 +213,7 @@ class SerializerBase(object):
             'id': convener.person_id,
             'db_id': convener.id,
             'person_id': convener.person_id,
-            'emailHash': md5(convener.person.email).hexdigest() if convener.person.email else None
+            'emailHash': md5(convener.person.email.encode('utf-8')).hexdigest() if convener.person.email else None
         }
         if can_manage:
             data['address'] = convener.address,
@@ -232,6 +234,7 @@ class SerializerBase(object):
             'description': session_.description,
             'material': build_material_legacy_api_data(session_),
             'isPoster': session_.is_poster,
+            'type': session_.type.name if session_.type else None,
             'url': url_for('sessions.display_session', session_, _external=True),
             'roomFullname': session_.room_name,
             'location': session_.venue_name,
@@ -281,7 +284,7 @@ class SerializerBase(object):
             'room': event.get_room_name(full=False),
             'location': event.venue_name,
             'address': event.address,
-            'type': event.as_legacy.getType(),
+            'type': event.type_.legacy_name,
             'references': map(self.serialize_reference, event.references)
         }
 
@@ -289,15 +292,15 @@ class SerializerBase(object):
         data = self._build_event_api_data_base(event)
         data.update({
             '_fossil': 'conference',
-            'adjustedStartDate': self._serialize_date(event.as_legacy.getAdjustedStartDate()),
-            'adjustedEndDate': self._serialize_date(event.as_legacy.getAdjustedEndDate()),
-            'bookedRooms': Conversion.reservationsList(event.reservations.all()),
+            'adjustedStartDate': self._serialize_date(event.start_dt_local),
+            'adjustedEndDate': self._serialize_date(event.end_dt_local),
+            'bookedRooms': Conversion.reservationsList(event.reservations),
             'supportInfo': {
                 '_fossil': 'supportInfo',
-                'caption': to_unicode(event.as_legacy.getSupportInfo().getCaption()),
+                'caption': event.contact_title,
                 '_type': 'SupportInfo',
-                'email': event.as_legacy.getSupportInfo().getEmail(),
-                'telephone': event.as_legacy.getSupportInfo().getTelephone()
+                'email': ', '.join(event.contact_emails),
+                'telephone': ', '.join(event.contact_phones)
             },
         })
         return data
@@ -307,7 +310,7 @@ class SerializerBase(object):
             '_type': 'SessionSlot',
             '_fossil': self.fossils_mapping['block'].get(self._detail_level),
             'id': block.id,  # TODO: Need to check if breaking the `session_id-block_id` format is OK
-            'conference': self._build_session_event_api_data(block.event_new),
+            'conference': self._build_session_event_api_data(block.event),
             'startDate': self._serialize_date(block.timetable_entry.start_dt) if block.timetable_entry else None,
             'endDate': self._serialize_date(block.timetable_entry.end_dt) if block.timetable_entry else None,
             'description': '',  # Session blocks don't have a description
@@ -379,7 +382,8 @@ class SerializerBase(object):
             'keywords': contrib.keywords,
             'track': contrib.track.title if contrib.track else None,
             'session': contrib.session.title if contrib.session else None,
-            'references': map(self.serialize_reference, contrib.references)
+            'references': map(self.serialize_reference, contrib.references),
+            'board_number': contrib.board_number
         }
         if include_subcontribs:
             data['subContributions'] = map(self._serialize_subcontribution, contrib.subcontributions)
@@ -409,13 +413,13 @@ class SerializerBase(object):
 
 
 class CategoryEventFetcher(IteratedDataFetcher, SerializerBase):
-    def __init__(self, aw, hook):
-        super(CategoryEventFetcher, self).__init__(aw, hook)
+    def __init__(self, user, hook):
+        super(CategoryEventFetcher, self).__init__(user, hook)
         self._eventType = hook._eventType
         self._occurrences = hook._occurrences
         self._location = hook._location
         self._room = hook._room
-        self.user = getattr(aw.getUser(), 'user', None)
+        self.user = user
         self._detail_level = get_query_parameter(request.args.to_dict(), ['d', 'detail'], 'events')
         if self._detail_level not in ('events', 'contributions', 'subcontributions', 'sessions'):
             raise HTTPAPIError('Invalid detail level: {}'.format(self._detail_level), 400)
@@ -489,7 +493,7 @@ class CategoryEventFetcher(IteratedDataFetcher, SerializerBase):
 
     def _filter_event(self, event):
         if self._room or self._location or self._eventType:
-            if self._eventType and event.type_.legacy_name != self._eventType:
+            if self._eventType and event.type_.name != self._eventType:
                 return False
             if self._location:
                 name = event.venue_name
@@ -561,8 +565,7 @@ class CategoryEventFetcher(IteratedDataFetcher, SerializerBase):
             'category': event.category.title,
             'note': build_note_api_data(event.note),
             'roomFullname': event.room_name,
-            'url': url_for('event.conferenceDisplay', confId=event.id, _external=True),
-            'modificationDate': self._serialize_date(event.as_legacy.getModificationDate()),
+            'url': event.external_url,
             'creationDate': self._serialize_date(event.created_dt),
             'creator': self._serialize_person(event.creator, person_type='Avatar', can_manage=can_manage),
             'hasAnyProtection': event.effective_protection_mode != ProtectionMode.public,
@@ -609,8 +612,8 @@ class CategoryEventFetcher(IteratedDataFetcher, SerializerBase):
                 data['sessions'].extend(self._build_session_api_data(session_))
         if self._occurrences:
             data['occurrences'] = fossilize(self._calculate_occurrences(event, self._fromDT, self._toDT,
-                                            pytz.timezone(self._serverTZ)),
-                                            {Period: IPeriodFossil}, tz=self._tz, naiveTZ=self._serverTZ)
+                                            pytz.timezone(config.DEFAULT_TIMEZONE)),
+                                            {Period: IPeriodFossil}, tz=self._tz, naiveTZ=config.DEFAULT_TIMEZONE)
         return data
 
 
@@ -634,18 +637,18 @@ class SessionContribHook(EventBaseHook):
         self._idList = self._pathParams['idlist'].split('-')
         self._eventId = self._pathParams['event']
 
-    def export_session(self, aw):
-        expInt = SessionFetcher(aw, self)
+    def export_session(self, user):
+        expInt = SessionFetcher(user, self)
         return expInt.session(self._idList)
 
-    def export_contribution(self, aw):
-        expInt = ContributionFetcher(aw, self)
+    def export_contribution(self, user):
+        expInt = ContributionFetcher(user, self)
         return expInt.contribution(self._idList)
 
 
 class SessionContribFetcher(IteratedDataFetcher):
-    def __init__(self, aw, hook):
-        super(SessionContribFetcher, self).__init__(aw, hook)
+    def __init__(self, user, hook):
+        super(SessionContribFetcher, self).__init__(user, hook)
         self._eventId = hook._eventId
 
 
@@ -656,9 +659,9 @@ class SessionHook(SessionContribHook):
 
 
 class SessionFetcher(SessionContribFetcher, SerializerBase):
-    def __init__(self, aw, hook):
-        super(SessionFetcher, self).__init__(aw, hook)
-        self.user = getattr(aw.getUser(), 'user', None)
+    def __init__(self, user, hook):
+        super(SessionFetcher, self).__init__(user, hook)
+        self.user = user
 
     def session(self, idlist):
         event = Event.get(self._eventId, is_deleted=False)
@@ -711,15 +714,20 @@ class EventSearchFetcher(IteratedDataFetcher):
                      .filter(Event.title_matches(to_unicode(query_string)),
                              ~Event.is_deleted)
                      .options(undefer('effective_protection_mode')))
+            sort_dir = db.desc if self._descending else db.asc
             if self._orderBy == 'start':
-                query = query.order_by(Event.start_dt)
+                query = query.order_by(sort_dir(Event.start_dt))
+            elif self._orderBy == 'end':
+                query = query.order_by(sort_dir(Event.end_dt))
             elif self._orderBy == 'id':
-                query = query.order_by(Event.id)
+                query = query.order_by(sort_dir(Event.id))
+            elif self._orderBy == 'title':
+                query = query.order_by(sort_dir(db.func.lower(Event.title)))
 
             counter = 0
             # Query the DB in chunks of 1000 records per query until the limit is satisfied
             for event in query.yield_per(1000):
-                if event.can_access(self._aw.getUser().user if self._aw.getUser() else None):
+                if event.can_access(self._user):
                     counter += 1
                     # Start yielding only when the counter reaches the given offset
                     if (self._offset is None) or (counter > self._offset):
@@ -728,11 +736,7 @@ class EventSearchFetcher(IteratedDataFetcher):
                         if (self._limit is not None) and (counter == self._offset + self._limit):
                             break
 
-        if self._orderBy in ['start', 'id', None]:
-            obj_list = _iterate_objs(query)
-        else:
-            obj_list = sorted(_iterate_objs(query), key=self._sortingKeys.get(self._orderBy), reverse=self._descending)
-        for event in obj_list:
+        for event in _iterate_objs(query):
             yield {
                 'id': event.id,
                 'title': event.title,

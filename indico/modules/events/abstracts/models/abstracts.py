@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals, division
+from __future__ import division, unicode_literals
 
 from collections import defaultdict
 from itertools import chain
@@ -28,21 +28,22 @@ from indico.core.db import db
 from indico.core.db.sqlalchemy import PyIntEnum, UTCDateTime
 from indico.core.db.sqlalchemy.descriptions import DescriptionMixin, RenderMode
 from indico.core.db.sqlalchemy.util.models import auto_table_args
-from indico.modules.events.abstracts.models.reviews import AbstractAction, AbstractReview
 from indico.modules.events.abstracts.models.review_questions import AbstractReviewQuestion
 from indico.modules.events.abstracts.models.review_ratings import AbstractReviewRating
+from indico.modules.events.abstracts.models.reviews import AbstractAction, AbstractReview
+from indico.modules.events.contributions.models.contributions import CustomFieldsMixin, _get_next_friendly_id
 from indico.modules.events.models.persons import AuthorsSpeakersMixin
-from indico.modules.events.models.reviews import ProposalMixin
-from indico.modules.events.contributions.models.contributions import _get_next_friendly_id, CustomFieldsMixin
+from indico.modules.events.models.reviews import ProposalMixin, ProposalRevisionMixin
 from indico.util.date_time import now_utc
 from indico.util.i18n import _
 from indico.util.locators import locator_property
 from indico.util.string import MarkdownText, format_repr, return_ascii, text_to_repr
-from indico.util.struct.enum import TitledIntEnum, IndicoEnum
+from indico.util.struct.enum import IndicoEnum, RichIntEnum
 
 
-class AbstractState(TitledIntEnum):
+class AbstractState(RichIntEnum):
     __titles__ = [None, _("Submitted"), _("Withdrawn"), _("Accepted"), _("Rejected"), _("Merged"), _("Duplicate")]
+    __css_classes__ = [None, '', 'outline dashed', 'success', 'error', 'visited', 'strong']
     submitted = 1
     withdrawn = 2
     accepted = 3
@@ -51,9 +52,11 @@ class AbstractState(TitledIntEnum):
     duplicate = 6
 
 
-class AbstractPublicState(TitledIntEnum):
+class AbstractPublicState(RichIntEnum):
     __titles__ = {i: title for i, title in enumerate(AbstractState.__titles__[2:], 2)}
     __titles__.update({-1: _("Awaiting Review"), -2: _("Under Review")})
+    __css_classes__ = {i: css_class for i, css_class in enumerate(AbstractState.__css_classes__[2:], 2)}
+    __css_classes__.update({-1: '', -2: 'highlight'})
     # regular states (must match AbstractState!)
     withdrawn = 2
     accepted = 3
@@ -65,8 +68,9 @@ class AbstractPublicState(TitledIntEnum):
     under_review = -2
 
 
-class AbstractReviewingState(TitledIntEnum):
+class AbstractReviewingState(RichIntEnum):
     __titles__ = [_("Not Started"), _("In progress"), _("Positive"), _("Conflicting"), _("Negative"), _("Mixed")]
+    __css_classes__ = ['', '', 'success', '', 'error', 'warning']
     not_started = 0
     in_progress = 1
     positive = 2
@@ -81,11 +85,13 @@ class EditTrackMode(int, IndicoEnum):
     reviewed_for = 2
 
 
-class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeakersMixin, db.Model):
+class Abstract(ProposalMixin, ProposalRevisionMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeakersMixin,
+               db.Model):
     """Represents an abstract that can be associated to a Contribution."""
 
     __tablename__ = 'abstracts'
-    __auto_table_args = (db.UniqueConstraint('friendly_id', 'event_id'),
+    __auto_table_args = (db.Index(None, 'friendly_id', 'event_id', unique=True,
+                                  postgresql_where=db.text('NOT is_deleted')),
                          db.CheckConstraint('(state = {}) OR (accepted_track_id IS NULL)'
                                             .format(AbstractState.accepted),
                                             name='accepted_track_id_only_accepted'),
@@ -120,6 +126,10 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
     edit_comment_endpoint = 'abstracts.edit_abstract_comment'
     create_review_endpoint = 'abstracts.review_abstract'
     edit_review_endpoint = 'abstracts.edit_review'
+    create_judgment_endpoint = 'abstracts.judge_abstract'
+    revisions_enabled = False
+
+    AUTHORS_SPEAKERS_DISPLAY_ORDER_ATTR = 'display_order_key_lastname'
 
     @declared_attr
     def __table_args__(cls):
@@ -129,7 +139,6 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
         db.Integer,
         primary_key=True
     )
-    #: The friendly ID for the abstract (same as the legacy id in ZODB)
     friendly_id = db.Column(
         db.Integer,
         nullable=False,
@@ -154,7 +163,7 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
     )
     submitted_contrib_type_id = db.Column(
         db.Integer,
-        db.ForeignKey('events.contribution_types.id'),
+        db.ForeignKey('events.contribution_types.id', ondelete='SET NULL'),
         nullable=True,
         index=True
     )
@@ -202,13 +211,13 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
     )
     accepted_track_id = db.Column(
         db.Integer,
-        db.ForeignKey('events.tracks.id'),
+        db.ForeignKey('events.tracks.id', ondelete='SET NULL'),
         nullable=True,
         index=True
     )
     accepted_contrib_type_id = db.Column(
         db.Integer,
-        db.ForeignKey('events.contribution_types.id'),
+        db.ForeignKey('events.contribution_types.id', ondelete='SET NULL'),
         nullable=True,
         index=True
     )
@@ -229,7 +238,7 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
         nullable=False,
         default=False
     )
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -267,7 +276,8 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
         backref=db.backref(
             'proposed_abstracts',
             primaryjoin='(Abstract.submitted_contrib_type_id == ContributionType.id) & ~Abstract.is_deleted',
-            lazy=True
+            lazy=True,
+            passive_deletes=True
         )
     )
     submitted_for_tracks = db.relationship(
@@ -279,7 +289,8 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
             primaryjoin='event_abstracts.submitted_for_tracks.c.track_id == Track.id',
             secondaryjoin='(event_abstracts.submitted_for_tracks.c.abstract_id == Abstract.id) & ~Abstract.is_deleted',
             collection_class=set,
-            lazy=True
+            lazy=True,
+            passive_deletes=True
         )
     )
     reviewed_for_tracks = db.relationship(
@@ -291,7 +302,8 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
             primaryjoin='event_abstracts.reviewed_for_tracks.c.track_id == Track.id',
             secondaryjoin='(event_abstracts.reviewed_for_tracks.c.abstract_id == Abstract.id) & ~Abstract.is_deleted',
             collection_class=set,
-            lazy=True
+            lazy=True,
+            passive_deletes=True
         )
     )
     #: User who judged the abstract
@@ -311,7 +323,8 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
         backref=db.backref(
             'abstracts_accepted',
             primaryjoin='(Abstract.accepted_track_id == Track.id) & ~Abstract.is_deleted',
-            lazy=True
+            lazy=True,
+            passive_deletes=True
         )
     )
     accepted_contrib_type = db.relationship(
@@ -321,7 +334,8 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
         backref=db.backref(
             'abstracts_accepted',
             primaryjoin='(Abstract.accepted_contrib_type_id == ContributionType.id) & ~Abstract.is_deleted',
-            lazy=True
+            lazy=True,
+            passive_deletes=True
         )
     )
     merged_into = db.relationship(
@@ -361,6 +375,7 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
         'AbstractPersonLink',
         lazy=True,
         cascade='all, delete-orphan',
+        order_by='AbstractPersonLink.display_order',
         backref=db.backref(
             'abstract',
             lazy=True
@@ -447,7 +462,7 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
 
     @locator_property
     def locator(self):
-        return dict(self.event_new.locator, abstract_id=self.id)
+        return dict(self.event.locator, abstract_id=self.id)
 
     @hybrid_property
     def judgment_comment(self):
@@ -465,6 +480,10 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
     def verbose_title(self):
         return '#{} ({})'.format(self.friendly_id, self.title)
 
+    @property
+    def is_in_final_state(self):
+        return self.state != AbstractState.submitted
+
     @return_ascii
     def __repr__(self):
         return format_repr(self, 'id', 'event_id', is_deleted=False, _text=text_to_repr(self.title))
@@ -474,27 +493,29 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
             return False
         if self.submitter == user:
             return True
-        if self.event_new.can_manage(user):
+        if self.event.can_manage(user):
             return True
         if any(x.person.user == user for x in self.person_links):
             return True
         return self.can_judge(user) or self.can_convene(user) or self.can_review(user)
 
-    def can_comment(self, user):
+    def can_comment(self, user, check_state=False):
         if not user:
             return False
-        if not self.event_new.cfa.allow_comments:
+        if check_state and self.is_in_final_state:
             return False
-        if self.user_owns(user) and self.event_new.cfa.allow_contributors_in_comments:
+        if not self.event.cfa.allow_comments:
+            return False
+        if self.user_owns(user) and self.event.cfa.allow_contributors_in_comments:
             return True
         return self.can_judge(user) or self.can_convene(user) or self.can_review(user)
 
     def can_convene(self, user):
         if not user:
             return False
-        elif not self.event_new.can_manage(user, role='track_convener', explicit_role=True):
+        elif not self.event.can_manage(user, permission='track_convener', explicit_permission=True):
             return False
-        elif self.event_new in user.global_convener_for_events:
+        elif self.event in user.global_convener_for_events:
             return True
         elif user.convener_for_tracks & self.reviewed_for_tracks:
             return True
@@ -510,9 +531,9 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
             return False
         elif check_state and self.public_state not in (AbstractPublicState.under_review, AbstractPublicState.awaiting):
             return False
-        elif not self.event_new.can_manage(user, role='abstract_reviewer', explicit_role=True):
+        elif not self.event.can_manage(user, permission='abstract_reviewer', explicit_permission=True):
             return False
-        elif self.event_new in user.global_abstract_reviewer_for_events:
+        elif self.event in user.global_abstract_reviewer_for_events:
             return True
         elif user.abstract_reviewer_for_tracks & self.reviewed_for_tracks:
             return True
@@ -524,9 +545,9 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
             return False
         elif check_state and self.state != AbstractState.submitted:
             return False
-        elif self.event_new.can_manage(user):
+        elif self.event.can_manage(user):
             return True
-        elif self.event_new.cfa.allow_convener_judgment and self.can_convene(user):
+        elif self.event.cfa.allow_convener_judgment and self.can_convene(user):
             return True
         else:
             return False
@@ -534,13 +555,13 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
     def can_edit(self, user):
         if not user:
             return False
-        is_manager = self.event_new.can_manage(user)
+        is_manager = self.event.can_manage(user)
         if not self.user_owns(user) and not is_manager:
             return False
         elif is_manager and self.public_state in (AbstractPublicState.under_review, AbstractPublicState.withdrawn):
             return True
         elif (self.public_state == AbstractPublicState.awaiting and
-                (is_manager or self.event_new.cfa.can_edit_abstracts(user))):
+                (is_manager or self.event.cfa.can_edit_abstracts(user))):
             return True
         else:
             return False
@@ -548,7 +569,7 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
     def can_withdraw(self, user, check_state=False):
         if not user:
             return False
-        elif self.event_new.can_manage(user) and (not check_state or self.state != AbstractState.withdrawn):
+        elif self.event.can_manage(user) and (not check_state or self.state != AbstractState.withdrawn):
             return True
         elif user == self.submitter and (not check_state or self.state == AbstractState.submitted):
             return True
@@ -586,10 +607,12 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
     def get_track_question_scores(self):
         query = (db.session.query(AbstractReview.track_id,
                                   AbstractReviewQuestion,
-                                  db.func.avg(AbstractReviewRating.value))
+                                  db.func.avg(AbstractReviewRating.value.op('#>>')('{}').cast(db.Integer)))
                  .join(AbstractReviewRating.review)
                  .join(AbstractReviewRating.question)
                  .filter(AbstractReview.abstract == self,
+                         AbstractReviewQuestion.field_type == 'rating',
+                         db.func.json_typeof(AbstractReviewRating.value) == 'null',
                          ~AbstractReviewQuestion.is_deleted,
                          ~AbstractReviewQuestion.no_score)
                  .group_by(AbstractReview.track_id, AbstractReviewQuestion.id))
@@ -600,7 +623,7 @@ class Abstract(ProposalMixin, DescriptionMixin, CustomFieldsMixin, AuthorsSpeake
 
     def get_reviewed_for_groups(self, user, include_reviewed=False):
         already_reviewed = {each.track for each in self.get_reviews(user=user)} if include_reviewed else set()
-        if self.event_new in user.global_abstract_reviewer_for_events:
+        if self.event in user.global_abstract_reviewer_for_events:
             return self.reviewed_for_tracks | already_reviewed
         return (self.reviewed_for_tracks & user.abstract_reviewer_for_tracks) | already_reviewed
 

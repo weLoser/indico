@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,16 +19,16 @@ from __future__ import unicode_literals
 from sqlalchemy.dialects.postgresql import JSON
 
 from indico.core.db import db
-from indico.core.db.sqlalchemy import UTCDateTime, PyIntEnum
+from indico.core.db.sqlalchemy import PyIntEnum, UTCDateTime
 from indico.core.db.sqlalchemy.util.queries import limit_groups
 from indico.modules.events.requests import get_request_definitions
 from indico.util.date_time import now_utc
 from indico.util.i18n import _
 from indico.util.string import return_ascii
-from indico.util.struct.enum import TitledIntEnum
+from indico.util.struct.enum import RichIntEnum
 
 
-class RequestState(TitledIntEnum):
+class RequestState(RichIntEnum):
     __titles__ = [_('Pending'), _('Accepted'), _('Rejected'), _('Withdrawn')]
     pending = 0
     accepted = 1
@@ -64,7 +64,7 @@ class Request(db.Model):
         nullable=False,
         default=RequestState.pending
     )
-    #: plugin-specific data of the payment
+    #: plugin-specific data of the request
     data = db.Column(
         JSON,
         nullable=False
@@ -122,7 +122,7 @@ class Request(db.Model):
         )
     )
     #: The Event this agreement is associated with
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -163,7 +163,7 @@ class Request(db.Model):
         :return: a dict mapping request types to a :class:`Request`
                  or if `type_` was specified, a single :class:`Request` or `None`
         """
-        query = event.requests
+        query = Request.query.with_parent(event)
         if type_ is not None:
             return (query.filter_by(type=type_)
                     .order_by(cls.created_dt.desc())

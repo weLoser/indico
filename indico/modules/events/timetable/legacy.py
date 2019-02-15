@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,28 +17,31 @@
 from __future__ import unicode_literals
 
 from collections import defaultdict
+from hashlib import md5
 from itertools import chain
 
-from flask import session
+from flask import has_request_context, session
 from sqlalchemy.orm import defaultload
 
 from indico.modules.events.contributions.models.persons import AuthorType
+from indico.modules.events.models.events import EventType
 from indico.modules.events.timetable.models.entries import TimetableEntry, TimetableEntryType
 from indico.util.date_time import iterdays
 from indico.web.flask.util import url_for
-from MaKaC.common.fossilize import fossilize
-from MaKaC.fossils.conference import IConferenceEventInfoFossil
 
 
 class TimetableSerializer(object):
-    def __init__(self, management=False):
+    def __init__(self, event, management=False, user=None):
         self.management = management
+        self.user = user if user is not None or not has_request_context() else session.user
+        self.event = event
+        self.can_manage_event = self.event.can_manage(self.user)
 
-    def serialize_timetable(self, event, days=None, hide_weekends=False, strip_empty_days=False):
-        tzinfo = event.tzinfo if self.management else event.display_tzinfo
-        event.preload_all_acl_entries()
+    def serialize_timetable(self, days=None, hide_weekends=False, strip_empty_days=False):
+        tzinfo = self.event.tzinfo if self.management else self.event.display_tzinfo
+        self.event.preload_all_acl_entries()
         timetable = {}
-        for day in iterdays(event.start_dt.astimezone(tzinfo), event.end_dt.astimezone(tzinfo),
+        for day in iterdays(self.event.start_dt.astimezone(tzinfo), self.event.end_dt.astimezone(tzinfo),
                             skip_weekends=hide_weekends, day_whitelist=days):
             date_str = day.strftime('%Y%m%d')
             timetable[date_str] = {}
@@ -47,7 +50,7 @@ class TimetableSerializer(object):
         contributions_strategy.subqueryload('references')
         query_options = (contributions_strategy,
                          defaultload('session_block').subqueryload('person_links'))
-        query = (TimetableEntry.query.with_parent(event)
+        query = (TimetableEntry.query.with_parent(self.event)
                  .options(*query_options)
                  .order_by(TimetableEntry.type != TimetableEntryType.SESSION_BLOCK))
         for entry in query:
@@ -55,7 +58,7 @@ class TimetableSerializer(object):
             date_str = day.strftime('%Y%m%d')
             if date_str not in timetable:
                 continue
-            if not entry.can_view(session.user):
+            if not entry.can_view(self.user):
                 continue
             data = self.serialize_timetable_entry(entry, load_children=False)
             key = self._get_entry_key(entry)
@@ -73,15 +76,14 @@ class TimetableSerializer(object):
         return timetable
 
     def serialize_session_timetable(self, session_, without_blocks=False, strip_empty_days=False):
-        event = session_.event_new
-        event_tz = event.tzinfo
+        event_tz = self.event.tzinfo
         timetable = {}
         if session_.blocks:
-            start_dt = min(chain((b.start_dt for b in session_.blocks), (event.start_dt,))).astimezone(event_tz)
-            end_dt = max(chain((b.end_dt for b in session_.blocks), (event.end_dt,))).astimezone(event_tz)
+            start_dt = min(chain((b.start_dt for b in session_.blocks), (self.event.start_dt,))).astimezone(event_tz)
+            end_dt = max(chain((b.end_dt for b in session_.blocks), (self.event.end_dt,))).astimezone(event_tz)
         else:
-            start_dt = event.start_dt_local
-            end_dt = event.end_dt_local
+            start_dt = self.event.start_dt_local
+            end_dt = self.event.end_dt_local
 
         for day in iterdays(start_dt, end_dt):
             timetable[day.strftime('%Y%m%d')] = {}
@@ -92,7 +94,7 @@ class TimetableSerializer(object):
             date_key = block_entry.start_dt.astimezone(event_tz).strftime('%Y%m%d')
             entries = block_entry.children if without_blocks else [block_entry]
             for entry in entries:
-                if not entry.can_view(session.user):
+                if not entry.can_view(self.user):
                     continue
                 entry_key = self._get_entry_key(entry)
                 timetable[date_key][entry_key] = self.serialize_timetable_entry(entry, load_children=True)
@@ -151,6 +153,7 @@ class TimetableSerializer(object):
 
     def serialize_contribution_entry(self, entry):
         from indico.modules.events.api import SerializerBase
+
         block = entry.parent.session_block if entry.parent else None
         contribution = entry.contribution
         data = {}
@@ -178,7 +181,8 @@ class TimetableSerializer(object):
                      'title': contribution.title,
                      'url': url_for('contributions.display_contribution', contribution),
                      'friendlyId': contribution.friendly_id,
-                     'references': map(SerializerBase.serialize_reference, contribution.references)})
+                     'references': map(SerializerBase.serialize_reference, contribution.references),
+                     'board_number': contribution.board_number})
         return data
 
     def serialize_break_entry(self, entry, management=False):
@@ -229,9 +233,9 @@ class TimetableSerializer(object):
 
     def _get_date_data(self, entry):
         if self.management:
-            tzinfo = entry.event_new.tzinfo
+            tzinfo = entry.event.tzinfo
         else:
-            tzinfo = entry.event_new.display_tzinfo
+            tzinfo = entry.event.display_tzinfo
         return {'startDate': self._get_entry_date_dt(entry.start_dt, tzinfo),
                 'endDate': self._get_entry_date_dt(entry.end_dt, tzinfo)}
 
@@ -276,13 +280,17 @@ class TimetableSerializer(object):
         return data
 
     def _get_person_data(self, person_link):
-        return {'firstName': person_link.first_name,
+        person = person_link.person
+        data = {'firstName': person_link.first_name,
                 'familyName': person_link.last_name,
                 'affiliation': person_link.affiliation,
-                'email': person_link.person.email,
+                'emailHash': md5(person.email.encode('utf-8')).hexdigest() if person.email else None,
                 'name': person_link.get_full_name(last_name_first=False, last_name_upper=False,
                                                   abbrev_first_name=False, show_title=True),
                 'displayOrderKey': person_link.display_order_key}
+        if self.can_manage_event:
+            data['email'] = person.email
+        return data
 
 
 def serialize_contribution(contribution):
@@ -292,8 +300,8 @@ def serialize_contribution(contribution):
 
 
 def serialize_day_update(event, day, block=None, session_=None):
-    serializer = TimetableSerializer(management=True)
-    timetable = serializer.serialize_session_timetable(session_) if session_ else serializer.serialize_timetable(event)
+    serializer = TimetableSerializer(event, management=True)
+    timetable = serializer.serialize_session_timetable(session_) if session_ else serializer.serialize_timetable()
     block_id = serializer._get_entry_key(block) if block else None
     day = day.strftime('%Y%m%d')
     return {'day': day,
@@ -301,10 +309,10 @@ def serialize_day_update(event, day, block=None, session_=None):
             'slotEntry': serializer.serialize_session_block_entry(block) if block else None}
 
 
-def serialize_entry_update(entry, with_timetable=False, session_=None):
-    serializer = TimetableSerializer(management=True)
-    day = entry.start_dt.astimezone(entry.event_new.tzinfo)
-    day_update = serialize_day_update(entry.event_new, day, block=entry.parent, session_=session_)
+def serialize_entry_update(entry, session_=None):
+    serializer = TimetableSerializer(entry.event, management=True)
+    day = entry.start_dt.astimezone(entry.event.tzinfo)
+    day_update = serialize_day_update(entry.event, day, block=entry.parent, session_=session_)
     return dict({'id': serializer._get_entry_key(entry),
                  'entry': serializer.serialize_timetable_entry(entry),
                  'autoOps': None},
@@ -312,10 +320,13 @@ def serialize_entry_update(entry, with_timetable=False, session_=None):
 
 
 def serialize_event_info(event):
-    conf = event.as_legacy
-    event_info = fossilize(conf, IConferenceEventInfoFossil, tz=conf.tz)
-    event_info['sessions'] = {sess.id: serialize_session(sess) for sess in event.sessions}
-    return event_info
+    return {'_type': 'Conference',
+            'id': unicode(event.id),
+            'title': event.title,
+            'startDate': event.start_dt_local,
+            'endDate': event.end_dt_local,
+            'isConference': event.type_ == EventType.conference,
+            'sessions': {sess.id: serialize_session(sess) for sess in event.sessions}}
 
 
 def serialize_session(sess):

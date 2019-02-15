@@ -30,7 +30,7 @@
                         {% endif %}
                         <div class="actions">
                             <input type="hidden" class="js-user-data">
-                            <a class="add-user i-button borderless icon-plus">
+                            <a class="add-user i-button borderless icon-plus hide-if-locked">
                                 {%- trans %}Add{% endtrans -%}
                             </a>
                         </div>
@@ -42,7 +42,7 @@
                         {% for user_id in users %}
                             <li class="event-user" data-user-id="{{ user_id }}">
                                 {{- user_data[user_id].name -}}
-                                <a class="icon-cross remove-user" href="#"></a>
+                                <a class="icon-cross remove-user hide-if-locked" href="#"></a>
                             </li>
                         {% endfor %}
                     </ul>
@@ -54,8 +54,15 @@
 
 {% block html %}
     <input type="hidden" id="{{ field.id }}" name="{{ field.name }}" value="{{ field._value() }}">
-    <div id="role-widget-{{ field.id }}" class="role-widget">
-        <ul class="role-list">
+    <div id="role-widget-{{ field.id }}" class="abstract-role-widget">
+        <ul class="abstract-role-list">
+            {% if not field.tracks %}
+                {% call message_box('warning') %}
+                    {% trans -%}
+                        Since this event has no tracks, reviewer roles are disabled. Only judgment is available.
+                    {%- endtrans %}
+                {% endcall %}
+            {% endif %}
             {% call render_track('*', _("All Tracks"), field.data['*'], user_data, global=true) -%}
                 {% trans %}These users will be able to access/review all tracks in the event.{% endtrans %}
             {%- endcall %}

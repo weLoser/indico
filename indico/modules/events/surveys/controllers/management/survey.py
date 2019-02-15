@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,16 +16,19 @@
 
 from __future__ import unicode_literals
 
-from flask import flash, session, redirect
+from flask import flash, redirect, session
 
 from indico.core.db import db
+from indico.core.notifications import make_email, send_email
 from indico.modules.events.surveys import logger
-from indico.modules.events.surveys.controllers.management import RHManageSurveysBase, RHManageSurveyBase
-from indico.modules.events.surveys.forms import SurveyForm, ScheduleSurveyForm
+from indico.modules.events.surveys.controllers.management import RHManageSurveyBase, RHManageSurveysBase
+from indico.modules.events.surveys.forms import InvitationForm, ScheduleSurveyForm, SurveyForm
 from indico.modules.events.surveys.models.items import SurveySection
 from indico.modules.events.surveys.models.surveys import Survey, SurveyState
 from indico.modules.events.surveys.views import WPManageSurvey
-from indico.util.i18n import _
+from indico.util.i18n import _, ngettext
+from indico.util.placeholders import replace_placeholders
+from indico.web.flask.templating import get_template_module
 from indico.web.flask.util import url_for
 from indico.web.forms.base import FormDefaults
 from indico.web.util import jsonify_data, jsonify_form, jsonify_template
@@ -35,19 +38,20 @@ class RHManageSurveys(RHManageSurveysBase):
     """Survey management overview (list of surveys)"""
 
     def _process(self):
-        surveys = (Survey.query.with_parent(self.event_new)
+        surveys = (Survey.query.with_parent(self.event)
                    .filter(~Survey.is_deleted)
                    .order_by(db.func.lower(Survey.title))
                    .all())
-        return WPManageSurvey.render_template('management/survey_list.html',
-                                              self._conf, event=self.event_new, surveys=surveys)
+        return WPManageSurvey.render_template('management/survey_list.html', self.event, surveys=surveys)
 
 
 class RHManageSurvey(RHManageSurveyBase):
     """Specific survey management (overview)"""
 
     def _process(self):
-        return WPManageSurvey.render_template('management/survey.html', self._conf, survey=self.survey)
+        submitted_surveys = [s for s in self.survey.submissions if s.is_submitted]
+        return WPManageSurvey.render_template('management/survey.html', self.event,
+                                              survey=self.survey, submitted_surveys=submitted_surveys)
 
 
 class RHEditSurvey(RHManageSurveyBase):
@@ -57,14 +61,14 @@ class RHEditSurvey(RHManageSurveyBase):
         return FormDefaults(self.survey, limit_submissions=self.survey.submission_limit is not None)
 
     def _process(self):
-        form = SurveyForm(event=self.event_new, obj=self._get_form_defaults())
+        form = SurveyForm(event=self.event, obj=self._get_form_defaults())
         if form.validate_on_submit():
             form.populate_obj(self.survey)
             db.session.flush()
             flash(_('Survey modified'), 'success')
             logger.info('Survey %s modified by %s', self.survey, session.user)
             return jsonify_data(flash=False)
-        return jsonify_template('events/surveys/management/edit_survey.html', event=self.event_new, form=form,
+        return jsonify_template('events/surveys/management/edit_survey.html', event=self.event, form=form,
                                 survey=self.survey)
 
 
@@ -75,16 +79,16 @@ class RHDeleteSurvey(RHManageSurveyBase):
         self.survey.is_deleted = True
         flash(_('Survey deleted'), 'success')
         logger.info('Survey %s deleted by %s', self.survey, session.user)
-        return redirect(url_for('.manage_survey_list', self.event_new))
+        return redirect(url_for('.manage_survey_list', self.event))
 
 
 class RHCreateSurvey(RHManageSurveysBase):
     """Create a new survey"""
 
     def _process(self):
-        form = SurveyForm(obj=FormDefaults(require_user=True), event=self.event_new)
+        form = SurveyForm(obj=FormDefaults(require_user=True), event=self.event)
         if form.validate_on_submit():
-            survey = Survey(event_new=self.event_new)
+            survey = Survey(event=self.event)
             # add a default section so people can start adding questions right away
             survey.items.append(SurveySection(display_as_section=False))
             form.populate_obj(survey)
@@ -93,7 +97,7 @@ class RHCreateSurvey(RHManageSurveysBase):
             flash(_('Survey created'), 'success')
             logger.info('Survey %s created by %s', survey, session.user)
             return jsonify_data(flash=False)
-        return jsonify_template('events/surveys/management/edit_survey.html', event=self.event_new, form=form,
+        return jsonify_template('events/surveys/management/edit_survey.html', event=self.event, form=form,
                                 survey=None)
 
 
@@ -144,3 +148,31 @@ class RHOpenSurvey(RHManageSurveyBase):
         flash(_("Survey is now open"), 'success')
         logger.info("Survey %s opened by %s", self.survey, session.user)
         return redirect(url_for('.manage_survey', self.survey))
+
+
+class RHSendSurveyLinks(RHManageSurveyBase):
+    """Send emails with URL of the survey"""
+
+    NOT_SANITIZED_FIELDS = {'from_address'}
+
+    def _process(self):
+        tpl = get_template_module('events/surveys/emails/survey_link_email.html', event=self.event)
+        form = InvitationForm(body=tpl.get_html_body(), subject=tpl.get_subject(), event=self.event)
+        if form.validate_on_submit():
+            self._send_emails(form, form.recipients.data)
+            num = len(form.recipients.data)
+            flash(ngettext('Your email has been sent.', '{} emails have been sent.', num).format(num))
+            return jsonify_data(flash=True)
+        return jsonify_form(form)
+
+    def _send_emails(self, form, recipients):
+        for recipient in recipients:
+            email_body = replace_placeholders('survey-link-email', form.body.data, event=self.event,
+                                              survey=self.survey)
+            email_subject = replace_placeholders('survey-link-email', form.subject.data, event=self.event,
+                                                 survey=self.survey)
+            tpl = get_template_module('emails/custom.html', subject=email_subject, body=email_body)
+            bcc = [session.user.email] if form.copy_for_sender.data else []
+            email = make_email(to_list=recipient,  bcc_list=bcc, from_address=form.from_address.data,
+                               template=tpl, html=True)
+            send_email(email, self.event, 'Surveys')

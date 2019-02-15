@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,8 +16,7 @@
 
 from __future__ import absolute_import
 
-__all__ = ['DBMgr', 'MigratedDB']
-
-from .manager import DBMgr
-from .migration import MigratedDB
 from .sqlalchemy import db
+
+
+__all__ = ['db']

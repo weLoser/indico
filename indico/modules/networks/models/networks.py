@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,15 +16,16 @@
 
 from __future__ import unicode_literals
 
-from flask import has_request_context, request, session
 from ipaddress import ip_address
+
+from flask import has_request_context, request, session
 from sqlalchemy.ext.associationproxy import association_proxy
 from sqlalchemy.ext.declarative import declared_attr
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy import PyIPNetwork
 from indico.core.db.sqlalchemy.principals import PrincipalType
-from indico.util.string import return_ascii, format_repr
+from indico.util.string import format_repr, return_ascii
 
 
 class IPNetworkGroup(db.Model):
@@ -34,6 +35,7 @@ class IPNetworkGroup(db.Model):
     is_group = False
     is_network = True
     is_single_person = False
+    is_event_role = False
 
     @declared_attr
     def __table_args__(cls):
@@ -52,6 +54,18 @@ class IPNetworkGroup(db.Model):
         db.Text,
         nullable=False,
         default=''
+    )
+    #: Whether the network group is hidden in ACL forms
+    hidden = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False
+    )
+    #: Grants all IPs in the network group read access to all attachments
+    attachment_access_override = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False
     )
 
     _networks = db.relationship(
@@ -72,7 +86,7 @@ class IPNetworkGroup(db.Model):
 
     @return_ascii
     def __repr__(self):
-        return format_repr(self, 'id', 'name')
+        return format_repr(self, 'id', 'name', hidden=False, attachment_access_override=False)
 
     def __contains__(self, user):
         # This method is called via ``user in principal`` during ACL checks.

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -23,14 +23,14 @@ from decimal import Decimal
 from uuid import uuid4
 
 from babel.numbers import format_currency
-from flask import has_request_context, session, request
+from flask import has_request_context, request, session
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.event import listens_for
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import mapper
 
 from indico.core import signals
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.db.sqlalchemy import PyIntEnum, UTCDateTime
 from indico.core.db.sqlalchemy.util.queries import increment_and_get
@@ -41,11 +41,12 @@ from indico.util.date_time import now_utc
 from indico.util.decorators import classproperty
 from indico.util.i18n import L_
 from indico.util.locators import locator_property
-from indico.util.string import return_ascii, format_repr, format_full_name, strict_unicode
-from indico.util.struct.enum import TitledIntEnum
+from indico.util.signals import values_from_signal
+from indico.util.string import format_full_name, format_repr, return_ascii, strict_unicode
+from indico.util.struct.enum import RichIntEnum
 
 
-class RegistrationState(TitledIntEnum):
+class RegistrationState(RichIntEnum):
     __titles__ = [None, L_('Completed'), L_('Pending'), L_('Rejected'), L_('Withdrawn'), L_('Awaiting payment')]
     complete = 1
     pending = 2
@@ -66,7 +67,8 @@ class Registration(db.Model):
     """Somebody's registration for an event through a registration form"""
     __tablename__ = 'registrations'
     __table_args__ = (db.CheckConstraint('email = lower(email)', 'lowercase_email'),
-                      db.Index(None, 'friendly_id', 'event_id', unique=True),
+                      db.Index(None, 'friendly_id', 'event_id', unique=True,
+                               postgresql_where=db.text('NOT is_deleted')),
                       db.Index(None, 'registration_form_id', 'user_id', unique=True,
                                postgresql_where=db.text('NOT is_deleted AND (state NOT IN (3, 4))')),
                       db.Index(None, 'registration_form_id', 'email', unique=True,
@@ -194,7 +196,7 @@ class Registration(db.Model):
     )
 
     #: The Event containing this registration
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -306,10 +308,20 @@ class Registration(db.Model):
         return format_display_full_name(session.user, self)
 
     @property
+    def is_ticket_blocked(self):
+        """Check whether the ticket is blocked by a plugin"""
+        return any(values_from_signal(signals.event.is_ticket_blocked.send(self), single_value=True))
+
+    @property
     def is_paid(self):
         """Returns whether the registration has been paid for."""
         paid_states = {TransactionStatus.successful, TransactionStatus.pending}
         return self.transaction is not None and self.transaction.status in paid_states
+
+    @property
+    def payment_dt(self):
+        """The date/time when the registration has been paid for"""
+        return self.transaction.timestamp if self.is_paid else None
 
     @property
     def price(self):
@@ -427,7 +439,7 @@ class Registration(db.Model):
         moderation_required = (regform.moderation_enabled and not _skip_moderation and
                                (not invitation or not invitation.skip_moderation))
         with db.session.no_autoflush:
-            payment_required = regform.event_new.has_feature('payment') and self.price and not self.is_paid
+            payment_required = regform.event.has_feature('payment') and self.price and not self.is_paid
         if self.state is None:
             if moderation_required:
                 self.state = RegistrationState.pending
@@ -458,7 +470,7 @@ class Registration(db.Model):
         moderation_required = (regform.moderation_enabled and not _skip_moderation and
                                (not invitation or not invitation.skip_moderation))
         with db.session.no_autoflush:
-            payment_required = regform.event_new.has_feature('payment') and self.price
+            payment_required = regform.event.has_feature('payment') and self.price
         if self.state == RegistrationState.pending:
             if approved and payment_required:
                 self.state = RegistrationState.unpaid
@@ -507,7 +519,7 @@ class RegistrationData(StoredFileMixin, db.Model):
     #: The submitted data for the field
     data = db.Column(
         JSONB,
-        default=JSONB.NULL,
+        default=lambda: None,
         nullable=False
     )
 
@@ -532,14 +544,18 @@ class RegistrationData(StoredFileMixin, db.Model):
 
     @locator.file
     def locator(self):
-        """A locator that pointsto the associated file."""
+        """A locator that points to the associated file."""
         if not self.filename:
             raise Exception('The file locator is only available if there is a file.')
         return dict(self.registration.locator, field_data_id=self.field_data_id, filename=self.filename)
 
     @property
     def friendly_data(self):
-        return self.get_friendly_data(for_humans=False)
+        return self.get_friendly_data()
+
+    @property
+    def search_data(self):
+        return self.get_friendly_data(for_search=True)
 
     def get_friendly_data(self, **kwargs):
         return self.field_data.field.get_friendly_data(self, **kwargs)
@@ -584,7 +600,7 @@ class RegistrationData(StoredFileMixin, db.Model):
         # add timestamp in case someone uploads the same file again
         filename = '{}-{}-{}'.format(self.field_data.field_id, int(time.time()), self.filename)
         path = posixpath.join(*(path_segments + [filename]))
-        return Config.getInstance().getAttachmentStorage(), path
+        return config.ATTACHMENT_STORAGE, path
 
     def render_price(self):
         return format_currency(self.price, self.registration.currency, locale=session.lang or 'en_GB')

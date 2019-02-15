@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -28,8 +28,8 @@ class RHRoomBookingAdminBase(RHRoomBookingBase):
     tasks should be derived from this class.
     """
 
-    def _checkProtection(self):
+    def _check_access(self):
         if session.user is None:
-            self._checkSessionUser()
+            self._require_user()
         elif not rb_is_admin(session.user):
             raise Forbidden(_('You are not authorized to take this action.'))

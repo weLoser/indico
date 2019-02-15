@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,24 +14,15 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from indico.modules.rb.models.aspects import Aspect
 from indico.modules.rb.models.locations import Location
+from indico.modules.rb.models.rooms import Room
 
 
 pytest_plugins = 'indico.modules.rb.testing.fixtures'
 
 
-def test_getLocator(dummy_location):
-    assert dummy_location.getLocator() == {'locationId': dummy_location.name}
-
-
-def test_is_map_available(dummy_location, db):
-    assert not dummy_location.is_map_available
-    dummy_location.aspects.append(Aspect(name=u'Test', center_latitude=u'', center_longitude=u'', zoom_level=0,
-                                         top_left_latitude=0, top_left_longitude=0, bottom_right_latitude=0,
-                                         bottom_right_longitude=0))
-    db.session.flush()
-    assert dummy_location.is_map_available
+def test_locator(dummy_location):
+    assert dummy_location.locator == {'locationId': dummy_location.name}
 
 
 def test_default_location(create_location):
@@ -40,6 +31,18 @@ def test_default_location(create_location):
     assert Location.default_location == location
     create_location(name=u'Bar')  # should not change the default
     assert Location.default_location == location
+
+
+def test_room_name_format(create_location, create_room, db, dummy_user):
+    location = create_location(u'Foo', is_default=True)
+    location.room_name_format = '{building}|{floor}|{number}'
+    assert location._room_name_format == '%1$s|%2$s|%3$s'
+
+    Room(building=1, floor=2, number=3, verbose_name='First amphitheater', location=location, owner=dummy_user)
+    Room(building=1, floor=3, number=4, verbose_name='Second amphitheater', location=location, owner=dummy_user)
+    Room(building=1, floor=2, number=4, verbose_name='Room 3', location=location, owner=dummy_user)
+    db.session.flush()
+    assert Room.query.filter(Room.full_name.contains('|3')).count() == 2
 
 
 def test_set_default(create_location):
@@ -59,20 +62,6 @@ def test_set_default(create_location):
     other_location.set_default()
     assert not location.is_default
     assert other_location.is_default
-
-
-def test_get_attribute_by_name(dummy_location, create_room_attribute):
-    assert dummy_location.get_attribute_by_name(u'foo') is None
-    attr = create_room_attribute(u'foo')
-    assert dummy_location.get_attribute_by_name(u'foo') == attr
-    assert dummy_location.get_attribute_by_name(u'bar') is None
-
-
-def test_get_equipment_by_name(dummy_location, create_equipment_type):
-    assert dummy_location.get_equipment_by_name(u'foo') is None
-    eq = create_equipment_type(u'foo')
-    assert dummy_location.get_equipment_by_name(u'foo') == eq
-    assert dummy_location.get_equipment_by_name(u'bar') is None
 
 
 def test_get_buildings(db, dummy_location, create_room):

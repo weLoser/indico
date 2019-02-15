@@ -14,11 +14,11 @@
             {% endif %}
         </td>
         <td class="i-table">
-            <a href="{{ url_for('event_mgmt.conferenceModification-managementAccess', event) }}">
-                {{ event.get_verbose_title(show_series_pos=(event.type == 'lecture')) | strip_tags }}
+            <a href="{{ url_for('event_management.settings', event) }}">
+                {{ event.get_verbose_title(show_series_pos=(event.type == 'lecture')) | striptags }}
             </a>
         </td>
-        <td class="i-table">{{ event.start_dt|format_datetime(timezone=event.category.display_tzinfo) }}</td>
+        <td class="i-table">{{ event.start_dt|format_datetime(timezone=event.category.tzinfo) }}</td>
         <td class="i-table actions">
             <a href="#"
                class="i-link icon-remove"
@@ -29,8 +29,8 @@
             <a class="i-link icon-transmission js-move-event-to-subcategory"
                title="{% trans %}Move to different category{% endtrans %}"
                data-href="{{ url_for('event_management.move', event) }}"></a>
-            <a href="{{ url_for('event.conferenceDisplay', event) }}"
-               class="i-link icon-arrow-right"
+            <a href="{{ event.url }}"
+               class="i-link icon-arrow-right-sparse"
                title="{% trans %}Go to the event display page{% endtrans %}"></a>
         </td>
     </tr>

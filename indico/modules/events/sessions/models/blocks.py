@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -72,6 +72,7 @@ class SessionBlock(LocationMixin, db.Model):
     # relationship backrefs:
     # - contributions (Contribution.session_block)
     # - legacy_mapping (LegacySessionBlockMapping.session_block)
+    # - room_reservation_links (ReservationLink.session_block)
     # - session (Session.blocks)
     # - timetable_entry (TimetableEntry.session_block)
     # - vc_room_associations (VCRoomEventAssociation.linked_block)
@@ -92,8 +93,8 @@ class SessionBlock(LocationMixin, db.Model):
         super(SessionBlock, self).__init__(**kwargs)
 
     @property
-    def event_new(self):
-        return self.session.event_new
+    def event(self):
+        return self.session.event
 
     @locator_property
     def locator(self):

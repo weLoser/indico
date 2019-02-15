@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,6 +19,7 @@ from datetime import datetime
 
 import freezegun
 import pytest
+from sqlalchemy import DateTime, cast
 from sqlalchemy.sql.functions import _FunctionGenerator
 
 
@@ -41,7 +42,7 @@ def monkeypatch_methods(monkeypatch):
     return _monkeypatch_methods
 
 
-@pytest.yield_fixture
+@pytest.fixture
 def freeze_time(monkeypatch):
     """Returns a function that freezes the current time
 
@@ -54,7 +55,7 @@ def freeze_time(monkeypatch):
 
     def FunctionGenerator_call(self, *args, **kwargs):
         if self._FunctionGenerator__names == ['now']:
-            return datetime.now()
+            return cast(datetime.now().isoformat(), DateTime)
         return orig_call(self, *args, **kwargs)
 
     monkeypatch.setattr(_FunctionGenerator, '__call__', FunctionGenerator_call)

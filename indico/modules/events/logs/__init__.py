@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,11 +19,12 @@ from __future__ import unicode_literals
 from flask import session
 
 from indico.core import signals
-from indico.modules.events.logs.models.entries import EventLogRealm, EventLogKind, EventLogEntry
-from indico.modules.events.logs.renderers import SimpleRenderer, EmailRenderer
+from indico.modules.events.logs.models.entries import EventLogEntry, EventLogKind, EventLogRealm
+from indico.modules.events.logs.renderers import EmailRenderer, SimpleRenderer
 from indico.modules.events.logs.util import get_log_renderers
 from indico.web.flask.util import url_for
 from indico.web.menu import SideMenuItem
+
 
 __all__ = ('EventLogEntry', 'EventLogKind', 'EventLogRealm')
 

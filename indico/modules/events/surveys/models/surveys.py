@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,8 +16,10 @@
 
 from __future__ import unicode_literals
 
+from uuid import uuid4
+
 from sqlalchemy import inspect
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.event import listens_for
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm.session import object_session
@@ -29,6 +31,7 @@ from indico.core.notifications import make_email, send_email
 from indico.modules.events.registration.models.registrations import Registration
 from indico.modules.events.surveys import logger
 from indico.util.date_time import now_utc
+from indico.util.locators import locator_property
 from indico.util.string import return_ascii
 from indico.util.struct.enum import IndicoEnum
 from indico.web.flask.templating import get_template_module
@@ -47,7 +50,7 @@ class Survey(db.Model):
     __table_args__ = (db.CheckConstraint("anonymous OR require_user", 'valid_anonymous_user'),
                       {'schema': 'event_surveys'})
 
-    #: The ID of the submission
+    #: The ID of the survey
     id = db.Column(
         db.Integer,
         primary_key=True
@@ -63,6 +66,12 @@ class Survey(db.Model):
     title = db.Column(
         db.String,
         nullable=False
+    )
+    uuid = db.Column(
+        UUID,
+        unique=True,
+        nullable=False,
+        default=lambda: unicode(uuid4())
     )
     # An introduction text for users of the survey
     introduction = db.Column(
@@ -81,6 +90,12 @@ class Survey(db.Model):
         db.Boolean,
         nullable=False,
         default=True
+    )
+    # #: Whether the survey is only for selected users
+    private = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False
     )
     #: Maximum number of submissions allowed
     submission_limit = db.Column(
@@ -127,12 +142,25 @@ class Survey(db.Model):
         nullable=False,
         default=[]
     )
-    #: Email addresses t notify about new submissions
+    #: Email addresses to notify about new submissions
     new_submission_emails = db.Column(
         ARRAY(db.String),
         nullable=False,
         default=[]
     )
+    #: Whether answers can be saved without submitting the survey
+    partial_completion = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False
+    )
+    #: The last user-friendly submission ID
+    _last_friendly_submission_id = db.deferred(db.Column(
+        'last_friendly_submission_id',
+        db.Integer,
+        nullable=False,
+        default=0
+    ))
 
     #: The list of submissions
     submissions = db.relationship(
@@ -169,12 +197,12 @@ class Survey(db.Model):
         viewonly=True
     )
     #: The Event containing this survey
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
             'surveys',
-            lazy='dynamic'
+            lazy=True
         )
     )
 
@@ -194,10 +222,16 @@ class Survey(db.Model):
     def has_started(cls):
         return (cls.start_dt != None) & (cls.start_dt <= now_utc())  # noqa
 
-    @property
+    @locator_property
     def locator(self):
         return {'confId': self.event_id,
                 'survey_id': self.id}
+
+    @locator.token
+    def locator(self):
+        """A locator that adds the UUID if the survey is private"""
+        token = self.uuid if self.private else None
+        return dict(self.locator, token=token)
 
     @property
     def state(self):
@@ -220,7 +254,7 @@ class Survey(db.Model):
         """
         recipients = set(self.start_notification_emails)
         if self.notify_participants:
-            recipients.update(reg.email for reg in Registration.get_all_for_event(self.event_new))
+            recipients.update(reg.email for reg in Registration.get_all_for_event(self.event))
         recipients.discard('')  # just in case there was an empty email address somewhere
         return recipients
 
@@ -259,11 +293,11 @@ class Survey(db.Model):
         self.end_dt = now_utc()
 
     def send_start_notification(self):
-        if not self.notifications_enabled or self.start_notification_sent or not self.event_new.has_feature('surveys'):
+        if not self.notifications_enabled or self.start_notification_sent or not self.event.has_feature('surveys'):
             return
         template_module = get_template_module('events/surveys/emails/start_notification_email.txt', survey=self)
         email = make_email(bcc_list=self.start_notification_recipients, template=template_module)
-        send_email(email, event=self.event_new, module='Surveys')
+        send_email(email, event=self.event, module='Surveys')
         logger.info('Sending start notification for survey %s', self)
         self.start_notification_sent = True
 
@@ -272,7 +306,7 @@ class Survey(db.Model):
             return
         template_module = get_template_module('events/surveys/emails/new_submission_email.txt', submission=submission)
         email = make_email(bcc_list=self.new_submission_emails, template=template_module)
-        send_email(email, event=self.event_new, module='Surveys')
+        send_email(email, event=self.event, module='Surveys')
         logger.info('Sending submission notification for survey %s', self)
 
 

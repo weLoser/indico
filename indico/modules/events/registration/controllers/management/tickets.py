@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,86 +19,49 @@ from __future__ import unicode_literals
 from io import BytesIO
 
 import qrcode
-from flask import flash, json, render_template
-from werkzeug.exceptions import Forbidden, NotFound
+from flask import json, render_template
 
+from indico.core.config import config
 from indico.core.db import db
-from indico.modules.events.registration.controllers.display import RHRegistrationFormRegistrationBase
+from indico.modules.designer import PageOrientation, PageSize
 from indico.modules.events.registration.controllers.management import RHManageRegFormBase
 from indico.modules.events.registration.forms import TicketsForm
-from indico.modules.events.registration.models.registrations import RegistrationState
-from indico.modules.oauth.models.applications import OAuthApplication
-from indico.util.date_time import format_date
-from indico.util.i18n import _
-from indico.web.flask.util import url_for, send_file, secure_filename
+from indico.modules.oauth.models.applications import OAuthApplication, SystemAppType
+from indico.web.flask.util import send_file, url_for
 from indico.web.util import jsonify_data, jsonify_template
 
-from MaKaC.PDFinterface.conference import TicketToPDF
-from MaKaC.common import Config
+
+DEFAULT_TICKET_PRINTING_SETTINGS = {
+    'top_margin': 0,
+    'bottom_margin': 0,
+    'left_margin': 0,
+    'right_margin': 0,
+    'margin_columns': 0,
+    'margin_rows': 0.0,
+    'page_size': PageSize.A4,
+    'page_orientation': PageOrientation.portrait,
+    'dashed_border': False,
+    'page_layout': None
+}
 
 
 class RHRegistrationFormTickets(RHManageRegFormBase):
     """Display and modify ticket settings."""
 
-    def _check_ticket_app_enabled(self):
-        config = Config.getInstance()
-        checkin_app_client_id = config.getCheckinAppClientId()
-
-        if checkin_app_client_id is None:
-            flash(_("indico-checkin client_id is not defined in the Indico configuration"), 'warning')
-            return False
-
-        checkin_app = OAuthApplication.find_first(client_id=checkin_app_client_id)
-        if checkin_app is None:
-            flash(_("indico-checkin is not registered as an OAuth application with client_id {}")
-                  .format(checkin_app_client_id), 'warning')
-            return False
-        return True
-
     def _process(self):
-        form = TicketsForm(obj=self.regform)
+        form = TicketsForm(obj=self.regform, event=self.event)
         if form.validate_on_submit():
             form.populate_obj(self.regform)
             db.session.flush()
             return jsonify_data(flash=False, tickets_enabled=self.regform.tickets_enabled)
 
-        return jsonify_template('events/registration/management/regform_tickets.html',
-                                regform=self.regform, form=form, can_enable_tickets=self._check_ticket_app_enabled())
-
-
-def generate_ticket(registration):
-    pdf = TicketToPDF(registration.registration_form.event_new, registration)
-    return BytesIO(pdf.getPDFBin())
-
-
-class RHTicketDownload(RHRegistrationFormRegistrationBase):
-    """Generate ticket for a given registration"""
-
-    def _checkParams(self, params):
-        RHRegistrationFormRegistrationBase._checkParams(self, params)
-        if not self.registration:
-            raise NotFound
-
-    def _checkProtection(self):
-        RHRegistrationFormRegistrationBase._checkProtection(self)
-        if self.registration.state != RegistrationState.complete:
-            raise Forbidden
-        if not self.regform.tickets_enabled:
-            raise Forbidden
-        if not self.regform.ticket_on_event_page and not self.regform.ticket_on_summary_page:
-            raise Forbidden
-
-    def _process(self):
-        filename = secure_filename('{}-Ticket.pdf'.format(self.event_new.title), 'ticket.pdf')
-        return send_file(filename, generate_ticket(self.registration), 'application/pdf')
+        return jsonify_template('events/registration/management/regform_tickets.html', regform=self.regform, form=form)
 
 
 class RHTicketConfigQRCodeImage(RHManageRegFormBase):
     """Display configuration QRCode."""
 
     def _process(self):
-        config = Config.getInstance()
-
         # QRCode (Version 6 with error correction L can contain up to 106 bytes)
         qr = qrcode.QRCode(
             version=6,
@@ -107,17 +70,15 @@ class RHTicketConfigQRCodeImage(RHManageRegFormBase):
             border=1
         )
 
-        checkin_app_client_id = config.getCheckinAppClientId()
-        checkin_app = OAuthApplication.find_first(client_id=checkin_app_client_id)
-
-        base_url = config.getBaseSecureURL() if config.getBaseSecureURL() else config.getBaseURL()
+        checkin_app = OAuthApplication.find_one(system_app_type=SystemAppType.checkin)
         qr_data = {
-            "event_id": self.event_new.id,
-            "title": self.event_new.title,
-            "date": format_date(self.event_new.start_dt_local),  # XXX: switch to utc+isoformat?
+            "event_id": self.event.id,
+            "title": self.event.title,
+            "date": self.event.start_dt.isoformat(),
+            "version": 1,
             "server": {
-                "baseUrl": base_url,
-                "consumerKey": checkin_app.client_id,
+                "base_url": config.BASE_URL,
+                "consumer_key": checkin_app.client_id,
                 "auth_url": url_for('oauth.oauth_authorize', _external=True),
                 "token_url": url_for('oauth.oauth_token', _external=True)
             }

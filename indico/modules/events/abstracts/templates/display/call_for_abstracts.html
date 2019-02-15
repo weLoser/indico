@@ -1,38 +1,13 @@
-{% extends 'layout/conference_page_base.html' %}
+{% extends 'events/display/conference/base.html' %}
 
 {% from 'events/abstracts/display/_common.html' import render_cfa_infoline %}
 {% from 'events/display/indico/_common.html' import render_users %}
 {% from 'events/management/_lists.html' import render_displayed_entries_fragment %}
-{% from 'message_box.html' import message_box %}
+{% from 'events/reviews/_common.html' import render_timeline_section %}
 
 {% block title %}
-    {%- trans %}Call for Abstracts{% endtrans -%}
+    {{- page_title -}}
 {% endblock %}
-
-{% macro render_timestamp(label, date, tz, completed=false, alternative_text=none) %}
-    <li class="{{ 'completed' if completed }}">
-        <div class="label">{{ label }}</div>
-        <div class="timestamp flexcol f-a-center">
-            {% if date %}
-                <time datetime="{{ date.isoformat() }}">
-                    {{- date|format_datetime(timezone=tz) -}}
-                </time>
-            {% elif alternative_text %}
-                <span>{{ alternative_text }}</span>
-            {% endif %}
-        </div>
-    </li>
-{% endmacro %}
-
-{% macro render_timeline_section(cfa) %}
-    {% set tz = cfa.event.display_tzinfo %}
-    <section>
-        <ul class="cfa-timeline flexrow f-a-center f-j-center">
-            {{ render_timestamp(_("Opening day"), cfa.start_dt, tz, cfa.has_started) }}
-            {{ render_timestamp(_("Submission deadline"), cfa.end_dt, tz, cfa.has_ended, _("No deadline")) }}
-        </ul>
-    </section>
-{% endmacro %}
 
 {% macro render_user_abstract_list(event, abstracts) %}
     <section>
@@ -58,12 +33,6 @@
             </div>
         </div>
         <div id="display-contribution-list" class="contribution-list">
-            {% set mapping = {'under_review': 'highlight',
-                              'withdrawn': 'outline dashed',
-                              'accepted': 'success',
-                              'rejected': 'error',
-                              'merged': 'visited',
-                              'duplicate': 'strong'} %}
             {% for abstract in abstracts -%}
                 <div class="contribution-row" data-friendly-id="{{ abstract.friendly_id }}">
                     <div class="contrib-title info" data-searchable="{{ abstract.title|lower }}">
@@ -84,7 +53,7 @@
                         <time datetime="{{ dt.isoformat() }}">{{ dt | format_human_date }}</time>
                     </div>
                     <div>
-                        <div class="contrib-state small i-tag {{ mapping[abstract.public_state.name] }}">
+                        <div class="contrib-state small i-tag {{ abstract.public_state.css_class }}">
                             {{- abstract.state.title -}}
                         </div>
                         {% if abstract.accepted_track -%}

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,23 +18,23 @@ from __future__ import unicode_literals
 
 from itertools import count
 
-from flask import flash, request, session, jsonify
-from werkzeug.exceptions import BadRequest, NotFound, Forbidden
+from flask import flash, jsonify, request, session
+from werkzeug.exceptions import BadRequest, Forbidden, NotFound
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy.util.models import get_default_values
+from indico.modules.events.controllers.base import RHDisplayEventBase
 from indico.modules.events.layout import layout_settings, logger
-from indico.modules.events.layout.forms import (MenuLinkForm, MenuPageForm, MenuBuiltinEntryForm)
-from indico.modules.events.layout.models.menu import MenuEntry, MenuEntryType, EventPage
+from indico.modules.events.layout.forms import MenuBuiltinEntryForm, MenuLinkForm, MenuPageForm
+from indico.modules.events.layout.models.menu import EventPage, MenuEntry, MenuEntryType
 from indico.modules.events.layout.util import menu_entries_for_event
 from indico.modules.events.layout.views import WPMenuEdit, WPPage
+from indico.modules.events.management.controllers import RHManageEventBase
 from indico.modules.events.models.events import EventType
 from indico.util.i18n import _
 from indico.web.flask.templating import get_template_module
 from indico.web.forms.base import FormDefaults
 from indico.web.util import jsonify_data, jsonify_form
-from MaKaC.webinterface.rh.conferenceModif import RHConferenceModifBase
-from MaKaC.webinterface.rh.conferenceDisplay import RHConferenceBaseDisplay
 
 
 def _render_menu_entry(entry):
@@ -47,24 +47,22 @@ def _render_menu_entries(event, connect_menu=False):
     return tpl.menu_entries(menu_entries_for_event(event), connect_menu=connect_menu)
 
 
-class RHMenuBase(RHConferenceModifBase):
-    CSRF_ENABLED = True
-
-    def _checkProtection(self):
-        RHConferenceModifBase._checkProtection(self)
-        if self.event_new.type_ != EventType.conference:
+class RHMenuBase(RHManageEventBase):
+    def _check_access(self):
+        RHManageEventBase._check_access(self)
+        if self.event.type_ != EventType.conference:
             raise NotFound('Only conferences have a menu')
 
     def _require_custom_menu(self):
-        if not layout_settings.get(self.event_new, 'use_custom_menu'):
+        if not layout_settings.get(self.event, 'use_custom_menu'):
             raise Forbidden('The menu cannot be changed unless menu customization is enabled')
 
 
 class RHMenuEdit(RHMenuBase):
     def _process(self):
-        custom_menu_enabled = layout_settings.get(self.event_new, 'use_custom_menu')
-        menu = menu_entries_for_event(self.event_new) if custom_menu_enabled else None
-        return WPMenuEdit.render_template('menu_edit.html', self._conf, event=self.event_new, menu=menu,
+        custom_menu_enabled = layout_settings.get(self.event, 'use_custom_menu')
+        menu = menu_entries_for_event(self.event) if custom_menu_enabled else None
+        return WPMenuEdit.render_template('menu_edit.html', self.event, menu=menu,
                                           custom_menu_enabled=custom_menu_enabled)
 
 
@@ -75,11 +73,11 @@ class RHMenuToggleCustom(RHMenuBase):
             # nothing else to do here. menu items are added to the DB when retrieving the menu
             flash(_('Menu customization has been enabled.'), 'success')
         else:
-            for entry in MenuEntry.query.with_parent(self.event_new):
+            for entry in MenuEntry.query.with_parent(self.event):
                 db.session.delete(entry)
             flash(_('Menu customization has been disabled.'), 'success')
-        layout_settings.set(self.event_new, 'use_custom_menu', enabled)
-        logger.info('Menu customization for %s %s by %s', self.event_new, 'enabled' if enabled else 'disabled',
+        layout_settings.set(self.event, 'use_custom_menu', enabled)
+        logger.info('Menu customization for %s %s by %s', self.event, 'enabled' if enabled else 'disabled',
                     session.user)
         return jsonify(enabled=enabled)
 
@@ -91,12 +89,12 @@ class RHMenuEntryEditBase(RHMenuBase):
         }
     }
 
-    def _checkProtection(self):
-        RHMenuBase._checkProtection(self)
+    def _check_access(self):
+        RHMenuBase._check_access(self)
         self._require_custom_menu()
 
-    def _checkParams(self, params):
-        RHMenuBase._checkParams(self, params)
+    def _process_args(self):
+        RHMenuBase._process_args(self)
         self.entry = MenuEntry.get_one(request.view_args['menu_entry_id'])
 
 
@@ -146,7 +144,7 @@ class RHMenuEntryPosition(RHMenuEntryEditBase):
 
             parent_entry = None
             if parent_id is not None:
-                parent_entry = (MenuEntry.query.with_parent(self.event_new)
+                parent_entry = (MenuEntry.query.with_parent(self.event)
                                 .filter(MenuEntry.type.in_({MenuEntryType.user_link, MenuEntryType.page}),
                                         MenuEntry.id == parent_id,
                                         MenuEntry.parent_id.is_(None))
@@ -172,18 +170,18 @@ class RHMenuEntryToggleDefault(RHMenuEntryEditBase):
     def _process(self):
         if self.entry.type != MenuEntryType.page:
             raise BadRequest
-        if self.event_new.default_page == self.entry.page:
+        if self.event.default_page == self.entry.page:
             is_default = False
-            self.event_new.default_page = None
+            self.event.default_page = None
         else:
             is_default = True
-            self.event_new.default_page = self.entry.page
+            self.event.default_page = self.entry.page
         return jsonify(is_default=is_default)
 
 
 class RHMenuAddEntry(RHMenuBase):
-    def _checkProtection(self):
-        RHMenuBase._checkProtection(self)
+    def _check_access(self):
+        RHMenuBase._check_access(self)
         self._require_custom_menu()
 
     def _process(self):
@@ -191,7 +189,7 @@ class RHMenuAddEntry(RHMenuBase):
         entry_type = request.args['type']
 
         if entry_type == MenuEntryType.separator.name:
-            entry = MenuEntry(event_new=self.event_new, type=MenuEntryType.separator)
+            entry = MenuEntry(event=self.event, type=MenuEntryType.separator)
             db.session.add(entry)
             db.session.flush()
             return jsonify_data(flash=False, entry=_render_menu_entry(entry))
@@ -205,14 +203,15 @@ class RHMenuAddEntry(RHMenuBase):
 
         form = form_cls(obj=defaults)
         if form.validate_on_submit():
-            entry = MenuEntry(event_new=self.event_new, type=MenuEntryType[entry_type])
+            entry = MenuEntry(event=self.event, type=MenuEntryType[entry_type])
             form.populate_obj(entry, skip={'html'})
 
             if entry.is_page:
                 page = EventPage(html=form.html.data)
-                self.event_new.custom_pages.append(page)
+                self.event.custom_pages.append(page)
                 entry.page = page
 
+            db.session.add(entry)
             db.session.flush()
             return jsonify_data(entry=_render_menu_entry(entry))
         return jsonify_form(form)
@@ -230,10 +229,11 @@ class RHMenuDeleteEntry(RHMenuEntryEditBase):
                 child.position = next(position_gen)
 
         with db.session.no_autoflush:
-            entries = (MenuEntry.query.with_parent(self.event_new)
+            entries = (MenuEntry.query.with_parent(self.event)
                        .filter(MenuEntry.parent_id == self.entry.parent_id,
                                MenuEntry.position >= self.entry.position,
                                MenuEntry.id != self.entry.id)
+                       .order_by(MenuEntry.position)
                        .all())
         for entry in entries:
             entry.position = next(position_gen)
@@ -241,19 +241,19 @@ class RHMenuDeleteEntry(RHMenuEntryEditBase):
         db.session.delete(self.entry)
         db.session.flush()
 
-        return jsonify_data(flash=False, menu=_render_menu_entries(self.event_new, connect_menu=True))
+        return jsonify_data(flash=False, menu=_render_menu_entries(self.event, connect_menu=True))
 
 
-class RHPageDisplay(RHConferenceBaseDisplay):
+class RHPageDisplay(RHDisplayEventBase):
     normalize_url_spec = {
         'locators': {
             lambda self: self.page
         }
     }
 
-    def _checkParams(self, params):
-        RHConferenceBaseDisplay._checkParams(self, params)
+    def _process_args(self):
+        RHDisplayEventBase._process_args(self)
         self.page = EventPage.get_one(request.view_args['page_id'])
 
     def _process(self):
-        return WPPage.render_template('page.html', self._conf, page=self.page)
+        return WPPage.render_template('page.html', self.event, page=self.page)

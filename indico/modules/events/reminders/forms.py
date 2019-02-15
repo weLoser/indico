@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,11 +16,10 @@
 
 from __future__ import unicode_literals
 
-from datetime import datetime, date
+from datetime import date, datetime
 
 import pytz
-from wtforms.ext.dateutil.fields import DateField
-from wtforms.fields import BooleanField, TextAreaField, SelectField
+from wtforms.fields import BooleanField, SelectField, TextAreaField
 from wtforms.validators import DataRequired, InputRequired, ValidationError
 from wtforms_components import TimeField
 
@@ -28,7 +27,7 @@ from indico.modules.events.models.events import EventType
 from indico.util.date_time import now_utc
 from indico.util.i18n import _
 from indico.web.forms.base import IndicoForm, generated_data
-from indico.web.forms.fields import EmailListField, IndicoRadioField, TimeDeltaField
+from indico.web.forms.fields import EmailListField, IndicoDateField, IndicoRadioField, TimeDeltaField
 from indico.web.forms.validators import HiddenUnless
 
 
@@ -44,8 +43,7 @@ class ReminderForm(IndicoForm):
                                               ('absolute', _("Fixed date/time")),
                                               ('now', _('Send immediately'))])
     relative_delta = TimeDeltaField(_('Offset'), [HiddenUnless('schedule_type', 'relative'), DataRequired()])
-    absolute_date = DateField(_('Date'), [HiddenUnless('schedule_type', 'absolute'), DataRequired()],
-                              parse_kwargs={'dayfirst': True})
+    absolute_date = IndicoDateField(_('Date'), [HiddenUnless('schedule_type', 'absolute'), DataRequired()])
     absolute_time = TimeField(_('Time'), [HiddenUnless('schedule_type', 'absolute'), InputRequired()])
     # Recipients
     recipients = EmailListField(_('Email addresses'), description=_('One email address per line.'))
@@ -58,6 +56,8 @@ class ReminderForm(IndicoForm):
     message = TextAreaField(_('Note'), description=_('A custom message to include in the email.'))
     include_summary = BooleanField(_('Include agenda'),
                                    description=_("Includes a simple text version of the event's agenda in the email."))
+    include_description = BooleanField(_('Include description'),
+                                       description=_("Includes the event's description in the email."))
 
     def __init__(self, *args, **kwargs):
         self.event = kwargs.pop('event')

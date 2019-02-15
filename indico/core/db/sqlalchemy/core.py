@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,31 +16,22 @@
 
 from __future__ import absolute_import
 
-from contextlib import contextmanager
-
-import logging
 import sys
+from contextlib import contextmanager
 from functools import partial
 
-from flask import has_app_context, g, has_request_context
-from flask import session as flask_session
-
-import flask_sqlalchemy
 from flask_sqlalchemy import SQLAlchemy
+from flask_sqlalchemy.model import BindMetaMixin
 from sqlalchemy.event import listen
 from sqlalchemy.exc import DatabaseError
-from sqlalchemy.orm import mapper, Session, CompositeProperty
+from sqlalchemy.ext.declarative import DeclarativeMeta, declarative_base
+from sqlalchemy.orm import CompositeProperty, mapper
 from sqlalchemy.sql.ddl import CreateSchema
-from werkzeug.utils import cached_property
-from zope.sqlalchemy import ZopeTransactionExtension
 
 from indico.core import signals
+from indico.core.db.sqlalchemy.custom.natsort import create_natsort_function
 from indico.core.db.sqlalchemy.custom.unaccent import create_unaccent_function
-
-# Monkeypatching this since Flask-SQLAlchemy doesn't let us override the model class
-from indico.core.db.sqlalchemy.util.models import IndicoModel, IndicoBaseQuery
-flask_sqlalchemy.Model = IndicoModel
-flask_sqlalchemy.BaseQuery = IndicoBaseQuery
+from indico.core.db.sqlalchemy.util.models import IndicoBaseQuery, IndicoModel
 
 
 class ConstraintViolated(Exception):
@@ -102,14 +93,6 @@ class IndicoSQLAlchemy(SQLAlchemy):
         except DatabaseError:
             handle_sqlalchemy_database_error()
 
-    @cached_property
-    def logger(self):
-        from indico.core.logger import Logger
-
-        logger = Logger.get('db')
-        logger.setLevel(logging.DEBUG)
-        return logger
-
     @contextmanager
     def tmp_session(self):
         """Provides a contextmanager with a temporary SQLAlchemy session.
@@ -118,7 +101,7 @@ class IndicoSQLAlchemy(SQLAlchemy):
         callback without having to worry about things like the ZODB extension,
         implicit commits, etc.
         """
-        session = db.create_session({'query_cls': IndicoBaseQuery})
+        session = db.create_session({'query_cls': IndicoBaseQuery})()
         try:
             yield session
         except:
@@ -126,6 +109,13 @@ class IndicoSQLAlchemy(SQLAlchemy):
             raise
         finally:
             session.close()
+
+
+class NoNameGenMeta(BindMetaMixin, DeclarativeMeta):
+    # This is like Flask-SQLAlchemy's default metaclass but without
+    # generating table names (i.e. a model without an explicit table
+    # name will fail instead of getting a name set implicitly)
+    pass
 
 
 def on_models_committed(sender, changes):
@@ -146,8 +136,9 @@ def _before_create(target, connection, **kw):
         if not _schema_exists(connection, schema):
             CreateSchema(schema).execute(connection)
             signals.db_schema_created.send(unicode(schema), connection=connection)
-    # Create the indico_unaccent function
+    # Create our custom functions
     create_unaccent_function(connection)
+    create_natsort_function(connection)
 
 
 def _mapper_configured(mapper, class_):
@@ -164,33 +155,6 @@ def _mapper_configured(mapper, class_):
             if func is not None:
                 # Using partial here to avoid closure scoping issues
                 listen(getattr(class_, prop.key), 'set', partial(_coerce_custom, fn=func), retval=True)
-
-
-def _transaction_ended(session, transaction):
-    # The zope transaction system closes the session (and thus the
-    # transaction) e.g. when calling `transaction.abort()`.
-    # in this case we need to clear the memoization cache to avoid
-    # accessing memoized objects (which are now session-less)
-
-    if transaction._parent is not None:
-        # we don't care about sub-transactions
-        return
-
-    if has_app_context():
-        if 'memoize_cache' in g:
-            del g.memoize_cache
-        if 'settings_cache' in g:
-            del g.settings_cache
-        if 'global_settings_cache' in g:
-            del g.global_settings_cache
-        if 'event_notes' in g:
-            del g.event_notes
-        if 'event_attachments' in g:
-            del g.event_attachments
-        if 'relationship_cache' in g:
-            del g.relationship_cache
-    if has_request_context() and hasattr(flask_session, '_user'):
-        delattr(flask_session, '_user')
 
 
 def _column_names(constraint, table):
@@ -211,9 +175,8 @@ naming_convention = {
     'unique_index': _unique_index
 }
 
-db = IndicoSQLAlchemy(session_options={'extension': ZopeTransactionExtension(),
-                                       'query_cls': IndicoBaseQuery})
+db = IndicoSQLAlchemy(model_class=declarative_base(cls=IndicoModel, metaclass=NoNameGenMeta, name='Model'),
+                      query_class=IndicoBaseQuery)
 db.Model.metadata.naming_convention = naming_convention
 listen(db.Model.metadata, 'before_create', _before_create)
 listen(mapper, 'mapper_configured', _mapper_configured)
-listen(Session, 'after_transaction_end', _transaction_ended)

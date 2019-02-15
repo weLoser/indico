@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,16 +16,11 @@
 
 from __future__ import absolute_import
 
-import traceback
-from datetime import datetime, date
+from datetime import date, datetime
 from UserDict import UserDict
 
-from flask import current_app, session
-from persistent.dict import PersistentDict
 from speaklater import _LazyString
-from werkzeug.exceptions import Forbidden
 
-from indico.web.util import get_request_info
 
 try:
     import simplejson as _json
@@ -37,7 +32,6 @@ class IndicoJSONEncoder(_json.JSONEncoder):
     """
     Custom JSON encoder that supports more types
      * datetime objects
-     * PersistentDict
     """
     def __init__(self, *args, **kwargs):
         if kwargs.get('separators') is None:
@@ -47,7 +41,7 @@ class IndicoJSONEncoder(_json.JSONEncoder):
     def default(self, o):
         if isinstance(o, _LazyString):
             return o.value
-        elif isinstance(o, (PersistentDict, UserDict)):
+        elif isinstance(o, UserDict):
             return dict(o)
         elif isinstance(o, datetime):
             return {'date': str(o.date()), 'time': str(o.time()), 'tz': str(o.tzinfo)}
@@ -76,37 +70,3 @@ def loads(string):
     Simple wrapper around json.decode()
     """
     return _json.loads(string)
-
-
-def _is_no_report_error(exc):
-    from indico.core import errors as indico_errors
-    from MaKaC import errors as makac_errors
-    return isinstance(exc, (indico_errors.NoReportError, makac_errors.NoReportError))
-
-
-def create_json_error_answer(exception, status=200):
-    from indico.core.config import Config
-    from indico.core.errors import IndicoError, get_error_description
-    if isinstance(exception, IndicoError):
-        details = exception.toDict()
-    else:
-        exception_data = exception.__dict__
-        try:
-            _json.dumps(exception_data)
-        except Exception:
-            exception_data = {}
-        details = {
-            'code': type(exception).__name__,
-            'type': 'noReport' if ((not session.user and isinstance(exception, Forbidden)) or
-                                   _is_no_report_error(exception)) else 'unknown',
-            'message': unicode(get_error_description(exception)),
-            'data': exception_data,
-            'requestInfo': get_request_info(),
-            'inner': traceback.format_exc()
-        }
-
-    return current_app.response_class(dumps({
-        'version': Config.getInstance().getVersion(),
-        'result': None,
-        'error': details
-    }), mimetype='application/json', status=status)

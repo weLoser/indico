@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -25,6 +25,7 @@ from indico.modules.events.abstracts.controllers import (abstract, abstract_list
                                                          management, reviewing)
 from indico.web.flask.util import make_compat_redirect_func
 from indico.web.flask.wrappers import IndicoBlueprint
+
 
 _bp = IndicoBlueprint('abstracts', __name__, url_prefix='/event/<confId>', template_folder='templates',
                       virtual_template_folder='events/abstracts')
@@ -70,6 +71,16 @@ _bp.add_url_rule('/manage/abstracts/settings', 'manage_submission_settings', man
                  methods=('GET', 'POST'))
 _bp.add_url_rule('/manage/abstracts/review-settings', 'manage_reviewing_settings', management.RHManageAbstractReviewing,
                  methods=('GET', 'POST'))
+_bp.add_url_rule('/manage/abstracts/questions', 'manage_reviewing_questions',
+                 management.RHManageAbstractReviewingQuestions, methods=('GET', 'POST'))
+_bp.add_url_rule('/manage/abstracts/questions/sort', 'sort_reviewing_questions',
+                 management.RHSortReviewingQuestions, methods=('POST',))
+_bp.add_url_rule('/manage/abstracts/questions/create', 'create_reviewing_question',
+                 management.RHCreateAbstractReviewingQuestion, methods=('GET', 'POST'))
+_bp.add_url_rule('/manage/abstracts/questions/<int:question_id>/edit', 'edit_reviewing_question',
+                 management.RHEditAbstractReviewingQuestion, methods=('POST', 'GET'))
+_bp.add_url_rule('/manage/abstracts/questions/<int:question_id>', 'delete_reviewing_question',
+                 management.RHDeleteAbstractReviewingQuestion, methods=('DELETE',))
 _bp.add_url_rule('/manage/abstracts/teams', 'manage_reviewing_roles', management.RHManageReviewingRoles,
                  methods=('GET', 'POST'))
 

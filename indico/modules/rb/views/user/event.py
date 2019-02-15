@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,40 +14,38 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from indico.modules.rb.models.reservations import Reservation
+from indico.legacy.common.cache import GenericCache
+from indico.legacy.webinterface.wcomponents import TabControl, WTabControl, WTemplated
+from indico.modules.events.management.views import WPEventManagementLegacy
 from indico.modules.rb.views.user.reservations import (WPRoomBookingBookingDetails, WPRoomBookingModifyBooking,
-                                                       WPRoomBookingNewBookingSimple, WPRoomBookingNewBookingSelectRoom,
+                                                       WPRoomBookingNewBookingConfirm,
                                                        WPRoomBookingNewBookingSelectPeriod,
-                                                       WPRoomBookingNewBookingConfirm)
+                                                       WPRoomBookingNewBookingSelectRoom, WPRoomBookingNewBookingSimple)
 from indico.modules.rb.views.user.rooms import WPRoomBookingRoomDetails
 from indico.web.flask.util import url_for
-from MaKaC.webinterface.pages.conferences import WPConferenceModifBase
-from MaKaC.webinterface.wcomponents import TabControl, WTabControl, WTemplated
 
 
-class WPRoomBookingEventBase(WPConferenceModifBase):
+_cache = GenericCache('Rooms')
+
+
+class WPRoomBookingEventBase(WPEventManagementLegacy):
     sidemenu_option = 'room_booking'
-
-    def getJSFiles(self):
-        return WPConferenceModifBase.getJSFiles(self) + self._includeJSPackage('RoomBooking')
-
-    def getCSSFiles(self):
-        return WPConferenceModifBase.getCSSFiles(self) + self._asset_env['roombooking_sass'].urls()
 
     def _createTabCtrl(self):
         self._tabCtrl = TabControl()
         self._tabExistBookings = self._tabCtrl.newTab('existing', 'Existing Bookings',
-                                                      url_for('event_mgmt.rooms_booking_list', self._conf))
+                                                      url_for('event_mgmt.rooms_booking_list', self.event))
         self._tabNewBooking = self._tabCtrl.newTab('new', 'New Booking',
-                                                   url_for('event_mgmt.rooms_choose_event', self._conf))
-        if not Reservation.find(event_id=self._conf.getId()).count():
+                                                   url_for('event_mgmt.rooms_choose_event', self.event))
+        if not self.event.reservations:
             self._tabExistBookings.setEnabled(False)
         self._setActiveTab()
 
     def _getPageContent(self, params):
         self._createTabCtrl()
-        params['event'] = self._conf
-        return WTabControl(self._tabCtrl, self._getAW()).getHTML(self._getTabContent(params))
+        params['event'] = self.event
+        params['sprite_url'] = url_for('rooms_new.sprite', {'version': _cache.get('rooms-sprite-token')})
+        return WTabControl(self._tabCtrl).getHTML(self._getTabContent(params))
 
     def _getTabContent(self, params):
         raise NotImplementedError
@@ -62,7 +60,7 @@ class WPRoomBookingEventRoomDetails(WPRoomBookingEventBase, WPRoomBookingRoomDet
         self._tabNewBooking.setActive()
 
     def _getTabContent(self, params):
-        return WPRoomBookingRoomDetails._getBody(self, params)
+        return WPRoomBookingRoomDetails._getPageContent(self, params)
 
 
 class WPRoomBookingEventBookingList(WPRoomBookingEventBase):
@@ -97,7 +95,7 @@ class WPRoomBookingEventBookingDetails(WPRoomBookingEventBase, WPRoomBookingBook
         self._tabExistBookings.setActive()
 
     def _getTabContent(self, params):
-        return WPRoomBookingBookingDetails._getBody(self, params)
+        return WPRoomBookingBookingDetails._getPageContent(self, params)
 
 
 class WPRoomBookingEventModifyBooking(WPRoomBookingEventBase, WPRoomBookingModifyBooking):
@@ -109,7 +107,7 @@ class WPRoomBookingEventModifyBooking(WPRoomBookingEventBase, WPRoomBookingModif
         self._tabExistBookings.setActive()
 
     def _getTabContent(self, params):
-        return WPRoomBookingModifyBooking._getBody(self, params)
+        return WPRoomBookingModifyBooking._getPageContent(self, params)
 
 
 class WPRoomBookingEventNewBookingSimple(WPRoomBookingEventBase, WPRoomBookingNewBookingSimple):
@@ -121,7 +119,7 @@ class WPRoomBookingEventNewBookingSimple(WPRoomBookingEventBase, WPRoomBookingNe
         self._tabNewBooking.setActive()
 
     def _getTabContent(self, params):
-        return WPRoomBookingNewBookingSimple._getBody(self, params)
+        return WPRoomBookingNewBookingSimple._getPageContent(self, params)
 
 
 class WPRoomBookingEventNewBookingSelectRoom(WPRoomBookingEventBase, WPRoomBookingNewBookingSelectRoom):
@@ -129,7 +127,7 @@ class WPRoomBookingEventNewBookingSelectRoom(WPRoomBookingEventBase, WPRoomBooki
         self._tabNewBooking.setActive()
 
     def _getTabContent(self, params):
-        return WPRoomBookingNewBookingSelectRoom._getBody(self, params)
+        return WPRoomBookingNewBookingSelectRoom._getPageContent(self, params)
 
 
 class WPRoomBookingEventNewBookingSelectPeriod(WPRoomBookingEventBase, WPRoomBookingNewBookingSelectPeriod):
@@ -137,7 +135,7 @@ class WPRoomBookingEventNewBookingSelectPeriod(WPRoomBookingEventBase, WPRoomBoo
         self._tabNewBooking.setActive()
 
     def _getTabContent(self, params):
-        return WPRoomBookingNewBookingSelectPeriod._getBody(self, params)
+        return WPRoomBookingNewBookingSelectPeriod._getPageContent(self, params)
 
 
 class WPRoomBookingEventNewBookingConfirm(WPRoomBookingEventBase, WPRoomBookingNewBookingConfirm):
@@ -145,4 +143,4 @@ class WPRoomBookingEventNewBookingConfirm(WPRoomBookingEventBase, WPRoomBookingN
         self._tabNewBooking.setActive()
 
     def _getTabContent(self, params):
-        return WPRoomBookingNewBookingConfirm._getBody(self, params)
+        return WPRoomBookingNewBookingConfirm._getPageContent(self, params)

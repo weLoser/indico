@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,9 +18,7 @@ from functools import wraps
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy.principals import EmailPrincipal
-from indico.util.decorators import smart_decorator
-
-from MaKaC.common.cache import GenericCache
+from indico.legacy.common.cache import GenericCache
 
 
 def iter_acl(acl):
@@ -39,64 +37,15 @@ def iter_acl(acl):
                                       not getattr(getattr(x, 'principal', x), 'is_local', None)))
 
 
-def principal_is_only_for_user(acl, user, principal):
-    """Checks if the given principal is the only one for a user.
-
-    :param acl: A list of principals.
-    :param user: The user to check for
-    :param principal: The principal to check for.
-    """
-    # if the principal doesn't apply for the user, it can't be the last one for him
-    if user not in principal:
-        return False
-    return not any(user in entry.principal for entry in iter_acl(acl) if entry.principal != principal)
-
-
-def retrieve_principals(iterable, allow_groups=True, legacy=True):
-    """Retrieves principal objects from ``(type, info)`` tuples.
-
-    See :func:`retrieve_principal` for details.
-    """
-
-    return filter(None, [retrieve_principal(x, allow_groups=allow_groups, legacy=legacy) for x in iterable])
-
-
-def retrieve_principal(principal, allow_groups=True, legacy=True):
-    """Retrieves principal object from a `(type, id)` tuple.
-
-    Valid principal types are 'Avatar', 'User' and 'Group'.
-
-    :param principal: The principal (a tuple/list)
-    :param allow_groups: If group principals are allowed
-    :param legacy: If legacy wrappers or new objects should be returned.
-    """
-    from indico.modules.groups import GroupProxy
-    from indico.modules.groups.legacy import LocalGroupWrapper, LDAPGroupWrapper
-    from indico.modules.users import User
-
-    type_, id_ = principal
-    if type_ in {'Avatar', 'User'}:
-        user = User.get(int(id_))
-        if not user:
-            return None
-        return user.as_avatar if legacy else user
-    elif type_ == 'Group' and allow_groups:
-        if isinstance(id_, (int, basestring)):  # legacy group
-            group = LocalGroupWrapper(id_) if unicode(id_).isdigit() else LDAPGroupWrapper(id_)
-            return group if legacy else group.group
-        else:  # new group
-            provider, name_or_id = id_
-            group = GroupProxy(name_or_id, provider)
-            return group.as_legacy_group if legacy else group
-    else:
-        raise ValueError('Unexpected type: {}'.format(type_))
-
-
-def principal_from_fossil(fossil, allow_pending=False, allow_groups=True, legacy=True, allow_missing_groups=False,
-                          allow_emails=False, allow_networks=False):
+def principal_from_fossil(fossil, allow_pending=False, allow_groups=True, allow_missing_groups=False,
+                          allow_emails=False, allow_networks=False, existing_data=None, event=None):
     from indico.modules.networks.models.networks import IPNetworkGroup
+    from indico.modules.events.models.roles import EventRole
     from indico.modules.groups import GroupProxy
     from indico.modules.users import User
+
+    if existing_data is None:
+        existing_data = set()
 
     type_ = fossil['_type']
     id_ = fossil['id']
@@ -109,7 +58,7 @@ def principal_from_fossil(fossil, allow_pending=False, allow_groups=True, legacy
             if not data:
                 raise ValueError("Cannot find user '{}' in cache".format(id_))
 
-            data = {k: '' if v is None else v for (k, v) in data.items()}
+            data = {k: '' if v is None else v for k, v in data.items()}
             email = data['email'].lower()
 
             # check if there is not already a (pending) user with that e-mail
@@ -129,50 +78,46 @@ def principal_from_fossil(fossil, allow_pending=False, allow_groups=True, legacy
             raise ValueError("Id '{}' is not a number and allow_pending=False".format(id_))
         if user is None:
             raise ValueError('User does not exist: {}'.format(id_))
-        return user.as_avatar if legacy else user
+        return user
     elif allow_emails and type_ == 'Email':
         return EmailPrincipal(id_)
     elif allow_networks and type_ == 'IPNetworkGroup':
         group = IPNetworkGroup.get(int(id_))
-        if group is None:
+        if group is None or (group.hidden and group not in existing_data):
             raise ValueError('IP network group does not exist: {}'.format(id_))
         return group
     elif allow_groups and type_ in {'LocalGroupWrapper', 'LocalGroup'}:
         group = GroupProxy(int(id_))
         if group.group is None:
             raise ValueError('Local group does not exist: {}'.format(id_))
-        return group.as_legacy_group if legacy else group
+        return group
     elif allow_groups and type_ in {'LDAPGroupWrapper', 'MultipassGroup'}:
         provider = fossil['provider']
         group = GroupProxy(id_, provider)
         if group.group is None and not allow_missing_groups:
             raise ValueError('Multipass group does not exist: {}:{}'.format(provider, id_))
-        return group.as_legacy_group if legacy else group
+        return group
+    elif event and type_ == 'EventRole':
+        role = EventRole.get(id_)
+        role_name = fossil.get('name')
+        if role is None:
+            raise ValueError('Role does not exist: {}:{}'.format(role_name, id_))
+        if role.event != event:
+            raise ValueError('Role does not belong to provided event: {}:{} - {}'.format(role_name, id_, event))
+        return role
     else:
         raise ValueError('Unexpected fossil type: {}'.format(type_))
 
 
-@smart_decorator
-def unify_user_args(fn, legacy=False):
+def unify_user_args(fn):
     """Decorator that unifies new/legacy user arguments.
 
-    Any argument of the decorated function that contains either a
-    :class:`AvatarUserWrapper` or a :class:`.User` will be converted
-    to the object type specified by the `legacy` argument.
-
-    :param legacy: If True, all arguments containing users will receive
-                   an :class:`AvatarUserWrapper`. Otherwise, they will
-                   receive a :class:`.User`.
+    Any argument of the decorated function that contains a
+    :class:`AvatarUserWrapper` will be converted to a :class:`User`.
     """
-    from indico.modules.users import User
-
-    if legacy:
-        def _convert(arg):
-            return arg.as_avatar if isinstance(arg, User) else arg
-    else:
-        def _convert(arg):
-            from indico.modules.users.legacy import AvatarUserWrapper
-            return arg.user if isinstance(arg, AvatarUserWrapper) else arg
+    def _convert(arg):
+        from indico.modules.users.legacy import AvatarUserWrapper
+        return arg.user if isinstance(arg, AvatarUserWrapper) else arg
 
     @wraps(fn)
     def wrapper(*args, **kwargs):

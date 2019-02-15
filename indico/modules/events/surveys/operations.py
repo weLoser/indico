@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,7 +20,7 @@ from flask import session
 
 from indico.core.db import db
 from indico.modules.events.surveys import logger
-from indico.modules.events.surveys.models.items import (SurveyQuestion, SurveySection, SurveyText)
+from indico.modules.events.surveys.models.items import SurveyQuestion, SurveySection, SurveyText
 
 
 def add_survey_question(section, field_cls, data):

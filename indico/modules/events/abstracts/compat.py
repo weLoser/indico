@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,7 +20,7 @@ from flask import redirect
 
 from indico.modules.events.abstracts.models.abstracts import Abstract
 from indico.web.flask.util import url_for
-from MaKaC.webinterface.rh.base import RHSimple
+from indico.web.rh import RHSimple
 
 
 @RHSimple.wrap_function

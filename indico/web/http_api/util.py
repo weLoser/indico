@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,14 +14,13 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-import hmac
 import hashlib
+import hmac
 import time
 import urllib
 
-from indico.core.config import Config
-from indico.modules.api import APIMode
-from indico.modules.api import settings as api_settings
+from indico.core.config import config
+from indico.modules.api import APIMode, api_settings
 
 
 def get_query_parameter(queryParams, keys, default=None, integer=False):
@@ -64,10 +63,6 @@ def generate_public_auth_request(apiKey, path, params=None):
     else:
         key = secret_key = None
         persistent = False
-    if api_settings.get('require_https'):
-        baseURL = Config.getInstance().getBaseSecureURL()
-    else:
-        baseURL = Config.getInstance().getBaseURL()
     publicRequestsURL = None
     authRequestURL = None
     if apiMode == APIMode.KEY:
@@ -87,4 +82,5 @@ def generate_public_auth_request(apiKey, path, params=None):
         authRequestURL = build_indico_request(path, params, key, secret_key, persistent)  if key else None
         params["onlypublic"] = "yes"
         publicRequestsURL = build_indico_request(path, params, key, secret_key, persistent)  if key else None
-    return {"publicRequestURL": (baseURL + publicRequestsURL) if publicRequestsURL else "", "authRequestURL": (baseURL + authRequestURL) if authRequestURL else ""}
+    return {'publicRequestURL': (config.BASE_URL + publicRequestsURL) if publicRequestsURL else '',
+            'authRequestURL': (config.BASE_URL + authRequestURL) if authRequestURL else ''}

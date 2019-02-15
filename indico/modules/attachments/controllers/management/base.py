@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,7 +18,7 @@ from __future__ import unicode_literals
 
 import mimetypes
 
-from flask import flash, request, session, render_template
+from flask import flash, render_template, request, session
 
 from indico.core import signals
 from indico.core.db import db
@@ -26,8 +26,8 @@ from indico.modules.attachments import logger
 from indico.modules.attachments.controllers.util import SpecificAttachmentMixin, SpecificFolderMixin
 from indico.modules.attachments.forms import (AddAttachmentFilesForm, AddAttachmentLinkForm, AttachmentFolderForm,
                                               EditAttachmentFileForm, EditAttachmentLinkForm)
-from indico.modules.attachments.models.folders import AttachmentFolder
 from indico.modules.attachments.models.attachments import Attachment, AttachmentFile, AttachmentType
+from indico.modules.attachments.models.folders import AttachmentFolder
 from indico.modules.attachments.operations import add_attachment_link
 from indico.modules.attachments.util import get_attached_items
 from indico.util.fs import secure_filename
@@ -36,7 +36,7 @@ from indico.util.string import to_unicode
 from indico.web.flask.templating import get_template_module
 from indico.web.flask.util import url_for
 from indico.web.forms.base import FormDefaults
-from indico.web.util import jsonify_template, jsonify_data
+from indico.web.util import jsonify_data, jsonify_template
 
 
 def _render_attachment_list(linked_object):
@@ -77,7 +77,7 @@ class ManageAttachmentsMixin:
         tpl_args = {'linked_object': self.object, 'linked_object_type': self.object_type,
                     'attachments': get_attached_items(self.object)}
         if self.object_type == 'event':
-            return self.wp.render_template('attachments.html', self._target, **tpl_args)
+            return self.wp.render_template('attachments.html', self.event, **tpl_args)
         elif self.object_type == 'category' and not request.is_xhr:
             return self.wp.render_template('management/attachments.html', self.category, 'attachments', **tpl_args)
         else:
@@ -100,7 +100,7 @@ class AddAttachmentFilesMixin:
                     attachment.acl = form.acl.data
                 content_type = mimetypes.guess_type(f.filename)[0] or f.mimetype or 'application/octet-stream'
                 attachment.file = AttachmentFile(user=session.user, filename=filename, content_type=content_type)
-                attachment.file.save(f.file)
+                attachment.file.save(f.stream)
                 db.session.add(attachment)
                 db.session.flush()
                 logger.info('Attachment %s uploaded by %s', attachment, session.user)
@@ -152,7 +152,7 @@ class EditAttachmentMixin(SpecificAttachmentMixin):
                 if file:
                     self.attachment.file = AttachmentFile(user=session.user, content_type=file.mimetype,
                                                           filename=secure_filename(file.filename, 'attachment'))
-                    self.attachment.file.save(file.file)
+                    self.attachment.file.save(file.stream)
 
             signals.attachments.attachment_updated.send(self.attachment, user=session.user)
             flash(_("The attachment \"{name}\" has been updated").format(name=self.attachment.title), 'success')

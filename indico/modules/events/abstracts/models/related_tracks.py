@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -33,7 +33,7 @@ _reviewed_for_tracks = db.Table(
     db.Column(
         'track_id',
         db.Integer,
-        db.ForeignKey('events.tracks.id'),
+        db.ForeignKey('events.tracks.id', ondelete='CASCADE'),
         primary_key=True,
         autoincrement=False,
         index=True
@@ -55,7 +55,7 @@ _submitted_for_tracks = db.Table(
     db.Column(
         'track_id',
         db.Integer,
-        db.ForeignKey('events.tracks.id'),
+        db.ForeignKey('events.tracks.id', ondelete='CASCADE'),
         primary_key=True,
         autoincrement=False,
         index=True
@@ -77,7 +77,7 @@ _proposed_for_tracks = db.Table(
     db.Column(
         'track_id',
         db.Integer,
-        db.ForeignKey('events.tracks.id'),
+        db.ForeignKey('events.tracks.id', ondelete='CASCADE'),
         primary_key=True,
         autoincrement=False,
         index=True

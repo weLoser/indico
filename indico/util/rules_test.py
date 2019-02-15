@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,7 +19,7 @@ from collections import OrderedDict
 import pytest
 
 from indico.core import signals
-from indico.util.rules import Condition, get_missing_conditions, check_rule, get_conditions
+from indico.util.rules import Condition, check_rule, get_conditions, get_missing_conditions
 
 
 class TestCondition(Condition):
@@ -80,7 +80,7 @@ def _get_test_conditions(sender, **kwargs):
     yield BarCondition
 
 
-@pytest.yield_fixture(autouse=True)
+@pytest.fixture(autouse=True)
 def _register_test_rules():
     with signals.get_conditions.connected_to(_get_test_conditions, sender='test'):
         yield

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,12 +16,9 @@
 
 from __future__ import unicode_literals
 
-import os
-
 from flask import session
 from jinja2.filters import do_filesizeformat
 
-import indico
 from indico.core import signals
 from indico.core.logger import Logger
 from indico.modules.events.features.base import EventFeature
@@ -45,13 +42,14 @@ layout_settings = EventSettingsProxy('layout', {
     'show_announcement': False,
     'use_custom_css': False,
     'theme': None,
-    'timetable_theme': None,  # meetings/lectures
+    'timetable_theme': None,
+    'timetable_theme_settings': {},
     'use_custom_menu': False,
     'timetable_by_room': False,
-    'timetable_detailed': False
+    'timetable_detailed': False,
 })
 
-theme_settings = ThemeSettingsProxy(os.path.join(os.path.dirname(indico.__file__), 'modules', 'events', 'themes.yaml'))
+theme_settings = ThemeSettingsProxy()
 
 
 @signals.event.created.connect
@@ -63,25 +61,22 @@ def _event_created(event, **kwargs):
 
 @signals.event.type_changed.connect
 def _event_type_changed(event, **kwargs):
-    layout_settings.delete(event, 'timetable_theme')
+    theme = event.category.default_event_themes.get(event.type_.name)
+    if theme is None:
+        layout_settings.delete(event, 'timetable_theme')
+    else:
+        layout_settings.set(event, 'timetable_theme', theme)
 
 
 @signals.menu.items.connect_via('event-management-sidemenu')
 def _extend_event_management_menu_layout(sender, event, **kwargs):
     if not event.can_manage(session.user):
         return
-    if event.as_legacy.getType() == 'conference':
-        yield SideMenuItem('layout', _('Layout'), url_for('event_layout.index', event), section='customization')
+    yield SideMenuItem('layout', _('Layout'), url_for('event_layout.index', event), section='customization')
+    if event.type_ == EventType.conference:
         yield SideMenuItem('menu', _('Menu'), url_for('event_layout.menu', event), section='customization')
     if event.has_feature('images'):
         yield SideMenuItem('images', _('Images'), url_for('event_layout.images', event), section='customization')
-
-
-@signals.event.sidemenu.connect
-def _get_default_menu_entries(sender, **kwargs):
-    from indico.modules.events.layout.default import get_default_menu_entries
-    for entry in get_default_menu_entries():
-        yield entry
 
 
 @signals.event.cloned.connect
@@ -108,20 +103,20 @@ def _get_feature_definitions(sender, **kwargs):
 
 @signals.event_management.image_created.connect
 def _log_image_created(image, user, **kwargs):
-    image.event_new.log(EventLogRealm.management, EventLogKind.positive, 'Layout',
-                        'Added image "{}"'.format(image.filename), user, data={
-                            'File name': image.filename,
-                            'File type': image.content_type,
-                            'File size': do_filesizeformat(image.size)
-                        })
+    image.event.log(EventLogRealm.management, EventLogKind.positive, 'Layout',
+                    'Added image "{}"'.format(image.filename), user, data={
+                        'File name': image.filename,
+                        'File type': image.content_type,
+                        'File size': do_filesizeformat(image.size)
+                    })
 
 
 @signals.event_management.image_deleted.connect
 def _log_image_deleted(image, user, **kwargs):
-    image.event_new.log(EventLogRealm.management, EventLogKind.negative, 'Layout',
-                        'Deleted image "{}"'.format(image.filename), user, data={
-                            'File name': image.filename
-                        })
+    image.event.log(EventLogRealm.management, EventLogKind.negative, 'Layout',
+                    'Deleted image "{}"'.format(image.filename), user, data={
+                        'File name': image.filename
+                    })
 
 
 class ImagesFeature(EventFeature):

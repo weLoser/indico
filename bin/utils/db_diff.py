@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,7 +16,6 @@
 
 from __future__ import unicode_literals
 
-import json
 import os
 import pipes
 import subprocess
@@ -25,6 +24,7 @@ import tempfile
 
 import click
 from click._compat import should_strip_ansi
+
 
 click.disable_unicode_literals_warning = True
 
@@ -159,7 +159,7 @@ def main(dbname, verbose, apgdiff):
     # create database and dump current/new structures
     _checked_call(verbose, ['createdb', '-T', 'indico_template', temp_dbname])
     try:
-        env_override = {'INDICO_CONF_OVERRIDE': json.dumps({'SQLAlchemyDatabaseURI': _build_conn_string(temp_dbname)})}
+        env_override = {'INDICO_CONF_OVERRIDE': repr({'SQLALCHEMY_DATABASE_URI': _build_conn_string(temp_dbname)})}
         _checked_call(verbose, ['indico', 'db', 'prepare'], env=env_override)
         dump_current = tempfile.NamedTemporaryFile(suffix='.sql', prefix='dbdiff-current-')
         dump_fresh = tempfile.NamedTemporaryFile(suffix='.sql', prefix='dbdiff-fresh-')

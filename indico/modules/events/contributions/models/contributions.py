@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,6 +16,7 @@
 
 from __future__ import unicode_literals
 
+from flask import g
 from sqlalchemy import DDL
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.event import listens_for
@@ -33,16 +34,26 @@ from indico.core.db.sqlalchemy.util.models import auto_table_args
 from indico.core.db.sqlalchemy.util.queries import increment_and_get
 from indico.core.db.sqlalchemy.util.session import no_autoflush
 from indico.modules.events.management.util import get_non_inheriting_objects
-from indico.modules.events.models.persons import PersonLinkDataMixin, AuthorsSpeakersMixin
+from indico.modules.events.models.persons import AuthorsSpeakersMixin, PersonLinkDataMixin
+from indico.modules.events.papers.models.papers import Paper
+from indico.modules.events.papers.models.revisions import PaperRevision, PaperRevisionState
 from indico.modules.events.sessions.util import session_coordinator_priv_enabled
 from indico.util.locators import locator_property
 from indico.util.string import format_repr, return_ascii
+from indico.web.flask.util import url_for
 
 
 def _get_next_friendly_id(context):
     """Get the next friendly id for a contribution."""
     from indico.modules.events import Event
     event_id = context.current_parameters['event_id']
+
+    # Check first if there is a pre-allocated friendly id
+    # (and use it in that case)
+    friendly_ids = g.get('friendly_ids', {}).get(Contribution, {}).get(event_id, [])
+    if friendly_ids:
+        return friendly_ids.pop(0)
+
     assert event_id is not None
     return increment_and_get(Event._last_friendly_contribution_id, Event.id == event_id)
 
@@ -61,7 +72,7 @@ class CustomFieldsMixin(object):
         fv = self.get_field_value(field_id, raw=True)
         if not fv:
             field_value_cls = type(self).field_values.prop.mapper.class_
-            fv = field_value_cls(contribution_field=self.event_new.get_contribution_field(field_id))
+            fv = field_value_cls(contribution_field=self.event.get_contribution_field(field_id))
             self.field_values.append(fv)
         old_value = fv.data
         fv.data = field_value
@@ -91,6 +102,22 @@ class Contribution(DescriptionMixin, ProtectionManagersMixin, LocationMixin, Att
     PRELOAD_EVENT_ATTACHED_ITEMS = True
     PRELOAD_EVENT_NOTES = True
     ATTACHMENT_FOLDER_ID_COLUMN = 'contribution_id'
+
+    @classmethod
+    def allocate_friendly_ids(cls, event, n):
+        """Allocate n Contribution friendly_ids.
+
+        This is needed so that we can allocate all IDs in one go. Not doing
+        so could result in DB deadlocks. All operations that create more than
+        one contribution should use this method.
+
+        :param event: the :class:`Event` in question
+        :param n: the number of ids to pre-allocate
+        """
+        from indico.modules.events import Event
+        fid = increment_and_get(Event._last_friendly_contribution_id, Event.id == event.id, n)
+        friendly_ids = g.setdefault('friendly_ids', {})
+        friendly_ids.setdefault(cls, {})[event.id] = range(fid - n + 1, fid + 1)
 
     @declared_attr
     def __table_args__(cls):
@@ -126,7 +153,7 @@ class Contribution(DescriptionMixin, ProtectionManagersMixin, LocationMixin, Att
     )
     track_id = db.Column(
         db.Integer,
-        db.ForeignKey('events.tracks.id'),
+        db.ForeignKey('events.tracks.id', ondelete='SET NULL'),
         index=True,
         nullable=True
     )
@@ -173,7 +200,7 @@ class Contribution(DescriptionMixin, ProtectionManagersMixin, LocationMixin, Att
         default=0
     ))
 
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -245,7 +272,8 @@ class Contribution(DescriptionMixin, ProtectionManagersMixin, LocationMixin, Att
         backref=db.backref(
             'contributions',
             primaryjoin='(Contribution.track_id == Track.id) & ~Contribution.is_deleted',
-            lazy=True
+            lazy=True,
+            passive_deletes=True
         )
     )
     #: External references associated with this contribution
@@ -278,13 +306,81 @@ class Contribution(DescriptionMixin, ProtectionManagersMixin, LocationMixin, Att
             lazy=True
         )
     )
+    #: The accepted paper revision
+    _accepted_paper_revision = db.relationship(
+        'PaperRevision',
+        lazy=True,
+        viewonly=True,
+        uselist=False,
+        primaryjoin=('(PaperRevision._contribution_id == Contribution.id) & (PaperRevision.state == {})'
+                     .format(PaperRevisionState.accepted)),
+    )
+    #: Paper files not submitted for reviewing
+    pending_paper_files = db.relationship(
+        'PaperFile',
+        lazy=True,
+        viewonly=True,
+        primaryjoin='(PaperFile._contribution_id == Contribution.id) & (PaperFile.revision_id.is_(None))',
+    )
+    #: Paper reviewing judges
+    paper_judges = db.relationship(
+        'User',
+        secondary='event_paper_reviewing.judges',
+        collection_class=set,
+        lazy=True,
+        backref=db.backref(
+            'judge_for_contributions',
+            collection_class=set,
+            lazy=True
+        )
+    )
+    #: Paper content reviewers
+    paper_content_reviewers = db.relationship(
+        'User',
+        secondary='event_paper_reviewing.content_reviewers',
+        collection_class=set,
+        lazy=True,
+        backref=db.backref(
+            'content_reviewer_for_contributions',
+            collection_class=set,
+            lazy=True
+        )
+    )
+    #: Paper layout reviewers
+    paper_layout_reviewers = db.relationship(
+        'User',
+        secondary='event_paper_reviewing.layout_reviewers',
+        collection_class=set,
+        lazy=True,
+        backref=db.backref(
+            'layout_reviewer_for_contributions',
+            collection_class=set,
+            lazy=True
+        )
+    )
+
+    @declared_attr
+    def _paper_last_revision(cls):
+        # Incompatible with joinedload
+        subquery = (db.select([db.func.max(PaperRevision.submitted_dt)])
+                    .where(PaperRevision._contribution_id == cls.id)
+                    .correlate_except(PaperRevision)
+                    .as_scalar())
+        return db.relationship(
+            'PaperRevision',
+            uselist=False,
+            lazy=True,
+            viewonly=True,
+            primaryjoin=db.and_(PaperRevision._contribution_id == cls.id, PaperRevision.submitted_dt == subquery)
+        )
 
     # relationship backrefs:
+    # - _paper_files (PaperFile._contribution)
+    # - _paper_revisions (PaperRevision._contribution)
     # - attachment_folders (AttachmentFolder.contribution)
     # - legacy_mapping (LegacyContributionMapping.contribution)
     # - note (EventNote.contribution)
-    # - paper_files (PaperFile.contribution)
-    # - paper_reviewing_roles (PaperReviewingRole.contribution)
+    # - room_reservation_links (ReservationLink.contribution)
     # - timetable_entry (TimetableEntry.contribution)
     # - vc_room_associations (VCRoomEventAssociation.linked_contrib)
 
@@ -302,6 +398,13 @@ class Contribution(DescriptionMixin, ProtectionManagersMixin, LocationMixin, Att
         query = (db.select([db.func.count(SubContribution.id)])
                  .where((SubContribution.contribution_id == cls.id) & ~SubContribution.is_deleted)
                  .correlate_except(SubContribution))
+        return db.column_property(query, deferred=True)
+
+    @declared_attr
+    def _paper_revision_count(cls):
+        query = (db.select([db.func.count(PaperRevision.id)])
+                 .where(PaperRevision._contribution_id == cls.id)
+                 .correlate_except(PaperRevision))
         return db.column_property(query, deferred=True)
 
     def __init__(self, **kwargs):
@@ -323,11 +426,11 @@ class Contribution(DescriptionMixin, ProtectionManagersMixin, LocationMixin, Att
         elif self.session_id is not None:
             return self.session
         else:
-            return self.event_new
+            return self.event
 
     @property
     def protection_parent(self):
-        return self.session if self.session_id is not None else self.event_new
+        return self.session if self.session_id is not None else self.event
 
     @property
     def start_dt(self):
@@ -338,30 +441,91 @@ class Contribution(DescriptionMixin, ProtectionManagersMixin, LocationMixin, Att
         return self.timetable_entry.start_dt + self.duration if self.timetable_entry else None
 
     @property
+    def start_dt_poster(self):
+        if self.session and self.session.is_poster and self.timetable_entry and self.timetable_entry.parent:
+            return self.timetable_entry.parent.start_dt
+
+    @property
+    def end_dt_poster(self):
+        if self.session and self.session.is_poster and self.timetable_entry and self.timetable_entry.parent:
+            return self.timetable_entry.parent.end_dt
+
+    @property
+    def duration_poster(self):
+        if self.session and self.session.is_poster and self.timetable_entry and self.timetable_entry.parent:
+            return self.timetable_entry.parent.duration
+
+    @property
+    def start_dt_display(self):
+        """The displayed start time of the contribution.
+
+        This is the start time of the poster session if applicable,
+        otherwise the start time of the contribution itself.
+        """
+        return self.start_dt_poster or self.start_dt
+
+    @property
+    def end_dt_display(self):
+        """The displayed end time of the contribution.
+
+        This is the end time of the poster session if applicable,
+        otherwise the end time of the contribution itself.
+        """
+        return self.end_dt_poster or self.end_dt
+
+    @property
+    def duration_display(self):
+        """The displayed duration of the contribution.
+
+        This is the duration of the poster session if applicable,
+        otherwise the duration of the contribution itself.
+        """
+        return self.duration_poster or self.duration
+
+    @property
     def submitters(self):
         return {person_link for person_link in self.person_links if person_link.is_submitter}
 
     @locator_property
     def locator(self):
-        return dict(self.event_new.locator, contrib_id=self.id)
+        return dict(self.event.locator, contrib_id=self.id)
+
+    @property
+    def verbose_title(self):
+        return '#{} ({})'.format(self.friendly_id, self.title)
+
+    @property
+    def paper(self):
+        return Paper(self) if self._paper_last_revision else None
+
+    def is_paper_reviewer(self, user):
+        return user in self.paper_content_reviewers or user in self.paper_layout_reviewers
 
     @return_ascii
     def __repr__(self):
         return format_repr(self, 'id', is_deleted=False, _text=self.title)
 
-    def can_manage(self, user, role=None, allow_admin=True, check_parent=True, explicit_role=False):
-        if super(Contribution, self).can_manage(user, role, allow_admin=allow_admin, check_parent=check_parent,
-                                                explicit_role=explicit_role):
+    def can_manage(self, user, permission=None, allow_admin=True, check_parent=True, explicit_permission=False):
+        if super(Contribution, self).can_manage(user, permission, allow_admin=allow_admin, check_parent=check_parent,
+                                                explicit_permission=explicit_permission):
             return True
         if (check_parent and self.session_id is not None and
-                self.session.can_manage(user, 'coordinate', allow_admin=allow_admin, explicit_role=explicit_role) and
-                session_coordinator_priv_enabled(self.event_new, 'manage-contributions')):
+                self.session.can_manage(user, 'coordinate', allow_admin=allow_admin,
+                                        explicit_permission=explicit_permission) and
+                session_coordinator_priv_enabled(self.event, 'manage-contributions')):
             return True
         return False
 
     def get_non_inheriting_objects(self):
         """Get a set of child objects that do not inherit protection."""
         return get_non_inheriting_objects(self)
+
+    def is_user_associated(self, user, check_abstract=False):
+        if user is None:
+            return False
+        if check_abstract and self.abstract and self.abstract.submitter == user:
+            return True
+        return any(pl.person.user == user for pl in self.person_links if pl.person.user)
 
 
 Contribution.register_protection_events()

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,8 +19,8 @@ from __future__ import unicode_literals
 from sqlalchemy.ext.declarative import declared_attr
 
 from indico.core.db import db
-from indico.util.string import format_repr, return_ascii
 from indico.util.locators import locator_property
+from indico.util.string import format_repr, return_ascii
 
 
 class ContributionType(db.Model):
@@ -51,8 +51,13 @@ class ContributionType(db.Model):
         nullable=False,
         default=''
     )
+    is_private = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False
+    )
 
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -74,4 +79,4 @@ class ContributionType(db.Model):
 
     @locator_property
     def locator(self):
-        return dict(self.event_new.locator, contrib_type_id=self.id)
+        return dict(self.event.locator, contrib_type_id=self.id)

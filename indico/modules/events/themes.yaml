@@ -1,15 +1,17 @@
 defaults:
-    conference: static
-    simple_event: lecture
+    conference: ~
     lecture: lecture
     meeting: standard
+
 definitions:
   # Lectures - base
   lecture: &lecture
-    event_types: [simple_event]
+    event_types: [lecture]
     stylesheet: indico.scss
     template: indico/lecture.html
     title: Lecture
+    user_visible: true
+
   event:
     <<: *lecture
     title: Event
@@ -18,196 +20,60 @@ definitions:
   standard: &standard
     event_types: [conference, meeting]
     stylesheet: indico.scss
-    print_stylesheet: indico.scss
+    # XXX: this maybe be inherited by custom themes in plugins so we
+    # need to use path relative to the main htdocs folder which is
+    # always included in the assets env
+    print_stylesheet: print/indico.scss
     template: indico/meeting.html
     title: Indico style
+    user_visible: true
+
   standard_inline_minutes:
     <<: *standard
     title: Indico style - inline minutes
     settings:
       show_notes: true
+
   nicecompact:
     event_types: [conference, meeting]
     stylesheet: compact.scss
     template: compact.html
     title: Compact style
-  indico-weeks-view:
+    user_visible: true
+
+  indico_weeks_view:
     event_types: [conference, meeting]
     stylesheet: weeks.scss
     template: weeks.html
     title: Indico Weeks View
-
-  # Static
-  static:
-    event_types: [conference, simple_event, meeting]
-    stylesheet: null
-    template: null
-    title: Parallel
-
-  # Lectures - CERN extensions from base
-  egee_lecture:
-    <<: *lecture
-    stylesheet: egee.scss
-    title: EGEE lecture
-  picosec_endtofpet_lectures:
-    <<: *lecture
-    stylesheet: picosec_endotofpet.scss
-    title: PicoSEC - EndoTOFPET US
-  picosec_lecture:
-    <<: *lecture
-    stylesheet: picosec.scss
-    title: PicoSEC Lectures
-  tical-lectures:
-    <<: *lecture
-    stylesheet: tical.scss
-    title: TICAL
-
-  # Meetings - CERN extensions from base
-  atlas:
-    <<: *standard
-    stylesheet: atlas.scss
-    title: ATLAS meeting
-  cms:
-    <<: *standard
-    stylesheet: cms.scss
-    title: CMS meeting
-  alice_meeting:
-    <<: *standard
-    stylesheet: alice.scss
-    title: ALICE meeting
-  lhcb_meeting:
-    <<: *standard
-    stylesheet: lhcb.scss
-    title: LHCb meeting
-  cast:
-    <<: *standard
-    stylesheet: cast.scss
-    title: CAST meeting
-  fcc:
-    <<: *standard
-    stylesheet: fcc.scss
-    title: FCC
-  ilc:
-    <<: *standard
-    stylesheet: ilc.scss
-    title: ILC style
-  intelum:
-    <<: *standard
-    stylesheet: intelum.scss
-    title: Intelum
-  fast:
-    <<: *standard
-    stylesheet: fast.scss
-    title: FAST meetings
-  EuroCirCol:
-    <<: *standard
-    stylesheet: eurocirccol.scss
-    title: EuroCirCol
-  crystal_clear:
-    <<: *standard
-    stylesheet: crystalclear.scss
-    title: Crystal Clear
-  egee_meeting:
-    <<: *standard
-    stylesheet: egee.scss
-    title: EGEE meeting
-  endotofpet:
-    <<: *standard
-    event_types: [simple_event, meeting]
-    stylesheet: endotofpet.scss
-    title: EndoTOFPET
-  openlab:
-    <<: *standard
-    stylesheet: openlab.scss
-    title: Openlab
-    settings:
-      logo_link: http://www.cern.ch/openlab
-  lcg:
-    <<: *standard
-    stylesheet: lcg.scss
-    title: LCG style
-  picosec:
-    <<: *standard
-    stylesheet: picosec.scss
-    title: Picosec
-  picosec_endtofpet:
-    <<: *standard
-    stylesheet: picosec_endotofpet.scss
-    title: PicoSEC - EndoTOFPET US
-  tical-meetings:
-    <<: *standard
-    stylesheet: tical.scss
-    title: TICAL Meetings
-  totem_meeting:
-    <<: *standard
-    stylesheet: totem.scss
-    title: TOTEM meeting
-  sa2:
-    <<: *standard
-    stylesheet: staff_assoc_modern.scss
-    title: Staff Association
-
-  # Meetings - CERN Administrative
-  administrative: &administrative
-    event_types: [conference, meeting]
-    stylesheet: administrative.scss
-    template: administrative/event.html
-    title: Administrative style
-  administrative2:
-    <<: *administrative
-    title: Administrative style (with time)
-    settings:
-      hide_time: false
-  administrative4:
-    <<: *administrative
-    title: Administrative style (all material)
-    settings:
-      link_documents: false
-  cern_committees: &cern_committees
-    event_types: [meeting]
-    stylesheet: cern_committees.scss
-    template: cern_committees.html
-    tt_template: administrative/event.html
-    title: CERN Committees
-    settings:
-      session_attachments: true
-      hide_time: false
-      show_numerals: false
-      print_mode: true
-  lhcrrb:
-    <<: *cern_committees
-    stylesheet: lhc_rrb.scss
-    title: LHC RRB
-    settings:
-      session_attachments: true
-      hide_time: false
-      show_numerals: false
-  pf:
-    event_types: [meeting]
-    stylesheet: administrative.scss
-    template: pension_fund.html
-    tt_template: administrative/event.html
-    title: Pension Fund
-    settings:
-      link_documents: false
-  sa:
-    <<: *administrative
-    settings:
-      show_notes: true
-      title_en: 'Staff Association'
-      title_fr: 'Association du Personnel'
-    title: Staff Association (administrative)
-
-  # XML
-  jacow:
-    event_types: [conference, simple_event]
-    is_xml: true
-    stylesheet: null
-    template: JACoW.xsl
-    title: JACoW XML
-  xml:
-    event_types: [conference, simple_event, meeting]
-    is_xml: true
-    stylesheet: null
-    template: XML.xsl
-    title: xml
+    user_visible: true
+    user_settings:
+      colors:
+        caption: Contribution Colours
+        description: 'Colours used for different types of timetable entries'
+        type: MultipleItemsField
+        required: false
+        kwargs:
+          fields:
+            - id: entry
+              caption: Keyword
+            - id: color
+              caption: Colour
+          unique_field: entry
+        defaults:
+          - entry: foo
+            color: '#ff0000'
+          - entry: bar
+            color: '#00ffff'
+      start_day:
+        caption: Week start day
+        description: 'First day of weeks view'
+        type: SelectField
+        required: true
+        kwargs:
+          choices:
+            - [event, Event start day]
+            - [monday, Monday]
+            - [sunday, Sunday]
+        defaults:
+            monday

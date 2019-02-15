@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,8 +21,8 @@ from enum import Enum
 from flask import request, session
 from werkzeug.exceptions import Forbidden, NotFound
 
-from MaKaC.webinterface.rh.base import RH
-from MaKaC.webinterface.rh.conferenceModif import RHConferenceModifBase
+from indico.modules.events.management.controllers import RHManageEventBase
+from indico.modules.events.timetable import TimetableEntryType
 
 
 class SessionManagementLevel(Enum):
@@ -33,23 +33,22 @@ class SessionManagementLevel(Enum):
     coordinate = 4
 
 
-class RHManageTimetableBase(RHConferenceModifBase):
+class RHManageTimetableBase(RHManageEventBase):
     """Base class for all timetable management RHs"""
 
-    CSRF_ENABLED = True
     session_management_level = SessionManagementLevel.none
 
-    def _checkParams(self, params):
-        RHConferenceModifBase._checkParams(self, params)
+    def _process_args(self):
+        RHManageEventBase._process_args(self)
         self.session = None
         if 'session_id' in request.view_args:
-            self.session = self.event_new.get_session(request.view_args['session_id'])
+            self.session = self.event.get_session(request.view_args['session_id'])
             if self.session is None:
                 raise NotFound
 
-    def _checkProtection(self):
+    def _check_access(self):
         if not self.session or self.session_management_level == SessionManagementLevel.none:
-            RHConferenceModifBase._checkProtection(self)
+            RHManageEventBase._check_access(self)
         else:
             if self.session_management_level == SessionManagementLevel.manage:
                 func = lambda u: self.session.can_manage(u)
@@ -58,18 +57,14 @@ class RHManageTimetableBase(RHConferenceModifBase):
             elif self.session_management_level == SessionManagementLevel.coordinate_with_contribs:
                 func = lambda u: self.session.can_manage_contributions(u)
             elif self.session_management_level == SessionManagementLevel.coordinate:
-                func = lambda u: self.session.can_manage(u, role='coordinate')
+                func = lambda u: self.session.can_manage(u, permission='coordinate')
             else:
                 raise Exception("Invalid session management level")
             if not func(session.user):
                 raise Forbidden
 
-    def _process(self):
-        return RH._process(self)
-
 
 class RHManageTimetableEntryBase(RHManageTimetableBase):
-
     normalize_url_spec = {
         'locators': {
             lambda self: self._get_locator()
@@ -78,14 +73,25 @@ class RHManageTimetableEntryBase(RHManageTimetableBase):
 
     def _get_locator(self):
         if not self.entry:
-            return self.event_new
+            return self.event
         locator = self.entry.locator
         if 'session_id' in request.view_args:
             locator['session_id'] = self.session.id
         return locator
 
-    def _checkParams(self, params):
-        RHManageTimetableBase._checkParams(self, params)
+    def _process_args(self):
+        RHManageTimetableBase._process_args(self)
         self.entry = None
         if 'entry_id' in request.view_args:
-            self.entry = self.event_new.timetable_entries.filter_by(id=request.view_args['entry_id']).first_or_404()
+            self.entry = self.event.timetable_entries.filter_by(id=request.view_args['entry_id']).first_or_404()
+
+    def _check_access(self):
+        if self.session and self.entry:
+            entry_session = None
+            if self.entry.parent and self.entry.parent.type == TimetableEntryType.SESSION_BLOCK:
+                entry_session = self.entry.parent.session_block.session
+            elif self.entry.type == TimetableEntryType.SESSION_BLOCK:
+                entry_session = self.entry.session_block.session
+            if entry_session != self.session:
+                raise Forbidden('Timetable entry is not in the specified session')
+        RHManageTimetableBase._check_access(self)

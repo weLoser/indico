@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,9 +16,10 @@
 
 from __future__ import unicode_literals
 
-from flask import flash, session, request
-from sqlalchemy.orm import joinedload, defaultload
+from flask import flash, request, session
+from sqlalchemy.orm import defaultload, joinedload
 
+from indico.legacy.pdfinterface.conference import AbstractToPDF, ConfManagerAbstractToPDF
 from indico.modules.events.abstracts.controllers.base import RHAbstractBase
 from indico.modules.events.abstracts.models.files import AbstractFile
 from indico.modules.events.abstracts.operations import update_abstract
@@ -28,8 +29,7 @@ from indico.modules.events.util import get_field_values
 from indico.util.i18n import _
 from indico.web.flask.util import send_file
 from indico.web.forms.base import FormDefaults
-from indico.web.util import jsonify_data, jsonify_form
-from MaKaC.PDFinterface.conference import ConfManagerAbstractToPDF, AbstractToPDF
+from indico.web.util import jsonify_data, jsonify_form, jsonify_template
 
 
 class RHDisplayAbstract(RHAbstractBase):
@@ -49,10 +49,10 @@ class RHEditAbstract(RHAbstractBase):
         return self.abstract.can_edit(session.user)
 
     def _process(self):
-        abstract_form_class = make_abstract_form(self.event_new, management=self.management)
+        abstract_form_class = make_abstract_form(self.event, session.user, management=self.management)
         custom_field_values = {'custom_{}'.format(x.contribution_field_id): x.data for x in self.abstract.field_values}
         defaults = FormDefaults(self.abstract, attachments=self.abstract.files, **custom_field_values)
-        form = abstract_form_class(obj=defaults, abstract=self.abstract, event=self.event_new)
+        form = abstract_form_class(obj=defaults, abstract=self.abstract, event=self.event, management=self.management)
         if form.validate_on_submit():
             update_abstract(self.abstract, *get_field_values(form.data))
             flash(_("Abstract modified successfully"), 'success')
@@ -71,8 +71,8 @@ class RHAbstractsDownloadAttachment(RHAbstractBase):
         }
     }
 
-    def _checkParams(self, params):
-        RHAbstractBase._checkParams(self, params)
+    def _process_args(self):
+        RHAbstractBase._process_args(self)
         self.abstract_file = AbstractFile.get_one(request.view_args['file_id'])
 
     def _process(self):
@@ -86,7 +86,7 @@ class RHAbstractNotificationLog(RHAbstractBase):
         return self.abstract.can_judge(session.user)
 
     def _process(self):
-        return WPManageAbstracts.render_template('reviewing/notification_log.html', self._conf, abstract=self.abstract)
+        return jsonify_template('events/abstracts/reviewing/notification_log.html', abstract=self.abstract)
 
 
 class RHAbstractExportPDF(RHAbstractBase):

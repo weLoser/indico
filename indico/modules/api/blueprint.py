@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,11 +18,12 @@ from __future__ import unicode_literals
 
 from flask import request
 
-from indico.modules.api.controllers import (RHAPIAdminSettings, RHAPIAdminKeys, RHAPIUserProfile, RHAPICreateKey,
-                                            RHAPIBlockKey, RHAPIDeleteKey, RHAPITogglePersistent, RHAPIBuildURLs)
+from indico.legacy.services.interface.rpc.json import process as jsonrpc_handler
+from indico.modules.api.controllers import (RHAPIAdminKeys, RHAPIAdminSettings, RHAPIBlockKey, RHAPIBuildURLs,
+                                            RHAPICreateKey, RHAPIDeleteKey, RHAPITogglePersistent, RHAPIUserProfile)
 from indico.web.flask.wrappers import IndicoBlueprint
 from indico.web.http_api.handlers import handler as api_handler
-from MaKaC.services.interface.rpc.json import process as jsonrpc_handler
+
 
 _bp = IndicoBlueprint('api', __name__, template_folder='templates', virtual_template_folder='api')
 

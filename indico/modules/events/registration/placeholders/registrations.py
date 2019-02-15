@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,7 +20,7 @@ from markupsafe import Markup, escape
 
 from indico.modules.events.registration.models.items import PersonalDataType
 from indico.util.i18n import _
-from indico.util.placeholders import Placeholder, ParametrizedPlaceholder
+from indico.util.placeholders import ParametrizedPlaceholder, Placeholder
 from indico.web.flask.util import url_for
 
 
@@ -48,7 +48,7 @@ class EventTitlePlaceholder(Placeholder):
 
     @classmethod
     def render(cls, regform, registration):
-        return registration.registration_form.event_new.title
+        return registration.registration_form.event.title
 
 
 class EventLinkPlaceholder(Placeholder):
@@ -58,8 +58,8 @@ class EventLinkPlaceholder(Placeholder):
     @classmethod
     def render(cls, regform, registration):
         regform = registration.registration_form
-        return Markup('<a href="{url}" title="{title}">{url}</a>'.format(url=regform.event_new.as_legacy.getURL(),
-                                                                         title=escape(regform.event_new.title)))
+        return Markup('<a href="{url}" title="{title}">{url}</a>'.format(url=regform.event.short_external_url,
+                                                                         title=escape(regform.event.title)))
 
 
 class IDPlaceholder(Placeholder):

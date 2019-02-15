@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals, absolute_import
+from __future__ import absolute_import, unicode_literals
 
 import json
 import uuid
@@ -33,6 +33,8 @@ class MultiStringField(HiddenField):
                   placeholder.
     :param uuid_field: If set, each item will have a UUID assigned and
                        stored in the field specified here.
+    :param flat: If True, the field returns a list of string values instead
+                 of dicts.  Cannot be combined with `uuid_field`.
     :param unique: Whether the values should be unique.
     :param sortable: Whether items should be sortable.
     """
@@ -43,7 +45,10 @@ class MultiStringField(HiddenField):
         self.field_name, self.field_caption = kwargs.pop('field')
         self.sortable = kwargs.pop('sortable', False)
         self.unique = kwargs.pop('unique', False)
+        self.flat = kwargs.pop('flat', False)
         self.uuid_field = kwargs.pop('uuid_field', None)
+        if self.flat and self.uuid_field:
+            raise ValueError('`uuid_field` and `flat` are mutually exclusive')
         super(MultiStringField, self).__init__(*args, **kwargs)
 
     def process_formdata(self, valuelist):
@@ -57,21 +62,30 @@ class MultiStringField(HiddenField):
                         item[self.uuid_field] = unicode(uuid.uuid4())
 
     def pre_validate(self, form):
-        if not all(isinstance(item, dict) for item in self.data):
-            raise ValueError('Invalid data. Expected list of dicts.')
-        if self.unique:
-            unique_values = {item[self.field_name] for item in self.data}
-            if len(unique_values) != len(self.data):
-                raise ValueError('Items must be unique')
-        if self.uuid_field:
-            unique_uuids = {uuid.UUID(item[self.uuid_field], version=4) for item in self.data}
-            if len(unique_uuids) != len(self.data):
-                raise ValueError('UUIDs must be unique')
-        if not all(item[self.field_name].strip() for item in self.data):
-            raise ValueError('Empty items are not allowed')
+        try:
+            if not all(isinstance(item, dict) for item in self.data):
+                raise ValueError('Invalid data. Expected list of dicts.')
+            if self.unique:
+                unique_values = {item[self.field_name] for item in self.data}
+                if len(unique_values) != len(self.data):
+                    raise ValueError('Items must be unique')
+            if self.uuid_field:
+                unique_uuids = {uuid.UUID(item[self.uuid_field], version=4) for item in self.data}
+                if len(unique_uuids) != len(self.data):
+                    raise ValueError('UUIDs must be unique')
+            if not all(item[self.field_name].strip() for item in self.data):
+                raise ValueError('Empty items are not allowed')
+        finally:
+            if self.flat:
+                self.data = [x[self.field_name] for x in self.data]
 
     def _value(self):
-        return self.data or []
+        if not self.data:
+            return []
+        elif self.flat:
+            return [{self.field_name: x} for x in self.data]
+        else:
+            return self.data
 
 
 class MultipleItemsField(HiddenField):
@@ -203,7 +217,7 @@ class OverrideMultipleItemsField(HiddenField):
                 # e.g. a row removed from field_data that had a value before
                 del self.data[key]
                 continue
-            if values.viewkeys() > self.edit_fields:
+            if set(values.viewkeys()) > self.edit_fields:
                 # e.g. a field that was editable before
                 self.data[key] = {k: v for k, v in values.iteritems() if k in self.edit_fields}
         # Remove anything empty

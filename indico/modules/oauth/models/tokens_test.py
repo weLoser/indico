@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,6 +20,7 @@ from uuid import uuid4
 import pytest
 
 from indico.modules.oauth.models.tokens import OAuthGrant
+
 
 pytest_plugins = 'indico.modules.oauth.testing.fixtures'
 
@@ -49,9 +50,8 @@ def test_token_locator(dummy_token):
     assert dummy_token.locator == {'id': dummy_token.id}
 
 
-def test_token_expires(freeze_time, dummy_token):
-    freeze_time(datetime.utcnow())
-    assert dummy_token.expires == datetime.utcnow() + timedelta(days=3650)
+def test_token_expires(dummy_token):
+    assert dummy_token.expires is None
 
 
 def test_token_scopes(dummy_token):

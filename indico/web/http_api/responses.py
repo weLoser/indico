@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,19 +14,12 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-"""
-HTTP API - Response objects
-"""
-
-# python stdlib imports
 import time
 
-# indico imports
+from indico.core.config import config
+from indico.legacy.common.fossilize import Fossilizable, fossilizes
 from indico.web.http_api.fossils import IHTTPAPIErrorFossil, IHTTPAPIResultFossil
 
-# indico legacy imports
-from indico.core.config import Config
-from MaKaC.common.fossilize import fossilizes, Fossilizable
 
 class HTTPAPIError(Exception, Fossilizable):
     fossilizes(IHTTPAPIErrorFossil)
@@ -59,7 +52,7 @@ class HTTPAPIResult(Fossilizable):
         return self._ts
 
     def getURL(self):
-        prefix = Config.getInstance().getBaseSecureURL()
+        prefix = config.BASE_URL
         if self._query:
             return prefix + self._path + '?' + self._query
         return prefix + self._path

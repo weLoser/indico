@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import division, absolute_import, print_function
+from __future__ import absolute_import, division, print_function
 
 import fcntl
 import re
@@ -22,71 +22,42 @@ import struct
 import sys
 import termios
 import time
-from operator import itemgetter
-from getpass import getpass
 
+import click
+from click.types import convert_type
 from colorclass import Color
+from termcolor import colored
 
-from indico.util.string import is_valid_mail, to_unicode
-
-
-def strip_ansi(s, _re=re.compile(r'\x1b\[[;\d]*[A-Za-z]')):
-    return _re.sub('', s)
+from indico.util.string import to_unicode, validate_email
 
 
-def yesno(message):
-    """
-    A simple yes/no question (returns True/False)
-    """
-    inp = raw_input("%s [y/N] " % message)
-    if inp == 'y' or inp == 'Y':
-        return True
-    else:
-        return False
+def prompt_email(prompt=u'Email', default=None, confirm=False):
+    conv = convert_type(None)
+
+    def _proc_email(val):
+        val = conv(val).strip()
+        if not validate_email(val):
+            raise click.UsageError(u'invalid email')
+        return val
+
+    return click.prompt(prompt, default=default, confirmation_prompt=confirm, value_proc=_proc_email)
 
 
-def prompt_email(prompt="Enter email: "):
+def prompt_pass(prompt=u'Password', min_length=8, confirm=True):
     while True:
-        try:
-            email = unicode(raw_input(prompt.encode(sys.stderr.encoding)), sys.stdin.encoding).strip()
-        except (EOFError, KeyboardInterrupt):  # ^D or ^C
-            print()
-            return None
-        if is_valid_mail(email):
-            return email
-        else:
-            warning(u"Email format is invalid")
-
-
-def prompt_pass(prompt=u"Enter password: ", confirm_prompt=u"Confirm password: ", min_length=8, confirm=True):
-    while True:
-        try:
-            password = unicode(getpass(prompt.encode(sys.stderr.encoding)), sys.stdin.encoding).strip()
-        except (EOFError, KeyboardInterrupt):  # ^D or ^C
-            print()
-            return None
+        password = click.prompt(prompt, hide_input=True, confirmation_prompt=confirm).strip()
         # Empty, just prompt again
         if not password:
             continue
         # Too short, tell the user about the fact
         if min_length and len(password) < min_length:
-            warning(u"Password is too short (must be at least {} chars)".format(min_length))
+            click.echo(u"Password is too short (must be at least {} chars)".format(min_length))
             continue
-        # Confirm password if requested
-        if not confirm:
-            return password
-        while True:
-            confirmation = prompt_pass(confirm_prompt, min_length=0, confirm=False)
-            if not confirmation:
-                return None
-            elif confirmation == password:
-                return password
-            else:
-                warning(u"Passwords don't match")
+        return password
 
 
 def terminal_size():
-    h, w, hp, wp = struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, struct.pack('HHHH', 0, 0, 0, 0)))
+    h, w, hp, wp = struct.unpack(b'HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, struct.pack(b'HHHH', 0, 0, 0, 0)))
     return w, h
 
 
@@ -127,44 +98,6 @@ def verbose_iterator(iterable, total, get_id, get_title, print_every=10):
     print()
 
 
-def conferenceHolderIterator(ch, verbose=True, deepness='subcontrib'):
-    """
-    Goes over all conferences, printing a status message (ideal for scripts)
-    """
-
-    def _eventIterator(conference, tabs):
-        for contrib in conference.as_event.contributions:
-            yield ('contrib', contrib)
-
-            if deepness == 'subcontrib':
-                for scontrib in contrib.subcontributions:
-                    yield ('subcontrib', scontrib)
-
-    idx = ch._getIdx()
-    iterator = idx.iteritems()
-    if verbose:
-        iterator = verbose_iterator(iterator, len(idx.keys()), itemgetter(0), lambda x: '')
-
-    for id_, conf in iterator:
-        yield 'event', conf
-        if deepness in {'contrib', 'subcontrib'}:
-            for contrib in _eventIterator(conf, 0):
-                yield contrib
-
-
-# Coloring
-
-try:
-    from termcolor import colored
-except ImportError:
-    def colored(text, *__, **___):
-        """
-        just a dummy function that returns the same string
-        (in case termcolor is not available)
-        """
-        return text
-
-
 def _cformat_sub(m):
     bg = u'on_{}'.format(m.group('bg')) if m.group('bg') else None
     attrs = ['bold'] if m.group('fg_bold') else None
@@ -182,33 +115,3 @@ def cformat(string):
     if not string.endswith(reset):
         string += reset
     return Color(string)
-
-
-# Error/warning/info message util methods
-
-def error(message):
-    """
-    Print a red error message
-    """
-    print(colored(message, 'red'))
-
-
-def warning(message):
-    """
-    Print a yellow warning message
-    """
-    print(colored(message, 'yellow'))
-
-
-def info(message):
-    """
-    Print a blue information message
-    """
-    print(colored(message, 'cyan', attrs=['bold']))
-
-
-def success(message):
-    """
-    Print a green success message
-    """
-    print(colored(message, 'green'))

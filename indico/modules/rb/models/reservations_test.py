@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,11 +20,9 @@ import pytest
 from dateutil.relativedelta import relativedelta
 
 from indico.core.errors import IndicoError
-from indico.modules.rb import settings as rb_settings
-from indico.modules.rb.models.reservations import Reservation, RepeatFrequency, RepeatMapping
-from indico.modules.rb.models.reservation_occurrences import ReservationOccurrence
 from indico.modules.rb.models.reservation_edit_logs import ReservationEditLog
-from indico.testing.util import bool_matrix
+from indico.modules.rb.models.reservation_occurrences import ReservationOccurrence, ReservationOccurrenceState
+from indico.modules.rb.models.reservations import RepeatFrequency, RepeatMapping, Reservation, ReservationState
 
 
 pytest_plugins = 'indico.modules.rb.testing.fixtures'
@@ -80,14 +78,6 @@ def test_is_archived(create_reservation, days_delta, expected):
     assert reservation.is_archived == expected
 
 
-@pytest.mark.parametrize(('is_accepted', 'is_rejected', 'is_cancelled', 'expected'),
-                         bool_matrix('...', expect=lambda x: not any(x)))  # neither accepted/rejected/cancelled
-def test_is_pending(create_reservation, is_accepted, is_rejected, is_cancelled, expected):
-    reservation = create_reservation(is_accepted=is_accepted, is_rejected=is_rejected, is_cancelled=is_cancelled)
-    assert reservation.is_pending == expected
-    assert Reservation.find_first(is_pending=expected) == reservation
-
-
 @pytest.mark.parametrize(('repeat_frequency', 'expected'), (
     (RepeatFrequency.NEVER, False),
     (RepeatFrequency.DAY,   True),
@@ -99,21 +89,13 @@ def test_is_repeating(create_reservation, repeat_frequency, expected):
     assert reservation.is_repeating == expected
 
 
-@pytest.mark.parametrize(('is_accepted', 'is_rejected', 'is_cancelled', 'expected'),
-                         bool_matrix('...', expect=(True, False, False)))  # accepted, not rejected/cancelled
-def test_is_valid(create_reservation, is_accepted, is_rejected, is_cancelled, expected):
-    reservation = create_reservation(is_accepted=is_accepted, is_rejected=is_rejected, is_cancelled=is_cancelled)
-    assert reservation.is_valid == expected
-    assert Reservation.find_first(is_valid=expected) == reservation
-
-
 # ======================================================================================================================
 # Property tests
 # ======================================================================================================================
 
 
-def test_booked_for_user(dummy_reservation, dummy_avatar):
-    assert dummy_reservation.booked_for_user == dummy_avatar
+def test_booked_for_user(dummy_reservation, dummy_user):
+    assert dummy_reservation.booked_for_user == dummy_user
 
 
 def test_booked_for_user_after_change(db, dummy_reservation, create_user):
@@ -126,37 +108,8 @@ def test_booked_for_user_after_change(db, dummy_reservation, create_user):
     assert dummy_reservation.booked_for_name == other_user.full_name
 
 
-def test_booked_for_user_email(dummy_reservation, dummy_avatar):
-    assert dummy_reservation.booked_for_user_email == dummy_avatar.email
-
-
-def test_booked_for_user_email_after_change(dummy_reservation, dummy_user, create_user):
-    dummy_user.email = 'new.email@example.com'
-    assert dummy_reservation.booked_for_user_email == dummy_user.email
-    other_user = create_user(123)
-    dummy_reservation.booked_for_user = other_user
-    assert dummy_reservation.booked_for_user_email == other_user.email
-
-
-def test_booked_for_user_email_with_no_user(dummy_reservation):
-    dummy_reservation.booked_for_user = None
-    assert dummy_reservation.booked_for_user_email is None
-
-
-@pytest.mark.parametrize(('emails', 'expected'), (
-    ('',             set()),
-    ('a@a.a',        {'a@a.a'}),
-    ('a@a.a, b@b.b', {'a@a.a', 'b@b.b'}),
-    ('b@b.b, b@b.b', {'b@b.b'}),
-    (' c@c.c',       {'c@c.c'}),
-))
-def test_contact_emails(create_reservation, emails, expected):
-    reservation = create_reservation(contact_email=emails)
-    assert reservation.contact_emails == expected
-
-
-def test_created_by_user(dummy_reservation, dummy_avatar):
-    assert dummy_reservation.created_by_user == dummy_avatar
+def test_created_by_user(dummy_reservation, dummy_user):
+    assert dummy_reservation.created_by_user == dummy_user
 
 
 def test_created_by_user_after_change(db, dummy_reservation, dummy_user):
@@ -185,49 +138,9 @@ def test_repetition(dummy_reservation):
     assert (dummy_reservation.repeat_frequency, dummy_reservation.repeat_interval) == dummy_reservation.repetition
 
 
-@pytest.mark.parametrize(('is_accepted', 'is_rejected', 'is_cancelled', 'is_archived', 'expected'), (
-    (True,  True,  True,  True,  'Cancelled, Rejected, Archived'),
-    (True,  True,  True,  False, 'Cancelled, Rejected, Live'),
-    (True,  True,  False, True,  'Rejected, Archived'),
-    (True,  True,  False, False, 'Rejected, Live'),
-    (True,  False, True,  True,  'Cancelled, Archived'),
-    (True,  False, True,  False, 'Cancelled, Live'),
-    (True,  False, False, True,  'Valid, Archived'),
-    (True,  False, False, False, 'Valid, Live'),
-    (False, True,  True,  True,  'Cancelled, Rejected, Not confirmed, Archived'),
-    (False, True,  True,  False, 'Cancelled, Rejected, Not confirmed, Live'),
-    (False, True,  False, True,  'Rejected, Not confirmed, Archived'),
-    (False, True,  False, False, 'Rejected, Not confirmed, Live'),
-    (False, False, True,  True,  'Cancelled, Not confirmed, Archived'),
-    (False, False, True,  False, 'Cancelled, Not confirmed, Live'),
-    (False, False, False, True,  'Not confirmed, Archived'),
-    (False, False, False, False, 'Not confirmed, Live'),
-))
-def test_status_string(create_reservation, is_accepted, is_rejected, is_cancelled, is_archived, expected):
-    params = {'is_accepted': is_accepted, 'is_rejected': is_rejected, 'is_cancelled': is_cancelled}
-    if is_archived:
-        params['start_dt'] = date.today() + relativedelta(days=-1, hour=8)
-        params['end_dt'] = date.today() + relativedelta(days=-1, hour=17)
-    else:
-        params['start_dt'] = date.today() + relativedelta(days=1, hour=8)
-        params['end_dt'] = date.today() + relativedelta(days=1, hour=17)
-    reservation = create_reservation(**params)
-    assert str(reservation.status_string) == expected
-
-
 # ======================================================================================================================
 # staticmethod tests
 # ======================================================================================================================
-
-
-@pytest.mark.xfail
-def test_create_from_data():
-    raise NotImplementedError
-
-
-@pytest.mark.xfail
-def test_get_with_data():
-    raise NotImplementedError
 
 
 def test_find_overlapping_with_different_room(overlapping_reservation, create_room):
@@ -236,11 +149,11 @@ def test_find_overlapping_with_different_room(overlapping_reservation, create_ro
     assert reservation not in Reservation.find_overlapping_with(room=create_room(), occurrences=[occurrence]).all()
 
 
-def test_find_overlapping_with_is_not_valid(overlapping_reservation, dummy_avatar):
+def test_find_overlapping_with_is_not_valid(overlapping_reservation, dummy_user):
     reservation, occurrence = overlapping_reservation
     assert reservation in Reservation.find_overlapping_with(room=reservation.room,
                                                             occurrences=[occurrence]).all()
-    reservation.cancel(dummy_avatar, silent=True)
+    reservation.cancel(dummy_user, silent=True)
     assert reservation not in Reservation.find_overlapping_with(room=reservation.room,
                                                                 occurrences=[occurrence]).all()
 
@@ -258,19 +171,14 @@ def test_find_overlapping_with_skip_reservation(overlapping_reservation):
 # ======================================================================================================================
 
 
-@pytest.mark.xfail
-def test_accept():
-    raise NotImplementedError
-
-
 @pytest.mark.parametrize('silent', (True, False))
-def test_cancel(smtp, create_reservation, dummy_avatar, silent):
+def test_cancel(smtp, create_reservation, dummy_user, silent):
     reservation = create_reservation(start_dt=date.today() + relativedelta(hour=8),
                                      end_dt=date.today() + relativedelta(days=10, hour=17),
                                      repeat_frequency=RepeatFrequency.DAY)
     assert not reservation.is_cancelled
     assert not any(occ.is_cancelled for occ in reservation.occurrences)
-    reservation.cancel(user=dummy_avatar, reason='cancelled', silent=silent)
+    reservation.cancel(user=dummy_user, reason='cancelled', silent=silent)
     assert reservation.is_cancelled
     assert reservation.rejection_reason == 'cancelled'
     assert all(occ.is_cancelled for occ in reservation.occurrences)
@@ -283,13 +191,13 @@ def test_cancel(smtp, create_reservation, dummy_avatar, silent):
 
 
 @pytest.mark.parametrize('silent', (True, False))
-def test_reject(smtp, create_reservation, dummy_avatar, silent):
+def test_reject(smtp, create_reservation, dummy_user, silent):
     reservation = create_reservation(start_dt=date.today() + relativedelta(hour=8),
                                      end_dt=date.today() + relativedelta(days=10, hour=17),
                                      repeat_frequency=RepeatFrequency.DAY)
     assert not reservation.is_rejected
     assert not any(occ.is_rejected for occ in reservation.occurrences)
-    reservation.reject(user=dummy_avatar, reason='rejected', silent=silent)
+    reservation.reject(user=dummy_user, reason='rejected', silent=silent)
     assert reservation.is_rejected
     assert reservation.rejection_reason == 'rejected'
     assert all(occ.is_rejected for occ in reservation.occurrences)
@@ -301,83 +209,67 @@ def test_reject(smtp, create_reservation, dummy_avatar, silent):
         assert smtp.outbox
 
 
-def test_add_edit_log(db, dummy_reservation):
+def test_add_edit_log(dummy_reservation):
     dummy_reservation.add_edit_log(ReservationEditLog(user_name='user', info='Some change'))
     assert dummy_reservation.edit_logs.count() == 1
 
 
-@pytest.mark.parametrize(('is_admin', 'is_owner', 'expected'), bool_matrix('..', expect=any))
-def test_can_be_accepted_rejected(dummy_reservation, create_user, is_admin, is_owner, expected):
+@pytest.mark.parametrize('can_moderate', (True, False))
+@pytest.mark.parametrize('is_pending', (True, False))
+def test_moderation(dummy_reservation, dummy_user, is_pending, can_moderate):
+    if is_pending:
+        dummy_reservation.state = ReservationState.pending
+    if can_moderate:
+        dummy_reservation.room.update_principal(dummy_user, permissions={'moderate'})
+    assert dummy_reservation.can_accept(dummy_user) == (is_pending and can_moderate)
+    assert dummy_reservation.can_reject(dummy_user) == can_moderate
+
+
+@pytest.mark.parametrize('is_manager', (True, False))
+@pytest.mark.parametrize('is_past', (True, False))
+@pytest.mark.parametrize('state', ReservationState)
+@pytest.mark.parametrize('is_admin', (True, False))
+def test_room_manager_actions(create_reservation, create_user, is_manager, is_past, state, is_admin):
     user = create_user(123, rb_admin=is_admin)
-    if is_owner:
-        dummy_reservation.room.owner = user
-    assert dummy_reservation.can_be_accepted(user) == expected
-    assert dummy_reservation.can_be_rejected(user) == expected
+    day_offset = -1 if is_past else 1
+    reservation = create_reservation(start_dt=date.today() + relativedelta(days=day_offset, hour=8, minute=30),
+                                     end_dt=date.today() + relativedelta(days=day_offset, hour=8, minute=30))
+    reservation.state = state
+    if is_manager:
+        reservation.room.update_principal(user, full_access=True)
+    invalid_state = state in (ReservationState.cancelled, ReservationState.rejected)
+    assert reservation.can_accept(user) == (reservation.is_pending and (is_manager or is_admin) and not invalid_state)
+    assert reservation.can_reject(user) == (not invalid_state and (is_manager or is_admin))
+    assert reservation.can_cancel(user) == (not is_past and not invalid_state and is_admin)
+    assert reservation.can_edit(user) == (((is_manager and not is_past) or is_admin) and not invalid_state)
+    assert reservation.can_delete(user) == (is_admin and invalid_state)
 
 
-@pytest.mark.parametrize(('is_admin', 'is_created_by', 'is_booked_for', 'expected'),
-                         bool_matrix('...', expect=any))  # admin/creator/booked-for, one is enough
-def test_can_be_cancelled(dummy_reservation, create_user, is_admin, is_created_by, is_booked_for, expected):
-    user = create_user(123, rb_admin=is_admin)
-    if is_created_by:
-        dummy_reservation.created_by_user = user
-    if is_booked_for:
-        dummy_reservation.booked_for_user = user
-    assert dummy_reservation.can_be_cancelled(user) == expected
+@pytest.mark.parametrize('is_creator', (True, False))
+@pytest.mark.parametrize('is_bookee', (True, False))
+@pytest.mark.parametrize('is_past', (True, False))
+@pytest.mark.parametrize('state', ReservationState)
+def test_user_actions(create_user, create_reservation, is_creator, is_bookee, is_past, state):
+    user = create_user(123)
+    day_offset = -1 if is_past else 1
+    reservation = create_reservation(start_dt=date.today() + relativedelta(days=day_offset, hour=8, minute=30),
+                                     end_dt=date.today() + relativedelta(days=day_offset, hour=8, minute=30),
+                                     state=state)
+    if is_creator:
+        reservation.created_by_user = user
+    if is_bookee:
+        reservation.booked_for_user = user
+    valid_state = state in (ReservationState.pending, ReservationState.accepted)
+    assert reservation.can_cancel(user) == ((is_creator or is_bookee) and not is_past and valid_state)
+    assert reservation.can_edit(user) == ((is_creator or is_bookee) and not is_past and valid_state)
 
 
-@pytest.mark.parametrize(('is_admin', 'expected'), (
-    (True,  True),
-    (False, False),
-))
-def test_can_be_deleted(dummy_reservation, dummy_avatar, is_admin, expected):
-    if is_admin:
-        rb_settings.acls.add_principal('admin_principals', dummy_avatar.user)
-    assert dummy_reservation.can_be_deleted(dummy_avatar) == expected
-
-
-@pytest.mark.parametrize(
-    ('is_rejected', 'is_cancelled', 'is_admin', 'is_created_by', 'is_booked_for', 'is_room_owner', 'expected'),
-    bool_matrix('!00....', expect=False) +                # rejected or cancelled
-    bool_matrix(' 001...', expect=True) +                 # admin
-    bool_matrix(' 000...', expect=lambda x: any(x[3:]))   # creator, booked for, room owner
-)
-def test_can_be_modified(dummy_reservation, create_user,
-                         is_rejected, is_cancelled, is_admin, is_created_by, is_booked_for, is_room_owner, expected):
-    user = create_user(123, rb_admin=is_admin)
-    if is_created_by:
-        dummy_reservation.created_by_user = user
-    if is_booked_for:
-        dummy_reservation.booked_for_user = user
-    if is_room_owner:
-        dummy_reservation.room.owner = user
-    dummy_reservation.is_rejected = is_rejected
-    dummy_reservation.is_cancelled = is_cancelled
-    assert dummy_reservation.can_be_modified(user) == expected
-
-
-@pytest.mark.parametrize(
-    ('is_admin', 'is_room_owner', 'expected'),
-    bool_matrix('..', expect=any)
-)
-def test_can_be_rejected(dummy_reservation, create_user, is_admin, is_room_owner, expected):
-    user = create_user(123, rb_admin=is_admin)
-    if is_room_owner:
-        dummy_reservation.room.owner = user
-    assert dummy_reservation.can_be_rejected(user) == expected
-
-
-def test_can_be_action_with_no_user(dummy_reservation):
-    assert not dummy_reservation.can_be_accepted(None)
-    assert not dummy_reservation.can_be_cancelled(None)
-    assert not dummy_reservation.can_be_deleted(None)
-    assert not dummy_reservation.can_be_modified(None)
-    assert not dummy_reservation.can_be_rejected(None)
-
-
-@pytest.mark.xfail
-def test_create_occurrences():
-    raise NotImplementedError
+def test_actions_no_user(dummy_reservation):
+    assert not dummy_reservation.can_accept(None)
+    assert not dummy_reservation.can_cancel(None)
+    assert not dummy_reservation.can_delete(None)
+    assert not dummy_reservation.can_edit(None)
+    assert not dummy_reservation.can_reject(None)
 
 
 def test_find_excluded_days(db, create_reservation):
@@ -385,50 +277,29 @@ def test_find_excluded_days(db, create_reservation):
                                      end_dt=date.today() + relativedelta(days=5, hour=10),
                                      repeat_frequency=RepeatFrequency.DAY)
     for occ in reservation.occurrences[::2]:
-        occ.is_cancelled = True
+        occ.state = ReservationOccurrenceState.cancelled
     db.session.flush()
     assert set(reservation.find_excluded_days().all()) == {occ for occ in reservation.occurrences if not occ.is_valid}
 
 
 def test_find_overlapping(create_reservation):
-    resv1 = create_reservation(is_accepted=False)
+    resv1 = create_reservation(state=ReservationState.pending)
     assert not resv1.find_overlapping().count()
-    resv2 = create_reservation(is_accepted=False)
+    resv2 = create_reservation(state=ReservationState.pending)
     assert resv1.find_overlapping().one() == resv2
 
 
-def test_getLocator(dummy_reservation, dummy_location):
-    assert dummy_reservation.getLocator() == {'roomLocation': dummy_location.name, 'resvID': dummy_reservation.id}
+def test_locator(dummy_reservation, dummy_location):
+    assert dummy_reservation.locator == {'roomLocation': dummy_location.name, 'resvID': dummy_reservation.id}
 
 
-@pytest.mark.xfail
-def test_get_conflicting_occurrences():
-    raise NotImplementedError
-
-
-def test_get_vc_equipment(db, dummy_reservation, create_equipment_type):
-    foo = create_equipment_type(u'foo')
-    vc = create_equipment_type(u'Video conference')
-    vc_items = [create_equipment_type(u'vc1'), create_equipment_type(u'vc2')]
-    vc.children += vc_items
-    dummy_reservation.room.available_equipment.extend(vc_items + [vc, foo])
-    dummy_reservation.used_equipment = [vc_items[0]]
-    db.session.flush()
-    assert set(dummy_reservation.get_vc_equipment().all()) == {vc_items[0]}
-
-
-@pytest.mark.parametrize(('is_booked_for', 'contact_email', 'expected'), (
-    (True,  '', True),
-    (False, '', False),
-    (False, '1337@example.com', True),
-    (False, 'other@example.com', False),
-    (False, '1337@example.com, other@example.com', True),
-    (False, 'other1@example.com, other2@example.com', False),
+@pytest.mark.parametrize(('is_booked_for', 'expected'), (
+    (True, True),
+    (False, False),
 ))
-def test_is_booked_for(dummy_reservation, dummy_user, create_user, is_booked_for, contact_email, expected):
+def test_is_booked_for(dummy_reservation, dummy_user, create_user, is_booked_for, expected):
     if not is_booked_for:
         dummy_reservation.booked_for_user = create_user(123)
-    dummy_reservation.contact_email = contact_email
     assert dummy_reservation.is_booked_for(dummy_user) == expected
 
 
@@ -436,10 +307,5 @@ def test_is_booked_for_no_user(dummy_reservation):
     assert not dummy_reservation.is_booked_for(None)
 
 
-def test_is_created_by(dummy_reservation, dummy_avatar):
-    assert dummy_reservation.is_owned_by(dummy_avatar)
-
-
-@pytest.mark.xfail
-def test_modify():
-    raise NotImplementedError
+def test_is_created_by(dummy_reservation, dummy_user):
+    assert dummy_reservation.is_owned_by(dummy_user)

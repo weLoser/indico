@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,36 +16,41 @@
 
 from __future__ import unicode_literals
 
+import json
+
 import requests
-from json import dumps
 from requests.exceptions import HTTPError, RequestException, Timeout
-from urlparse import urljoin
+from werkzeug.urls import url_join
 
-from indico.core.config import Config
-from indico.modules.cephalopod import logger, settings
-from MaKaC.common.info import HelperMaKaCInfo
+from indico.core.config import config
+from indico.modules.cephalopod import cephalopod_settings, logger
+from indico.modules.core.settings import core_settings
 
-_headers = {'Content-Type': 'application/json'}
-_url = urljoin(Config.getInstance().getTrackerURL(), 'api/instance/')
+
+HEADERS = {'Content-Type': 'application/json'}
 TIMEOUT = 10
 
 
+def _get_url():
+    return url_join(config.COMMUNITY_HUB_URL, 'api/instance/')
+
+
 def register_instance(contact, email):
-    organisation = HelperMaKaCInfo.getMaKaCInfoInstance().getOrganisation()
-    payload = {'url': Config.getInstance().getBaseURL(),
+    payload = {'url': config.BASE_URL,
                'contact': contact,
                'email': email,
-               'organisation': organisation}
-    response = requests.post(_url, data=dumps(payload), headers=_headers, timeout=TIMEOUT)
+               'organization': core_settings.get('site_organization')}
+    response = requests.post(_get_url(), data=json.dumps(payload), headers=HEADERS, timeout=TIMEOUT,
+                             verify=(not config.DEBUG))
     try:
         response.raise_for_status()
     except HTTPError as err:
         logger.error('failed to register the server to the community hub, got: %s', err.message)
-        settings.set('joined', False)
+        cephalopod_settings.set('joined', False)
         raise
     except Timeout:
         logger.error('failed to register: timeout while contacting the community hub')
-        settings.set('joined', False)
+        cephalopod_settings.set('joined', False)
         raise
     except RequestException as err:
         logger.error('unexpected exception while registering the server with the Community Hub: %s', err.message)
@@ -54,10 +59,10 @@ def register_instance(contact, email):
     json_response = response.json()
     if 'uuid' not in json_response:
         logger.error('invalid json reply from the community hub: uuid missing')
-        settings.set('joined', False)
+        cephalopod_settings.set('joined', False)
         raise ValueError('invalid json reply from the community hub: uuid missing')
 
-    settings.set_multi({
+    cephalopod_settings.set_multi({
         'joined': True,
         'uuid': json_response['uuid'],
         'contact_name': payload['contact'],
@@ -68,8 +73,9 @@ def register_instance(contact, email):
 
 def unregister_instance():
     payload = {'enabled': False}
-    url = urljoin(_url, settings.get('uuid'))
-    response = requests.patch(url, data=dumps(payload), headers=_headers, timeout=TIMEOUT)
+    url = url_join(_get_url(), cephalopod_settings.get('uuid'))
+    response = requests.patch(url, data=json.dumps(payload), headers=HEADERS, timeout=TIMEOUT,
+                              verify=(not config.DEBUG))
     try:
         response.raise_for_status()
     except HTTPError as err:
@@ -82,44 +88,44 @@ def unregister_instance():
     except RequestException as err:
         logger.error('unexpected exception while unregistering the server with the Community Hub: %s', err.message)
         raise
-    settings.set('joined', False)
+    cephalopod_settings.set('joined', False)
     logger.info('successfully unregistered the server from the community hub')
 
 
 def sync_instance(contact, email):
-    contact = contact or settings.get('contact_name')
-    email = email or settings.get('contact_email')
+    contact = contact or cephalopod_settings.get('contact_name')
+    email = email or cephalopod_settings.get('contact_email')
     # registration needed if the instance does not have a uuid
-    if not settings.get('uuid'):
-        logger.warn('unable to synchronise: missing uuid, registering the server instead')
+    if not cephalopod_settings.get('uuid'):
+        logger.warn('unable to synchronize: missing uuid, registering the server instead')
         register_instance(contact, email)
         return
 
-    organisation = HelperMaKaCInfo.getMaKaCInfoInstance().getOrganisation()
     payload = {'enabled': True,
-               'url': Config.getInstance().getBaseURL(),
+               'url': config.BASE_URL,
                'contact': contact,
                'email': email,
-               'organisation': organisation}
-    url = urljoin(_url, settings.get('uuid'))
-    response = requests.patch(url, data=dumps(payload), headers=_headers, timeout=TIMEOUT)
+               'organization': core_settings.get('site_organization')}
+    url = url_join(_get_url(), cephalopod_settings.get('uuid'))
+    response = requests.patch(url, data=json.dumps(payload), headers=HEADERS, timeout=TIMEOUT,
+                              verify=(not config.DEBUG))
     try:
         response.raise_for_status()
     except HTTPError as err:
         if err.response.status_code == 404:
-            logger.warn('unable to synchronise: the server was not registered, registering the server now')
+            logger.warn('unable to synchronize: the server was not registered, registering the server now')
             register_instance(contact, email)
         else:
-            logger.error('failed to synchronise the server with the community hub, got: %s', err.message)
+            logger.error('failed to synchronize the server with the community hub, got: %s', err.message)
             raise
     except Timeout:
-        logger.error('failed to synchronise: timeout while contacting the community hub')
+        logger.error('failed to synchronize: timeout while contacting the community hub')
         raise
     except RequestException as err:
         logger.error('unexpected exception while synchronizing the server with the Community Hub: %s', err.message)
         raise
     else:
-        settings.set_multi({
+        cephalopod_settings.set_multi({
             'joined': True,
             'contact_name': payload['contact'],
             'contact_email': payload['email']})

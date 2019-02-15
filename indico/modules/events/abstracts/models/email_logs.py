@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,7 +18,7 @@ from __future__ import unicode_literals
 
 from sqlalchemy.dialects.postgresql import ARRAY, JSON
 
-from indico.core.db.sqlalchemy import db, UTCDateTime
+from indico.core.db.sqlalchemy import UTCDateTime, db
 from indico.util.date_time import now_utc
 from indico.util.string import format_repr, return_ascii
 
@@ -77,7 +77,8 @@ class AbstractEmailLogEntry(db.Model):
         backref=db.backref(
             'email_logs',
             order_by=sent_dt,
-            lazy=True
+            lazy=True,
+            cascade='all, delete-orphan'
         )
     )
     email_template = db.relationship(
@@ -111,7 +112,7 @@ class AbstractEmailLogEntry(db.Model):
         :param user: the user who performed the action causing the
                      notification
         """
-        recipients = sorted(email_data['toList'] | email_data['ccList'] | email_data['bccList'])
+        recipients = sorted(email_data['to'] | email_data['cc'] | email_data['bcc'])
         data = {'template_name': email_tpl.title}
         return cls(email_template=email_tpl, user=user, recipients=recipients, subject=email_data['subject'],
                    body=email_data['body'], data=data)

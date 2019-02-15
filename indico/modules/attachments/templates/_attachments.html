@@ -31,7 +31,7 @@
             {% endif %}
         </td>
         {% if management -%}
-            <td class="actions">
+            <td class="actions hide-if-locked">
                 <a class="icon-edit js-dialog-action"
                    data-href="{{ url_for('.modify_attachment', attachment) }}"
                    data-title="
@@ -64,9 +64,17 @@
                    title="{% trans %}The access to this folder is restricted, regardless of the protection scheme of
                           the parent.{% endtrans %}"></i>
             {% endif %}
+            {% if folder.is_hidden and management %}
+                <i class="icon-eye-blocked"
+                   title="{% trans %}This folder is always hidden in the frontend.{% endtrans %}"></i>
+            {% endif %}
+            {% if folder.is_always_visible and management %}
+                <i class="icon-eye"
+                   title="{% trans %}This folder is always visible in the frontend.{% endtrans %}"></i>
+            {% endif %}
         </td>
         {% if management -%}
-            <td class="actions">
+            <td class="actions hide-if-locked">
                 <a class="icon-edit js-dialog-action"
                            data-href="{{ url_for('.edit_folder', folder) }}"
                            data-title="{% trans name=folder.title %}Edit folder: {{ name }}{% endtrans %}"></a>
@@ -123,7 +131,7 @@
         <span class="empty">{% trans %}There are no materials yet.{% endtrans %}</span>
     {%- endif -%}
     {% if management %}
-        <div class="i-box-footer text-right js-attachment-actions">
+        <div class="i-box-footer text-right js-attachment-actions hide-if-locked">
             <a href="#" class="i-button icon-folder-plus js-dialog-action"
                data-href="{{ url_for('.create_folder', linked_object) }}"
                data-title="{% trans %}Create a new folder{% endtrans %}">{% trans %}New folder{% endtrans -%}</a>
@@ -135,7 +143,7 @@
     <div class="flashed-messages"></div>
 
     <div class="attachment-editor">
-        <div class="action-box fixed-width">
+        <div class="action-box fixed-width hide-if-locked">
             <div class="section">
                 <span class="icon icon-upload"></span>
                 <div class="text">

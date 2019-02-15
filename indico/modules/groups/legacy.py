@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,20 +16,14 @@
 
 from __future__ import unicode_literals
 
-from operator import attrgetter
-
-from persistent.cPersistence import Persistent
-
 from indico.core.auth import multipass
+from indico.legacy.fossils.user import IGroupFossil
 from indico.modules.groups import GroupProxy
-from indico.modules.users.legacy import AvatarUserWrapper
 from indico.util.fossilize import Fossilizable, fossilizes
-from indico.util.string import to_unicode, return_ascii, encode_utf8
-from MaKaC.common.Locators import Locator
-from MaKaC.fossils.user import IGroupFossil
+from indico.util.string import encode_utf8, return_ascii, to_unicode
 
 
-class GroupWrapper(Persistent, Fossilizable):
+class GroupWrapper(Fossilizable):
     """Group-like wrapper class that holds a DB-stored (or remote) group."""
 
     fossilizes(IGroupFossil)
@@ -54,43 +48,11 @@ class GroupWrapper(Persistent, Fossilizable):
     def getFullName(self):
         return self.getName()
 
-    def getDescription(self):
-        return ''
-
-    def setDescription(self, value):
-        pass
-
     def getEmail(self):
         return ''
 
-    def isObsolete(self):
-        return False
-
-    def containsUser(self, avatar):
-        if self.group is None or avatar is None:
-            return False
-        return avatar.user in self.group
-
-    def getMemberList(self):
-        return sorted([x.as_avatar for x in self.group.get_members()], key=attrgetter('user.last_name'))
-
-    def canModify(self, aw_or_user):
-        if hasattr(aw_or_user, 'getUser'):
-            aw_or_user = aw_or_user.getUser()
-        return self.canUserModify(aw_or_user)
-
-    def canUserModify(self, avatar):
-        return avatar.user.is_admin
-
-    def getLocator(self):
-        return Locator(groupId=self.id)
-
     def exists(self):
         return self.group.group is not None
-
-    @property
-    def as_new(self):
-        return self.group
 
     def __eq__(self, other):
         if not hasattr(other, 'group') or not isinstance(other.group, GroupProxy):
@@ -119,18 +81,6 @@ class LocalGroupWrapper(GroupWrapper):
     @encode_utf8
     def getName(self):
         return self.group.group.name if self.exists() else self.id
-
-    def addMember(self, member):
-        if not isinstance(member, AvatarUserWrapper):
-            raise TypeError('Groups can only contain users')
-        group = self.group.group  # needed to avoid GC
-        group.members.add(member.user)
-
-    def removeMember(self, member):
-        if not isinstance(member, AvatarUserWrapper):
-            raise TypeError('Groups can only contain users')
-        group = self.group.group  # needed to avoid GC
-        group.members.discard(member.user)
 
 
 class LDAPGroupWrapper(GroupWrapper):

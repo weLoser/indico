@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -23,19 +23,20 @@ from operator import itemgetter
 from celery import Celery
 from celery.app.log import Logging
 from celery.beat import PersistentScheduler
-from celery.signals import before_task_publish
 from contextlib2 import ExitStack
 from flask_pluginengine import current_plugin, plugin_context
 from sqlalchemy import inspect
 from terminaltables import AsciiTable
 
 from indico.core.celery.util import locked_task
-from indico.core.config import Config
-from indico.core.db import DBMgr, db
+from indico.core.config import config
+from indico.core.db import db
+from indico.core.notifications import flush_email_queue, init_email_queue
 from indico.core.plugins import plugin_engine
 from indico.util.console import cformat
 from indico.util.fossilize import clearCache
 from indico.util.string import return_ascii
+from indico.web.flask.stats import request_stats_request_started
 
 
 class IndicoCelery(Celery):
@@ -54,38 +55,27 @@ class IndicoCelery(Celery):
     def __init__(self, *args, **kwargs):
         kwargs.setdefault('log', IndicoCeleryLogging)
         super(IndicoCelery, self).__init__(*args, **kwargs)
-        self.flask_app = None  # set from configure_celery
+        self.flask_app = None
         self._patch_task()
 
     def init_app(self, app):
-        cfg = Config.getInstance()
-        broker_url = cfg.getCeleryBroker()
-        if not broker_url and not app.config['TESTING']:
+        if not config.CELERY_BROKER and not app.config['TESTING']:
             raise ValueError('Celery broker URL is not set')
-        self.conf['BROKER_URL'] = broker_url
-        self.conf['CELERY_RESULT_BACKEND'] = cfg.getCeleryResultBackend() or broker_url
-        self.conf['CELERYBEAT_SCHEDULER'] = IndicoPersistentScheduler
-        self.conf['CELERYBEAT_SCHEDULE_FILENAME'] = os.path.join(cfg.getTempDir(), 'celerybeat-schedule')
-        self.conf['CELERYD_HIJACK_ROOT_LOGGER'] = False
-        self.conf['CELERY_TIMEZONE'] = cfg.getDefaultTimezone()
-        self.conf['CELERY_IGNORE_RESULT'] = True
-        self.conf['CELERY_STORE_ERRORS_EVEN_IF_IGNORED'] = True
-        self.conf['CELERY_REDIRECT_STDOUTS'] = not app.debug
+        self.conf['broker_url'] = config.CELERY_BROKER
+        self.conf['result_backend'] = config.CELERY_RESULT_BACKEND or config.CELERY_BROKER
+        self.conf['beat_scheduler'] = IndicoPersistentScheduler
+        self.conf['beat_schedule_filename'] = os.path.join(config.TEMP_DIR, 'celerybeat-schedule')
+        self.conf['worker_hijack_root_logger'] = False
+        self.conf['timezone'] = config.DEFAULT_TIMEZONE
+        self.conf['task_ignore_result'] = True
+        self.conf['task_store_errors_even_if_ignored'] = True
+        self.conf['worker_redirect_stdouts'] = not app.debug
         # Pickle isn't pretty but that way we can pass along all types (tz-aware datetimes, sets, etc.)
-        self.conf['CELERY_RESULT_SERIALIZER'] = 'pickle'
-        self.conf['CELERY_TASK_SERIALIZER'] = 'pickle'
-        self.conf['CELERY_ACCEPT_CONTENT'] = ['json', 'yaml', 'pickle']
-        # Send emails about failed tasks
-        self.conf['CELERY_SEND_TASK_ERROR_EMAILS'] = True
-        self.conf['ADMINS'] = [('Admin', cfg.getSupportEmail())]
-        self.conf['SERVER_EMAIL'] = 'Celery <{}>'.format(cfg.getNoReplyEmail())
-        self.conf['EMAIL_HOST'] = cfg.getSmtpServer()[0]
-        self.conf['EMAIL_PORT'] = cfg.getSmtpServer()[1]
-        self.conf['EMAIL_USE_TLS'] = cfg.getSmtpUseTLS()
-        self.conf['EMAIL_HOST_USER'] = cfg.getSmtpLogin() or None
-        self.conf['EMAIL_HOST_PASWORD'] = cfg.getSmtpPassword() or None
+        self.conf['result_serializer'] = 'pickle'
+        self.conf['task_serializer'] = 'pickle'
+        self.conf['accept_content'] = ['json', 'yaml', 'pickle']
         # Allow indico.conf to override settings
-        self.conf.update(cfg.getCeleryConfig())
+        self.conf.update(config.CELERY_CONFIG)
         assert self.flask_app is None or self.flask_app is app
         self.flask_app = app
 
@@ -113,7 +103,7 @@ class IndicoCelery(Celery):
             kwargs.setdefault('ignore_result', True)
             task = self.task(f, *args, **kwargs)
             entry['task'] = task.name
-            self.conf['CELERYBEAT_SCHEDULE'][task.name] = entry
+            self.conf['beat_schedule'][task.name] = entry
             return task
 
         return decorator
@@ -123,15 +113,26 @@ class IndicoCelery(Celery):
         class IndicoTask(self.Task):
             abstract = True
 
+            def apply_async(s, args=None, kwargs=None, task_id=None, producer=None,
+                            link=None, link_error=None, shadow=None, **options):
+                if args is not None:
+                    args = _CelerySAWrapper.wrap_args(args)
+                if kwargs is not None:
+                    kwargs = _CelerySAWrapper.wrap_kwargs(kwargs)
+                if current_plugin:
+                    options['headers'] = options.get('headers') or {}  # None in a retry
+                    options['headers']['indico_plugin'] = current_plugin.name
+                return super(IndicoTask, s).apply_async(args=args, kwargs=kwargs, task_id=task_id, producer=producer,
+                                                        link=link, link_error=link_error, shadow=shadow, **options)
+
             def __call__(s, *args, **kwargs):
                 stack = ExitStack()
                 stack.enter_context(self.flask_app.app_context())
-                stack.enter_context(DBMgr.getInstance().global_connection())
                 if getattr(s, 'request_context', False):
-                    stack.enter_context(self.flask_app.test_request_context(base_url=Config.getInstance().getBaseURL()))
+                    stack.enter_context(self.flask_app.test_request_context(base_url=config.BASE_URL))
                 args = _CelerySAWrapper.unwrap_args(args)
                 kwargs = _CelerySAWrapper.unwrap_kwargs(kwargs)
-                plugin = getattr(s, 'plugin', kwargs.pop('__current_plugin__', None))
+                plugin = getattr(s, 'plugin', s.request.get('indico_plugin'))
                 if isinstance(plugin, basestring):
                     plugin_name = plugin
                     plugin = plugin_engine.get_plugin(plugin)
@@ -141,7 +142,11 @@ class IndicoCelery(Celery):
                 stack.enter_context(plugin_context(plugin))
                 clearCache()
                 with stack:
-                    return super(IndicoTask, s).__call__(*args, **kwargs)
+                    request_stats_request_started()
+                    init_email_queue()
+                    rv = super(IndicoTask, s).__call__(*args, **kwargs)
+                    flush_email_queue()
+                    return rv
 
         self.Task = IndicoTask
 
@@ -159,24 +164,28 @@ class IndicoPersistentScheduler(PersistentScheduler):
 
     def setup_schedule(self):
         deleted = set()
-        for task_name, entry in Config.getInstance().getScheduledTaskOverride().iteritems():
-            if task_name not in self.app.conf['CELERYBEAT_SCHEDULE']:
+        for task_name, entry in config.SCHEDULED_TASK_OVERRIDE.iteritems():
+            if task_name not in self.app.conf['beat_schedule']:
                 self.logger.error('Invalid entry in ScheduledTaskOverride: %s', task_name)
                 continue
             if not entry:
                 deleted.add(task_name)
-                del self.app.conf['CELERYBEAT_SCHEDULE'][task_name]
+                del self.app.conf['beat_schedule'][task_name]
             elif isinstance(entry, dict):
                 assert entry.get('task') in {None, task_name}  # make sure the task name is not changed
-                self.app.conf['CELERYBEAT_SCHEDULE'][task_name].update(entry)
+                self.app.conf['beat_schedule'][task_name].update(entry)
             else:
-                self.app.conf['CELERYBEAT_SCHEDULE'][task_name]['schedule'] = entry
+                self.app.conf['beat_schedule'][task_name]['schedule'] = entry
         super(IndicoPersistentScheduler, self).setup_schedule()
-        self._print_schedule(deleted)
+        if not self.app.conf['worker_redirect_stdouts']:
+            # print the schedule unless we are in production where
+            # this output would get redirected to a logger which is
+            # not pretty, especially with the colors
+            self._print_schedule(deleted)
 
     def _print_schedule(self, deleted):
         table_data = [['Name', 'Schedule']]
-        for entry in sorted(self.app.conf['CELERYBEAT_SCHEDULE'].itervalues(), key=itemgetter('task')):
+        for entry in sorted(self.app.conf['beat_schedule'].itervalues(), key=itemgetter('task')):
             table_data.append([cformat('%{yellow!}{}%{reset}').format(entry['task']),
                                cformat('%{green}{!r}%{reset}').format(entry['schedule'])])
         for task_name in sorted(deleted):
@@ -195,9 +204,10 @@ class _CelerySAWrapper(object):
     __slots__ = ('identity_key',)
 
     def __init__(self, obj):
-        self.identity_key = inspect(obj).identity_key
-        if self.identity_key is None:
+        identity_key = inspect(obj).identity_key
+        if identity_key is None:
             raise ValueError('Cannot pass non-persistent object to Celery. Did you forget to flush?')
+        self.identity_key = identity_key[:2]
 
     @property
     def object(self):
@@ -208,7 +218,7 @@ class _CelerySAWrapper(object):
 
     @return_ascii
     def __repr__(self):
-        model, args = self.identity_key
+        model, args = self.identity_key[:2]
         return '<{}: {}>'.format(model.__name__, ','.join(map(repr, args)))
 
     @classmethod
@@ -226,12 +236,3 @@ class _CelerySAWrapper(object):
     @classmethod
     def unwrap_kwargs(cls, kwargs):
         return {k: v.object if isinstance(v, cls) else v for k, v in kwargs.iteritems()}
-
-
-@before_task_publish.connect
-def before_task_publish_signal(*args, **kwargs):
-    body = kwargs['body']
-    body['args'] = _CelerySAWrapper.wrap_args(body['args'])
-    body['kwargs'] = _CelerySAWrapper.wrap_kwargs(body['kwargs'])
-    if current_plugin:
-        body['kwargs']['__current_plugin__'] = current_plugin.name

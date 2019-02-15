@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,9 +16,9 @@
 
 from __future__ import unicode_literals
 
-from MaKaC.webinterface.meeting import WPMeetingDisplay
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.conferences import WPConferenceModifBase, WPConferenceDefaultDisplayBase
+from indico.modules.events.management.views import WPEventManagement
+from indico.modules.events.views import WPConferenceDisplayBase, WPSimpleEventDisplayBase
+from indico.web.views import WPJinjaMixin
 
 
 class AttachmentsMixin(WPJinjaMixin):
@@ -29,12 +29,13 @@ class AttachmentsMixin(WPJinjaMixin):
         return WPJinjaMixin._getPageContent(self, params)
 
 
-class WPEventAttachments(AttachmentsMixin, WPConferenceModifBase):
-    base_wp = WPConferenceModifBase
+class WPEventAttachments(AttachmentsMixin, WPEventManagement):
+    base_wp = WPEventManagement
     sidemenu_option = 'attachments'
+    ALLOW_JSON = True
 
 
-class WPEventFolderDisplay(WPMeetingDisplay, WPJinjaMixin):
+class WPEventFolderDisplay(WPSimpleEventDisplayBase, WPJinjaMixin):
     template_prefix = 'attachments/'
 
     def _getBody(self, params):
@@ -48,14 +49,11 @@ class WPPackageEventAttachmentsManagement(WPEventAttachments, WPJinjaMixin):
         return WPJinjaMixin._getPageContent(self, params)
 
 
-class WPPackageEventAttachmentsDisplayConference(WPConferenceDefaultDisplayBase, WPJinjaMixin):
+class WPPackageEventAttachmentsDisplayConference(WPConferenceDisplayBase):
     template_prefix = 'attachments/'
 
-    def _getBody(self, params):
-        return WPJinjaMixin._getPageContent(self, params)
 
-
-class WPPackageEventAttachmentsDisplay(WPMeetingDisplay, WPJinjaMixin):
+class WPPackageEventAttachmentsDisplay(WPSimpleEventDisplayBase, WPJinjaMixin):
     template_prefix = 'attachments/'
 
     def _getBody(self, params):

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -15,6 +15,8 @@
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
 
+from __future__ import unicode_literals
+
 import logging
 import os
 import re
@@ -23,42 +25,27 @@ import tempfile
 
 import py
 
-from indico.core.config import Config
-from indico.core.logger import Logger
 
+# Ignore config file in case there is one
+os.environ['INDICO_CONFIG'] = os.devnull
 
 pytest_plugins = ('indico.testing.fixtures.app', 'indico.testing.fixtures.category',
                   'indico.testing.fixtures.contribution', 'indico.testing.fixtures.database',
                   'indico.testing.fixtures.disallow', 'indico.testing.fixtures.person', 'indico.testing.fixtures.user',
-                  'indico.testing.fixtures.event', 'indico.testing.fixtures.smtp', 'indico.testing.fixtures.util')
+                  'indico.testing.fixtures.event', 'indico.testing.fixtures.smtp', 'indico.testing.fixtures.storage',
+                  'indico.testing.fixtures.util')
 
 
 def pytest_configure(config):
     # Load all the plugins defined in pytest_plugins
     config.pluginmanager.consider_module(sys.modules[__name__])
     config.indico_temp_dir = py.path.local(tempfile.mkdtemp(prefix='indicotesttmp.'))
-    plugins = filter(None, [x.strip() for x in re.split(r'[\s,;]+', config.getini('indico_plugins'))])
-    # Throw away all indico.conf options early
-    Config.getInstance().reset({
-        'DBConnectionParams': ('localhost', 0),  # invalid port - just so we never connect to a real ZODB!
-        'SmtpServer': ('localhost', 0),  # invalid port - just in case so we NEVER send emails!
-        'CacheBackend': 'null',
-        'Loggers': [],
-        'UploadedFilesTempDir': config.indico_temp_dir.strpath,
-        'XMLCacheDir': config.indico_temp_dir.strpath,
-        'ArchiveDir': config.indico_temp_dir.strpath,
-        'StorageBackends': {'default': config.indico_temp_dir},
-        'AttachmentStorage': 'default',
-        'Plugins': plugins,
-        'SecretKey': os.urandom(16)
-    })
+    config.indico_plugins = filter(None, [x.strip() for x in re.split(r'[\s,;]+', config.getini('indico_plugins'))])
     # Make sure we don't write any log files (or worse: send emails)
-    Logger.reset()
-    del logging.root.handlers[:]
+    assert not logging.root.handlers
     logging.root.addHandler(logging.NullHandler())
     # Silence the annoying pycountry logger
-    import pycountry.db
-    pycountry.db.logger.addHandler(logging.NullHandler())
+    logging.getLogger('pycountry.db').addHandler(logging.NullHandler())
 
 
 def pytest_unconfigure(config):

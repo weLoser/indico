@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -42,7 +42,7 @@ class LocalGroup(db.Model):
         index=True
     )
 
-    #: the local groups this user belongs to
+    #: the users in the group
     members = db.relationship(
         'User',
         secondary='users.group_members',
@@ -59,6 +59,7 @@ class LocalGroup(db.Model):
     # - in_contribution_acls (ContributionPrincipal.local_group)
     # - in_event_acls (EventPrincipal.local_group)
     # - in_event_settings_acls (EventSettingPrincipal.local_group)
+    # - in_room_acls (RoomPrincipal.local_group)
     # - in_session_acls (SessionPrincipal.local_group)
     # - in_settings_acls (SettingPrincipal.local_group)
 

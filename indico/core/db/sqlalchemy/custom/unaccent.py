@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,7 +16,7 @@
 
 from __future__ import unicode_literals
 
-from sqlalchemy import DDL, text, Index
+from sqlalchemy import DDL, Index, text
 from sqlalchemy.event import listens_for
 from sqlalchemy.sql import func
 from sqlalchemy.sql.elements import conv
@@ -45,11 +45,7 @@ def _should_create_function(ddl, target, connection, **kw):
 
 
 def create_unaccent_function(conn):
-    """Creates the unaccent function if it doesn't exist yet.
-
-    In TESTING mode it always uses the no-op version to have a
-    consistent database setup.
-    """
+    """Create the unaccent function if it doesn't exist yet."""
     DDL(SQL_FUNCTION_UNACCENT).execute_if(callable_=_should_create_function).execute(conn)
 
 

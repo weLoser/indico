@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -75,38 +75,38 @@ def _log(event, kind, msg, user, data):
 
 @_ignore_non_loggable
 def _log_folder_created(folder, user, **kwargs):
-    event = folder.object.event_new
+    event = folder.object.event
     _log(event, EventLogKind.positive, 'Created folder "{}"'.format(folder.title), user, _get_folder_data(folder))
 
 
 @_ignore_non_loggable
 def _log_folder_deleted(folder, user, **kwargs):
-    event = folder.object.event_new
+    event = folder.object.event
     _log(event, EventLogKind.negative, 'Deleted folder "{}"'.format(folder.title), user, _get_folder_data(folder))
 
 
 @_ignore_non_loggable
 def _log_folder_updated(folder, user, **kwargs):
-    event = folder.object.event_new
+    event = folder.object.event
     _log(event, EventLogKind.change, 'Updated folder "{}"'.format(folder.title), user, _get_folder_data(folder))
 
 
 @_ignore_non_loggable
 def _log_attachment_created(attachment, user, **kwargs):
-    event = attachment.folder.object.event_new
+    event = attachment.folder.object.event
     _log(event, EventLogKind.positive, 'Added material "{}"'.format(attachment.title), user,
          _get_attachment_data(attachment))
 
 
 @_ignore_non_loggable
 def _log_attachment_deleted(attachment, user, **kwargs):
-    event = attachment.folder.object.event_new
+    event = attachment.folder.object.event
     _log(event, EventLogKind.negative, 'Deleted material "{}"'.format(attachment.title), user,
          _get_attachment_data(attachment))
 
 
 @_ignore_non_loggable
 def _log_attachment_updated(attachment, user, **kwargs):
-    event = attachment.folder.object.event_new
+    event = attachment.folder.object.event
     _log(event, EventLogKind.change, 'Updated material "{}"'.format(attachment.title), user,
          _get_attachment_data(attachment))

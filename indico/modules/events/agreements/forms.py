@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,14 +16,12 @@
 
 from __future__ import unicode_literals
 
-from flask import session
-
-from wtforms.fields import BooleanField, FileField, TextAreaField, SelectField
+from wtforms.fields import BooleanField, FileField, SelectField, TextAreaField
 from wtforms.fields.html5 import EmailField
-from wtforms.validators import InputRequired, DataRequired, ValidationError
+from wtforms.validators import DataRequired, InputRequired, ValidationError
 
 from indico.util.i18n import _
-from indico.util.placeholders import render_placeholder_info, get_missing_placeholders
+from indico.util.placeholders import get_missing_placeholders, render_placeholder_info
 from indico.web.forms.base import IndicoForm
 from indico.web.forms.fields import IndicoRadioField
 from indico.web.forms.validators import UsedIf
@@ -43,10 +41,9 @@ class AgreementEmailForm(IndicoForm):
 
     def __init__(self, *args, **kwargs):
         self._definition = kwargs.pop('definition')
+        event = kwargs.pop('event')
         super(AgreementEmailForm, self).__init__(*args, **kwargs)
-        from_addresses = ['{} <{}>'.format(session.user.full_name, email)
-                          for email in sorted(session.user.all_emails, key=lambda x: x != session.user.email)]
-        self.from_address.choices = zip(from_addresses, from_addresses)
+        self.from_address.choices = event.get_allowed_sender_emails().items()
         self.body.description = render_placeholder_info('agreement-email', definition=self._definition, agreement=None)
 
     def validate_body(self, field):

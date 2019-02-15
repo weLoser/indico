@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,20 +19,24 @@ from __future__ import unicode_literals
 from flask import request
 
 from indico.modules.users.api import fetch_authenticated_user
-from indico.modules.users.controllers import (RHUserDashboard, RHPersonalData, RHUserPreferences, RHUserFavorites,
-                                              RHUserEmails, RHUserEmailsVerify, RHUserEmailsDelete,
-                                              RHUserEmailsSetPrimary, RHUserFavoritesUsersAdd,
-                                              RHUserFavoritesUserRemove, RHUserFavoritesCategoryAPI,
-                                              RHUserSuggestionsRemove, RHUsersAdmin, RHUsersAdminSettings,
-                                              RHUsersAdminCreate, RHUsersAdminMerge, RHUsersAdminMergeCheck,
-                                              RHRegistrationRequestList, RHRejectRegistrationRequest,
-                                              RHAcceptRegistrationRequest)
+from indico.modules.users.controllers import (RHAcceptRegistrationRequest, RHAdmins, RHPersonalData,
+                                              RHRegistrationRequestList, RHRejectRegistrationRequest, RHUserDashboard,
+                                              RHUserEmails, RHUserEmailsDelete, RHUserEmailsSetPrimary,
+                                              RHUserEmailsVerify, RHUserFavorites, RHUserFavoritesCategoryAPI,
+                                              RHUserFavoritesUserRemove, RHUserFavoritesUsersAdd, RHUserPreferences,
+                                              RHUsersAdmin, RHUsersAdminCreate, RHUsersAdminMerge,
+                                              RHUsersAdminMergeCheck, RHUsersAdminSettings, RHUserSearch,
+                                              RHUserSuggestionsRemove)
 from indico.web.flask.wrappers import IndicoBlueprint
+
 
 _bp = IndicoBlueprint('users', __name__, template_folder='templates', virtual_template_folder='users',
                       url_prefix='/user')
 
-# Admin
+# Admins
+_bp.add_url_rule('!/admin/admins', 'admins', RHAdmins, methods=('GET', 'POST'))
+
+# User management
 _bp.add_url_rule('!/admin/users/', 'users_admin', RHUsersAdmin, methods=('GET', 'POST'))
 _bp.add_url_rule('!/admin/users/settings', 'users_admin_settings', RHUsersAdminSettings, methods=('GET', 'POST'))
 _bp.add_url_rule('!/admin/users/create/', 'users_create', RHUsersAdminCreate, methods=('GET', 'POST'))
@@ -48,7 +52,7 @@ _bp.add_url_rule('!/admin/users/registration-requests/<int:request_id>/reject', 
 # User profile
 with _bp.add_prefixed_rules('/<int:user_id>'):
     _bp.add_url_rule('/dashboard/', 'user_dashboard', RHUserDashboard)
-    _bp.add_url_rule('/suggestions/categories/<category_id>', 'user_suggestions_remove', RHUserSuggestionsRemove,
+    _bp.add_url_rule('/suggestions/categories/<int:category_id>', 'user_suggestions_remove', RHUserSuggestionsRemove,
                      methods=('DELETE',))
     _bp.add_url_rule('/profile/', 'user_profile', RHPersonalData, methods=('GET', 'POST'))
     _bp.add_url_rule('/preferences/', 'user_preferences', RHUserPreferences, methods=('GET', 'POST'))
@@ -63,6 +67,8 @@ with _bp.add_prefixed_rules('/<int:user_id>'):
     _bp.add_url_rule('/emails/<email>', 'user_emails_delete', RHUserEmailsDelete, methods=('DELETE',))
     _bp.add_url_rule('/emails/make-primary', 'user_emails_set_primary', RHUserEmailsSetPrimary, methods=('POST',))
 
+# User search
+_bp.add_url_rule('/search/', 'user_search', RHUserSearch)
 
 # Users API
 _bp.add_url_rule('!/api/user/', 'authenticated_user', fetch_authenticated_user)

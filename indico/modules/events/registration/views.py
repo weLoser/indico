@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,40 +16,35 @@
 
 from __future__ import unicode_literals
 
+from indico.modules.events.management.views import WPEventManagement
 from indico.modules.events.models.events import EventType
-from MaKaC.webinterface.meeting import WPMeetingDisplay
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.conferences import WPConferenceModifBase, WPConferenceDefaultDisplayBase
-from MaKaC.webinterface.simple_event import WPSimpleEventDisplay
+from indico.modules.events.views import WPConferenceDisplayBase, WPSimpleEventDisplayBase
+from indico.web.views import WPJinjaMixin
 
 
-class WPManageRegistration(WPJinjaMixin, WPConferenceModifBase):
+class WPManageRegistration(WPEventManagement):
     template_prefix = 'events/registration/'
+    bundles = ('module_events.registration.js',)
+
+    def __init__(self, rh, event_, active_menu_item=None, **kwargs):
+        self.regform = kwargs.get('regform')
+        self.registration = kwargs.get('registration')
+        WPEventManagement.__init__(self, rh, event_, active_menu_item, **kwargs)
 
     @property
     def sidemenu_option(self):
-        if self._conf.as_event.type_ != EventType.conference:
-            regform = self._kwargs.get('regform')
+        if self.event.type_ != EventType.conference:
+            regform = self.regform
             if not regform:
-                registration = self._kwargs.get('registration')
-                if registration:
-                    regform = registration.registration_form
+                if self.registration:
+                    regform = self.registration.registration_form
             if regform and regform.is_participation:
                 return 'participants'
         return 'registration'
 
-    def getJSFiles(self):
-        return WPConferenceModifBase.getJSFiles(self) + self._asset_env['modules_registration_js'].urls()
-
-    def getCSSFiles(self):
-        return WPConferenceModifBase.getCSSFiles(self) + self._asset_env['registration_sass'].urls()
-
 
 class WPManageRegistrationStats(WPManageRegistration):
-    def getJSFiles(self):
-        return (WPManageRegistration.getJSFiles(self) +
-                self._asset_env['statistics_js'].urls() +
-                self._includeJSPackage('jqplot_js', prefix=''))
+    bundles = ('statistics.js', 'statistics.css')
 
 
 class WPManageParticipants(WPManageRegistration):
@@ -63,31 +58,19 @@ class DisplayRegistrationFormMixin(WPJinjaMixin):
     def _getBody(self, params):
         return WPJinjaMixin._getPageContent(self, params)
 
-    def getJSFiles(self):
-        return self.base_class.getJSFiles(self) + self._asset_env['modules_registration_js'].urls()
 
-    def getCSSFiles(self):
-        return (self.base_class.getCSSFiles(self) +
-                self._asset_env['registration_sass'].urls() +
-                self._asset_env['payment_sass'].urls() +
-                self._asset_env['event_display_sass'].urls())
-
-
-class WPDisplayRegistrationFormConference(DisplayRegistrationFormMixin, WPConferenceDefaultDisplayBase):
+class WPDisplayRegistrationFormConference(DisplayRegistrationFormMixin, WPConferenceDisplayBase):
     template_prefix = 'events/registration/'
-    base_class = WPConferenceDefaultDisplayBase
+    base_class = WPConferenceDisplayBase
     menu_entry_name = 'registration'
+    bundles = ('module_events.registration.js',)
 
 
 class WPDisplayRegistrationParticipantList(WPDisplayRegistrationFormConference):
     menu_entry_name = 'participants'
 
 
-class WPDisplayRegistrationFormMeeting(DisplayRegistrationFormMixin, WPMeetingDisplay):
+class WPDisplayRegistrationFormSimpleEvent(DisplayRegistrationFormMixin, WPSimpleEventDisplayBase):
     template_prefix = 'events/registration/'
-    base_class = WPMeetingDisplay
-
-
-class WPDisplayRegistrationFormLecture(DisplayRegistrationFormMixin, WPSimpleEventDisplay):
-    template_prefix = 'events/registration/'
-    base_class = WPSimpleEventDisplay
+    base_class = WPSimpleEventDisplayBase
+    bundles = ('module_events.registration.js',)

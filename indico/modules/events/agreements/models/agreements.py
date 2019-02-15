@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,17 +20,17 @@ from uuid import uuid4
 
 from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.ext.hybrid import hybrid_property
+from werkzeug.exceptions import ServiceUnavailable
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy import PyIntEnum, UTCDateTime
 from indico.util.date_time import now_utc
-from indico.core.errors import IndicoError
 from indico.util.i18n import _
 from indico.util.string import return_ascii
-from indico.util.struct.enum import TitledIntEnum
+from indico.util.struct.enum import RichIntEnum
 
 
-class AgreementState(TitledIntEnum):
+class AgreementState(RichIntEnum):
     __titles__ = [_("Pending"), _("Accepted"), _("Rejected"), _("Accepted on behalf"), _("Rejected on behalf")]
     pending = 0
     accepted = 1
@@ -138,7 +138,7 @@ class Agreement(db.Model):
         )
     )
     #: The Event this agreement is associated with
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -193,7 +193,7 @@ class Agreement(db.Model):
 
     @staticmethod
     def create_from_data(event, type_, person):
-        agreement = Agreement(event_new=event, type=type_, state=AgreementState.pending, uuid=str(uuid4()))
+        agreement = Agreement(event=event, type=type_, state=AgreementState.pending, uuid=str(uuid4()))
         agreement.identifier = person.identifier
         agreement.person_email = person.email
         agreement.person_name = person.name
@@ -228,11 +228,14 @@ class Agreement(db.Model):
     def render(self, form, **kwargs):
         definition = self.definition
         if definition is None:
-            raise IndicoError(_('This agreement type is currently not available.'))
+            raise ServiceUnavailable('This agreement type is currently not available.')
         return definition.render_form(self, form, **kwargs)
 
     def belongs_to(self, person):
         return self.identifier == person.identifier
 
     def is_orphan(self):
-        return self.definition.is_agreement_orphan(self.event_new, self)
+        definition = self.definition
+        if definition is None:
+            raise ServiceUnavailable('This agreement type is currently not available.')
+        return definition.is_agreement_orphan(self.event, self)

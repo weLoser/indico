@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,15 +14,15 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals, division
+from __future__ import division, unicode_literals
 
 from wtforms.fields import SelectField
 from wtforms.fields.html5 import IntegerField
-from wtforms.validators import DataRequired, Optional, NumberRange, ValidationError, Length
+from wtforms.validators import DataRequired, Length, NumberRange, Optional, ValidationError
 
 from indico.util.i18n import _, ngettext
 from indico.web.fields.base import BaseField
-from indico.web.forms.fields import IndicoRadioField, MultiStringField, IndicoSelectMultipleCheckboxField
+from indico.web.forms.fields import IndicoRadioField, IndicoSelectMultipleCheckboxField, MultiStringField
 from indico.web.forms.validators import HiddenUnless
 
 

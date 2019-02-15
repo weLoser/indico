@@ -5,7 +5,8 @@
     {% if contribs %}
         <form method="POST">
             <input type="hidden" name="csrf_token" value="{{ session.csrf_token }}">
-            <table class="i-table tablesorter">
+            <table class="i-table tablesorter" data-session-items="{{ sessions | tojson | forceescape }}"
+                   data-track-items="{{ tracks | tojson | forceescape }}">
                 <thead>
                     <tr class="i-table">
                         <th class="i-table thin-column" data-sorter="false"></th>
@@ -40,7 +41,7 @@
                         <th class="i-table material-column">
                             {% trans %}Material{% endtrans %}
                         </th>
-                        <th class="actions-column" data-sorter="false">
+                        <th class="actions-column hide-if-locked" data-sorter="false">
                             {# Actions #}
                         </th>
                     </tr>
@@ -80,11 +81,11 @@
                                 <span class="vertical-aligner">
                                     {% if contrib.is_scheduled %}
                                         {% if not contrib.session_block %}
-                                            <a href="#" class="icon-calendar js-contrib-start-date"
+                                            <a href="#" class="icon-calendar js-contrib-start-date hide-if-locked"
                                                data-href="{{ url_for('.manage_start_date', contrib) }}">
                                             </a>
                                         {% else %}
-                                            <i class="icon-calendar text-superfluous"
+                                            <i class="icon-calendar text-superfluous hide-if-locked"
                                                title="{% trans %}This contribution is scheduled within a session block and time can't be modified.{% endtrans %}"></i>
                                         {% endif %}
                                         <span class="label">
@@ -100,11 +101,11 @@
                             <td class="i-table duration-column">
                                 <span class="vertical-aligner">
                                     {% if not contrib.session_block %}
-                                        <a href="#" class="icon-time js-contrib-duration"
+                                        <a href="#" class="icon-time js-contrib-duration hide-if-locked"
                                            data-href="{{ url_for('.manage_duration', contrib) }}">
                                         </a>
                                     {% else %}
-                                        <i class="icon-time text-superfluous"
+                                        <i class="icon-time text-superfluous hide-if-locked"
                                            title="{% trans %}This contribution is scheduled within a session block and duration can't be modified.{% endtrans %}"></i>
                                     {% endif %}
                                     <span class="label">
@@ -143,11 +144,10 @@
                                 </a>
                             </td>
                             <td class="i-table">
-                                <a class="i-button session-item-picker"
+                                <a class="i-button {{ 'session-item-picker' if not event.is_locked else 'disabled' }}"
                                    style="{{ contrib.session.colors.css if contrib.session }}"
                                    data-href="{{ url_for('.manage_contrib_rest', contrib) }}"
                                    data-method="PATCH"
-                                   data-items="{{ sessions | tojson | forceescape }}"
                                    data-contrib-id="{{ contrib.id }}"
                                    data-selected-item-id="{{ contrib.session.id or None | tojson }}">
                                     <span class="label">
@@ -159,12 +159,11 @@
                                             {%- trans %}No session{% endtrans -%}
                                         {% endif %}
                                     </span>
-                                    <span class="icon-arrow-down"></span>
+                                    {% if not event.is_locked %}<span class="icon-arrow-down"></span>{% endif %}
                                 </a>
                             </td>
                             <td class="i-table">
-                                <a class="i-button track-item-picker"
-                                   data-items="{{ tracks | tojson | forceescape }}"
+                                <a class="i-button {{ 'track-item-picker' if not event.is_locked else 'disabled' }}"
                                    data-href="{{ url_for('.manage_contrib_rest', contrib) }}"
                                    data-method="PATCH"
                                    data-selected-item-id="{{ (contrib.track_id if contrib.track_id is not none else None) | tojson }}">
@@ -175,17 +174,24 @@
                                             {% trans %}No track{% endtrans %}
                                         {% endif %}
                                     </span>
-                                    <span class="icon-arrow-down"></span>
+                                    {% if not event.is_locked %}<span class="icon-arrow-down"></span>{% endif %}
                                 </a>
                             </td>
                             {{ render_attachment_info(contrib) }}
-                            <td class="i-table actions-column">
+                            <td class="i-table actions-column hide-if-locked">
                                 <div class="group right entry-action-buttons vertical-aligner">
                                     <a href="#" class="icon-edit i-link highlight js-dialog-action"
                                        data-href="{{ url_for('.manage_update_contrib', contrib, flash=true) }}"
                                        data-title="{% trans title=contrib.title %}Edit contribution '{{ title }}'{% endtrans %}"
                                        data-update='{"html": "#contribution-list", "filter_statistics": "#filter-statistics"}'
                                        data-ajax-dialog></a>
+                                    <a href="#" class="icon-copy i-link highlight"
+                                       title="{% trans %}Clone contribution{% endtrans %}"
+                                       data-title="{% trans title=contrib.title %}Clone contribution '{{ title }}' {% endtrans %}"
+                                       data-href="{{ url_for('.clone_contribution', contrib) }}"
+                                       data-method="POST"
+                                       data-update="#contribution-list"
+                                       data-confirm="{% trans %}Are you sure you want to clone this contribution?{% endtrans %}"></a>
                                     <a href="#" class="icon-shield i-link highlight"
                                        title="{% trans %}Manage contribution protection{% endtrans %}"
                                        data-href="{{ url_for('.manage_contrib_protection', contrib) }}"

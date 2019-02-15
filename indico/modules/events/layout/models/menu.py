@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -23,8 +23,8 @@ from werkzeug.utils import cached_property
 from indico.core.db import db
 from indico.core.db.sqlalchemy import PyIntEnum
 from indico.util.i18n import _
-from indico.util.string import return_ascii, slugify, text_to_repr, format_repr
-from indico.util.struct.enum import TitledIntEnum
+from indico.util.string import format_repr, return_ascii, slugify, text_to_repr
+from indico.util.struct.enum import RichIntEnum
 from indico.web.flask.util import url_for
 
 
@@ -36,7 +36,7 @@ def _get_next_position(context):
     return (res[0] or 0) + 1
 
 
-class MenuEntryType(TitledIntEnum):
+class MenuEntryType(RichIntEnum):
     __titles__ = [None, _('Separator'), _('Internal Link'), _('User Link'), _('Plugin Link'), _('Page')]
     separator = 1
     internal_link = 2
@@ -47,11 +47,10 @@ class MenuEntryType(TitledIntEnum):
 
 class MenuEntryMixin(object):
     def __init__(self, **kwargs):
-        event = kwargs.pop('event', kwargs.get('event_new'))
+        event = kwargs.pop('event', kwargs.get('event'))
         super(MenuEntryMixin, self).__init__(**kwargs)
-        # XXX: not calling this `event` since we'll rename the `event_new`
-        # relationships in the future and this one should NOT use the
-        # relationship to avoid mixing data from different DB sessions
+        # XXX: not calling this `event` since this one should NOT use
+        # the relationship to avoid mixing data from different DB sessions
         # when updating/populating the menu (which happens in a separate
         # DB session)
         self._event_ref = event
@@ -63,7 +62,7 @@ class MenuEntryMixin(object):
             return self._event_ref
         except AttributeError:
             # needed for MenuEntry objects loaded from the DB
-            return self.event_new
+            return self.event
 
     @property
     def url(self):
@@ -72,6 +71,8 @@ class MenuEntryMixin(object):
         # the generated urls into something suitable as filenames
         if self.is_user_link:
             return self.link_url
+        elif (self.is_internal_link or self.is_plugin_link) and not self.default_data.endpoint:
+            return None
         elif self.is_internal_link:
             data = self.default_data
             if data.static_site and isinstance(data.static_site, basestring) and g.get('static_site'):
@@ -291,6 +292,7 @@ class MenuEntry(MenuEntryMixin, db.Model):
         db.Integer,
         db.ForeignKey('events.pages.id'),
         nullable=True,
+        index=True,
         default=None
     )
     #: The type of the menu entry
@@ -300,7 +302,7 @@ class MenuEntry(MenuEntryMixin, db.Model):
     )
 
     #: The Event containing the menu entry
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -358,7 +360,7 @@ class MenuEntry(MenuEntryMixin, db.Model):
             to -= 1
             value = 1
 
-        entries = (MenuEntry.query.with_parent(self.event_new)
+        entries = (MenuEntry.query.with_parent(self.event)
                    .filter(MenuEntry.parent == self.parent,
                            MenuEntry.position.between(from_ + 1, to)))
         for e in entries:
@@ -368,13 +370,13 @@ class MenuEntry(MenuEntryMixin, db.Model):
     def insert(self, parent, position):
         if position is None or position < 0:
             position = -1
-        old_siblings = (MenuEntry.query.with_parent(self.event_new)
+        old_siblings = (MenuEntry.query.with_parent(self.event)
                         .filter(MenuEntry.position > self.position,
                                 MenuEntry.parent == self.parent))
         for sibling in old_siblings:
             sibling.position -= 1
 
-        new_siblings = (MenuEntry.query.with_parent(self.event_new)
+        new_siblings = (MenuEntry.query.with_parent(self.event)
                         .filter(MenuEntry.position > position,
                                 MenuEntry.parent == parent))
         for sibling in new_siblings:
@@ -407,7 +409,7 @@ class EventPage(db.Model):
     )
 
     #: The Event which contains the page
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         foreign_keys=[event_id],
         lazy=True,
@@ -424,11 +426,11 @@ class EventPage(db.Model):
 
     @property
     def locator(self):
-        return dict(self.menu_entry.event_new.locator, page_id=self.id, slug=slugify(self.menu_entry.title))
+        return dict(self.menu_entry.event.locator, page_id=self.id, slug=slugify(self.menu_entry.title))
 
     @property
     def is_default(self):
-        return self.menu_entry.event_new.default_page_id == self.id
+        return self.menu_entry.event.default_page_id == self.id
 
     @return_ascii
     def __repr__(self):

@@ -1,5 +1,5 @@
 {% macro bootstrap_success(name) %}
-    {%- trans profile_link=url_for('users.user_dashboard') , settings_link=url_for('admin.adminList') -%}
+    {%- trans profile_link=url_for('users.user_dashboard'), settings_link=url_for('core.admin_dashboard') -%}
         Indico is now ready and you are logged as {{ name }} with administrative rights!<br>
         Don't forget to tweak <a href="{{ settings_link }}">Indico's settings</a> and update your
         <a href="{{ profile_link }}">profile</a>.
@@ -28,7 +28,7 @@
 
 {% macro community_exception(exc) %}
     {%- trans error=exc.message -%}
-        A unexpected exception happened while registering the server to the Community Hub: {{ error }}.
+        An unexpected exception happened while registering the server to the Community Hub: {{ error }}.
     {%- endtrans %}<br>
     {%- trans link=url_for('cephalopod.index') -%}
         See the logs for details and try again <a href="{{ link }}">here</a>.

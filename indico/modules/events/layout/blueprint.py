@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,26 +16,28 @@
 
 from __future__ import unicode_literals
 
+from indico.modules.events.layout.compat import compat_image, compat_page
+from indico.modules.events.layout.controllers.images import RHImageDelete, RHImageDisplay, RHImages, RHImageUpload
+from indico.modules.events.layout.controllers.layout import (RHLayoutCSSDelete, RHLayoutCSSDisplay, RHLayoutCSSPreview,
+                                                             RHLayoutCSSSaveTheme, RHLayoutCSSUpload, RHLayoutEdit,
+                                                             RHLayoutLogoDelete, RHLayoutLogoUpload,
+                                                             RHLayoutTimetableThemeForm, RHLogoDisplay)
+from indico.modules.events.layout.controllers.menu import (RHMenuAddEntry, RHMenuDeleteEntry, RHMenuEdit,
+                                                           RHMenuEntryEdit, RHMenuEntryPosition,
+                                                           RHMenuEntryToggleDefault, RHMenuEntryToggleEnabled,
+                                                           RHMenuToggleCustom, RHPageDisplay)
 from indico.web.flask.util import make_compat_redirect_func
 from indico.web.flask.wrappers import IndicoBlueprint
-from indico.modules.events.layout.compat import compat_page, compat_image
-from indico.modules.events.layout.controllers.images import RHImageDelete, RHImageDisplay, RHImageUpload, RHImages
-from indico.modules.events.layout.controllers.layout import (RHLayoutEdit, RHLayoutCSSUpload, RHLayoutCSSDelete,
-                                                             RHLayoutLogoUpload, RHLayoutLogoDelete, RHLogoDisplay,
-                                                             RHLayoutCSSSaveTheme, RHLayoutCSSDisplay,
-                                                             RHLayoutCSSPreview)
-from indico.modules.events.layout.controllers.menu import (RHMenuAddEntry, RHMenuDeleteEntry, RHMenuEdit,
-                                                           RHMenuToggleCustom, RHMenuEntryToggleEnabled,
-                                                           RHMenuEntryToggleDefault, RHMenuEntryEdit,
-                                                           RHMenuEntryPosition, RHPageDisplay)
+
 
 _bp = IndicoBlueprint('event_layout', __name__, template_folder='templates',
                       virtual_template_folder='events/layout', url_prefix='/event/<confId>/manage/layout')
 
 _bp.add_url_rule('/', 'index', RHLayoutEdit, methods=('GET', 'POST'))
+_bp.add_url_rule('/timetable-theme-form', 'timetable_theme_form', RHLayoutTimetableThemeForm)
 _bp.add_url_rule('/menu/', 'menu', RHMenuEdit)
 _bp.add_url_rule('/menu/toggle-customize', 'menu_toggle_custom', RHMenuToggleCustom, methods=('POST',))
-_bp.add_url_rule('/menu/<int:menu_entry_id>/', 'menu_entry_edit', RHMenuEntryEdit, methods=('GET', 'POST',))
+_bp.add_url_rule('/menu/<int:menu_entry_id>/', 'menu_entry_edit', RHMenuEntryEdit, methods=('GET', 'POST'))
 _bp.add_url_rule('/menu/<int:menu_entry_id>/position', 'menu_entry_position', RHMenuEntryPosition, methods=('POST',))
 _bp.add_url_rule('/menu/<int:menu_entry_id>/toggle-enabled', 'menu_entry_toggle_enabled', RHMenuEntryToggleEnabled,
                  methods=('POST',))

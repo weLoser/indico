@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals, absolute_import
+from __future__ import absolute_import, unicode_literals
 
 from indico.core.db.sqlalchemy.colors import ColorTuple
 from indico.util.i18n import _
@@ -47,3 +47,23 @@ class IndicoPalettePickerField(JSONField):
 
     def _value(self):
         return self.data._asdict()
+
+
+class IndicoSinglePalettePickerField(IndicoPalettePickerField):
+    """Like IndicoPalettePickerField but for just a single color."""
+
+    def __init__(self, *args, **kwargs):
+        self.text_color = kwargs.pop('text_color')
+        kwargs['color_list'] = [ColorTuple(self.text_color, color) for color in kwargs['color_list']]
+        super(IndicoSinglePalettePickerField, self).__init__(*args, **kwargs)
+
+    def process_formdata(self, valuelist):
+        super(IndicoSinglePalettePickerField, self).process_formdata(valuelist)
+        self.data = self.data.background
+
+    def pre_validate(self, form):
+        if not any(self.data == color.background for color in self.color_list):
+            raise ValueError(_('Invalid color selected'))
+
+    def _value(self):
+        return ColorTuple(self.text_color, self.data)._asdict()

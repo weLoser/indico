@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -25,11 +25,11 @@ from sqlalchemy.orm import aliased
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy import PyIntEnum
+from indico.modules.users.models.users import UserTitle
 from indico.util.decorators import strict_classproperty
-from indico.util.string import return_ascii, camelize_keys, format_repr
+from indico.util.i18n import orig_string
+from indico.util.string import camelize_keys, format_repr, return_ascii
 from indico.util.struct.enum import IndicoEnum
-
-from MaKaC.webinterface.common.person_titles import TitlesRegistry
 
 
 def _get_next_position(context):
@@ -37,7 +37,7 @@ def _get_next_position(context):
     regform_id = context.current_parameters['registration_form_id']
     parent_id = context.current_parameters['parent_id']
     res = (db.session.query(db.func.max(RegistrationFormItem.position))
-           .filter_by(parent_id=parent_id, registration_form_id=regform_id, is_deleted=False)
+           .filter_by(parent_id=parent_id, registration_form_id=regform_id, is_deleted=False, is_enabled=True)
            .one())
     return (res[0] or 0) + 1
 
@@ -50,7 +50,7 @@ class RegistrationFormItemType(int, IndicoEnum):
     field_pd = 5  # personal data field
 
 
-# We are not using a TitledIntEnum since one of the instances is named "title".
+# We are not using a RichIntEnum since one of the instances is named "title".
 class PersonalDataType(int, IndicoEnum):
     """Description of the personal data items that exist on every registration form"""
 
@@ -83,7 +83,8 @@ class PersonalDataType(int, IndicoEnum):
                 'data': {
                     'item_type': 'dropdown',
                     'with_extra_slots': False,
-                    'choices': [dict(title_item, id=unicode(uuid4()), caption=t) for t in TitlesRegistry.getList() if t]
+                    'choices': [dict(title_item, id=unicode(uuid4()), caption=orig_string(t.title))
+                                for t in UserTitle if t]
                 }
             }),
             (cls.first_name, {
@@ -102,25 +103,30 @@ class PersonalDataType(int, IndicoEnum):
                 'title': cls.affiliation.get_title(),
                 'input_type': 'text'
             }),
+            # Fields disabled by default start in position 1000 to avoid problems reordering
             (cls.address, {
                 'title': cls.address.get_title(),
                 'input_type': 'textarea',
-                'is_enabled': False
+                'is_enabled': False,
+                'position': 1000
             }),
             (cls.country, {
                 'title': cls.country.get_title(),
                 'input_type': 'country',
-                'is_enabled': False
+                'is_enabled': False,
+                'position': 1001
             }),
             (cls.phone, {
                 'title': cls.phone.get_title(),
                 'input_type': 'phone',
-                'is_enabled': False
+                'is_enabled': False,
+                'position': 1002
             }),
             (cls.position, {
                 'title': cls.position.get_title(),
                 'input_type': 'text',
-                'is_enabled': False
+                'is_enabled': False,
+                'position': 1003
             }),
         ]
 
@@ -361,6 +367,10 @@ class RegistrationFormSection(RegistrationFormItem):
     @property
     def fields(self):
         return [child for child in self.children if child.is_field]
+
+    @property
+    def active_fields(self):
+        return [field for field in self.fields if not field.is_deleted]
 
     @property
     def locator(self):

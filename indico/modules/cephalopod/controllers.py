@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,58 +16,58 @@
 
 from __future__ import unicode_literals
 
-import pkg_resources
-from platform import python_version
-from urlparse import urljoin
+import platform
 
 from flask import flash, jsonify, redirect, request
 from requests.exceptions import HTTPError, RequestException, Timeout
+from werkzeug.urls import url_join
 
-from indico.core.config import Config
-from indico.modules.cephalopod import settings
+import indico
+from indico.core.config import config
+from indico.core.db.sqlalchemy.util.queries import get_postgres_version
+from indico.modules.admin import RHAdminBase
+from indico.modules.cephalopod import cephalopod_settings
 from indico.modules.cephalopod.forms import CephalopodForm
 from indico.modules.cephalopod.util import register_instance, sync_instance, unregister_instance
 from indico.modules.cephalopod.views import WPCephalopod
+from indico.modules.core.settings import core_settings
 from indico.util.i18n import _
+from indico.util.network import is_private_url
+from indico.util.system import get_os
 from indico.web.flask.util import url_for
 from indico.web.forms.base import FormDefaults
-
-import MaKaC
-from MaKaC.common.info import HelperMaKaCInfo
-from MaKaC.webinterface.rh.admins import RHAdminBase
-from MaKaC.webinterface.rh.base import RH
+from indico.web.rh import RH
 
 
 class RHCephalopodBase(RHAdminBase):
-    CSRF_ENABLED = True
+    pass
 
 
 class RHCephalopod(RHCephalopodBase):
-    def _process_GET(self):
-        defaults = FormDefaults(**settings.get_all())
-        form = CephalopodForm(request.form, obj=defaults)
-
-        affiliation = HelperMaKaCInfo.getMaKaCInfoInstance().getOrganisation()
-        enabled = settings.get('joined')
-        config = Config.getInstance()
-        instance_url = config.getBaseURL()
-        language = config.getDefaultLocale()
-        tracker_url = urljoin(config.getTrackerURL(), 'api/instance/{}'.format(settings.get('uuid')))
-        return WPCephalopod.render_template('cephalopod.html',
-                                            affiliation=affiliation,
-                                            enabled=enabled,
+    def _process(self):
+        form = CephalopodForm(obj=FormDefaults(**cephalopod_settings.get_all()))
+        if form.validate_on_submit():
+            return self._process_form(form)
+        hub_url = url_join(config.COMMUNITY_HUB_URL, 'api/instance/{}'.format(cephalopod_settings.get('uuid')))
+        cephalopod_settings.set('show_migration_message', False)
+        return WPCephalopod.render_template('cephalopod.html', 'cephalopod',
+                                            affiliation=core_settings.get('site_organization'),
+                                            enabled=cephalopod_settings.get('joined'),
                                             form=form,
-                                            indico_version=MaKaC.__version__,
-                                            instance_url=instance_url,
-                                            language=language,
-                                            python_version=python_version(),
-                                            tracker_url=tracker_url)
+                                            indico_version=indico.__version__,
+                                            instance_url=config.BASE_URL,
+                                            language=config.DEFAULT_LOCALE,
+                                            operating_system=get_os(),
+                                            postgres_version=get_postgres_version(),
+                                            python_version=platform.python_version(),
+                                            hub_url=hub_url,
+                                            show_local_warning=(config.DEBUG or is_private_url(request.url_root)))
 
-    def _process_POST(self):
-        name = request.form.get('contact_name', settings.get('contact_name'))
-        email = request.form.get('contact_email', settings.get('contact_email'))
-        enabled = request.form.get('joined', False)
-        uuid = settings.get('uuid')
+    def _process_form(self, form):
+        name = form.contact_name.data
+        email = form.contact_email.data
+        enabled = form.joined.data
+        uuid = cephalopod_settings.get('uuid')
         try:
             if not enabled:
                 unregister_instance()
@@ -87,12 +87,12 @@ class RHCephalopod(RHCephalopodBase):
 
 class RHCephalopodSync(RHCephalopodBase):
     def _process(self):
-        if not settings.get('joined'):
+        if not cephalopod_settings.get('joined'):
             flash(_("Synchronization is not possible if you don't join the community first."),
                   'error')
         else:
-            contact_name = settings.get('contact_name')
-            contact_email = settings.get('contact_email')
+            contact_name = cephalopod_settings.get('contact_name')
+            contact_email = cephalopod_settings.get('contact_email')
             try:
                 sync_instance(contact_name, contact_email)
             except HTTPError as err:
@@ -108,11 +108,10 @@ class RHCephalopodSync(RHCephalopodBase):
 
 class RHSystemInfo(RH):
     def _process(self):
-        try:
-            indico_version = pkg_resources.get_distribution('indico').version
-        except pkg_resources.DistributionNotFound:
-            indico_version = 'dev'
-        stats = {'python_version': python_version(),
-                 'indico_version': indico_version,
-                 'language': Config.getInstance().getDefaultLocale()}
+        stats = {'python_version': platform.python_version(),
+                 'indico_version': indico.__version__,
+                 'operating_system': get_os(),
+                 'postgres_version': get_postgres_version(),
+                 'language': config.DEFAULT_LOCALE,
+                 'debug': config.DEBUG}
         return jsonify(stats)

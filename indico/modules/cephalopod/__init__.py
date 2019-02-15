@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,6 +16,8 @@
 
 from __future__ import unicode_literals
 
+from flask import session
+
 from indico.core import signals
 from indico.core.logger import Logger
 from indico.core.settings import SettingsProxy
@@ -24,11 +26,12 @@ from indico.web.flask.util import url_for
 from indico.web.menu import SideMenuItem
 
 
-__all__ = ('logger', 'settings')
+__all__ = ('logger', 'cephalopod_settings')
 
 logger = Logger.get('cephalopod')
 
-settings = SettingsProxy('cephalopod', {
+cephalopod_settings = SettingsProxy('cephalopod', {
+    'show_migration_message': False,
     'joined': False,
     'contact_email': None,
     'contact_name': None,
@@ -38,4 +41,5 @@ settings = SettingsProxy('cephalopod', {
 
 @signals.menu.items.connect_via('admin-sidemenu')
 def _extend_admin_menu(sender, **kwargs):
-    return SideMenuItem('cephalopod', _("Community Hub"), url_for('cephalopod.index'), section='integration')
+    if session.user.is_admin:
+        return SideMenuItem('cephalopod', _("Community Hub"), url_for('cephalopod.index'), section='integration')

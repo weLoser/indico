@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,7 +17,7 @@
 from functools import wraps
 from inspect import getcallargs
 
-from flask import has_request_context, g, current_app
+from flask import current_app, g, has_request_context
 
 
 _notset = object()
@@ -82,12 +82,12 @@ def memoize_redis(ttl):
     :param ttl: How long the result should be cached.  May be a
                 timedelta or a number (seconds).
     """
-    from MaKaC.common.cache import GenericCache
+    from indico.legacy.common.cache import GenericCache
     cache = GenericCache('memoize')
 
     def decorator(f):
         def _get_key(args, kwargs):
-            return f.__name__, make_hashable(getcallargs(f, *args, **kwargs))
+            return f.__module__, f.__name__, make_hashable(getcallargs(f, *args, **kwargs))
 
         def _clear_cached(*args, **kwargs):
             cache.delete(_get_key(args, kwargs))

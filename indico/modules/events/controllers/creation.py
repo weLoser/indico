@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,51 +16,53 @@
 
 from __future__ import unicode_literals
 
-from datetime import time, datetime
+from datetime import datetime, time
 
 from dateutil.relativedelta import relativedelta
-from flask import flash, redirect, request, render_template
+from flask import flash, redirect, render_template, request, session
 from markupsafe import Markup
 from pytz import timezone
 from werkzeug.utils import cached_property
 
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db.sqlalchemy.util.models import get_simple_column_attrs
 from indico.modules.categories import Category
 from indico.modules.events.forms import EventCreationForm, LectureCreationForm
 from indico.modules.events.models.events import EventType
-from indico.modules.events.models.persons import EventPersonLink, EventPerson
+from indico.modules.events.models.persons import EventPerson, EventPersonLink
 from indico.modules.events.models.series import EventSeries
 from indico.modules.events.notifications import notify_event_creation
 from indico.modules.events.operations import create_event
+from indico.modules.rb import rb_settings
+from indico.modules.rb.util import rb_check_user_access
 from indico.util.date_time import now_utc
 from indico.util.struct.iterables import materialize_iterable
 from indico.web.flask.util import url_for
 from indico.web.forms.base import FormDefaults
-from indico.web.util import url_for_index, jsonify_data, jsonify_template
-from MaKaC.webinterface.rh.base import RHProtected
+from indico.web.rh import RHProtected
+from indico.web.util import jsonify_data, jsonify_template, url_for_index
 
 
 class RHCreateEvent(RHProtected):
     """Create a new event"""
 
-    CSRF_ENABLED = True
-
-    def _checkParams(self):
+    def _process_args(self):
         self.event_type = EventType[request.view_args['event_type']]
+        self.root_category = Category.get_root()
+        self.single_category = not self.root_category.children
 
     @cached_property
     def _default_category(self):
         try:
             category_id = int(request.args['category_id'])
         except (ValueError, KeyError):
-            return None
+            return self.root_category if self.single_category else None
         else:
             return Category.get(category_id, is_deleted=False)
 
     def _get_form_defaults(self):
         category = self._default_category
-        tzinfo = timezone(Config.getInstance().getDefaultTimezone())
+        tzinfo = timezone(config.DEFAULT_TIMEZONE)
         if category is not None:
             tzinfo = timezone(category.timezone)
 
@@ -76,7 +78,8 @@ class RHCreateEvent(RHProtected):
         return FormDefaults(category=category,
                             timezone=tzinfo.zone, start_dt=start_dt, end_dt=end_dt,
                             occurrences=[(start_dt, end_dt - start_dt)],
-                            location_data={'inheriting': False})
+                            location_data={'inheriting': False},
+                            create_booking=False)
 
     def _create_event(self, data):
         data = data.copy()
@@ -94,6 +97,7 @@ class RHCreateEvent(RHProtected):
                                                for col in get_simple_column_attrs(EventPersonLink)})
                 link_copy.person = EventPerson(**{col: getattr(link.person, col)
                                                   for col in get_simple_column_attrs(EventPerson)})
+                link_copy.person.user = link.person.user
                 yield link_copy, submitter
 
         occurrences = data.pop('occurrences')
@@ -121,6 +125,10 @@ class RHCreateEvent(RHProtected):
             else:
                 event = self._create_event(form.data)
                 notify_event_creation(event)
-            return jsonify_data(flash=False, redirect=url_for('event_mgmt.conferenceModification', event))
+            return jsonify_data(flash=False, redirect=url_for('event_management.settings', event))
+        check_room_availability = rb_check_user_access(session.user) and config.ENABLE_ROOMBOOKING
+        rb_excluded_categories = rb_settings.get('excluded_categories')
         return jsonify_template('events/forms/event_creation_form.html', form=form, fields=form._field_order,
-                                event_type=self.event_type.name)
+                                event_type=self.event_type.name, single_category=self.single_category,
+                                check_room_availability=check_room_availability,
+                                rb_excluded_categories=rb_excluded_categories)

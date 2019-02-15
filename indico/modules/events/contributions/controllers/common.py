@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -31,4 +31,4 @@ class ContributionListMixin:
         return self._render_template(**self.list_generator.get_list_kwargs())
 
     def _render_template(self, selected_entry, **kwargs):
-        return self.view_class.render_template(self.template, self._conf, event=self.event_new, **kwargs)
+        return self.view_class.render_template(self.template, self.event, selected_entry=selected_entry, **kwargs)

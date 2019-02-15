@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,22 +16,24 @@
 
 from __future__ import unicode_literals
 
-from flask import redirect
+from flask import redirect, request
 
 from indico.modules.categories.compat import compat_category
 from indico.modules.categories.controllers.admin import RHManageUpcomingEvents
-from indico.modules.categories.controllers.display import (RHCategoryStatistics, RHCategoryIcon, RHCategoryLogo,
-                                                           RHCategoryInfo, RHCategorySearch, RHCategoryOverview,
+from indico.modules.categories.controllers.display import (RHCategoryCalendarView, RHCategoryIcon, RHCategoryInfo,
+                                                           RHCategoryLogo, RHCategoryOverview, RHCategorySearch,
+                                                           RHCategoryStatistics, RHCategoryUpcomingEvent,
                                                            RHDisplayCategory, RHEventList, RHExportCategoryAtom,
                                                            RHExportCategoryICAL, RHReachableCategoriesInfo,
-                                                           RHShowPastEventsInCategory, RHSubcatInfo,
-                                                           RHXMLExportCategoryInfo, RHCategoryCalendarView)
+                                                           RHShowFutureEventsInCategory, RHShowPastEventsInCategory,
+                                                           RHSubcatInfo, RHXMLExportCategoryInfo)
 from indico.modules.categories.controllers.management import (RHCreateCategory, RHDeleteCategory, RHDeleteEvents,
                                                               RHDeleteSubcategories, RHManageCategoryContent,
                                                               RHManageCategoryIcon, RHManageCategoryLogo,
                                                               RHManageCategoryProtection, RHManageCategorySettings,
                                                               RHMoveCategory, RHMoveEvents, RHMoveSubcategories,
                                                               RHSortSubcategories, RHSplitCategory)
+from indico.modules.users import User
 from indico.web.flask.util import make_compat_redirect_func, redirect_view, url_for
 from indico.web.flask.wrappers import IndicoBlueprint
 
@@ -76,10 +78,12 @@ _bp.add_url_rule('/info', 'info', RHCategoryInfo)
 _bp.add_url_rule('/info-from', 'info_from', RHReachableCategoriesInfo, methods=('GET', 'POST'))
 _bp.add_url_rule('/logo-<slug>.png', 'display_logo', RHCategoryLogo)
 _bp.add_url_rule('/overview', 'overview', RHCategoryOverview)
+_bp.add_url_rule('/show-future-events', 'show_future_events', RHShowFutureEventsInCategory, methods=('DELETE', 'PUT'))
 _bp.add_url_rule('/show-past-events', 'show_past_events', RHShowPastEventsInCategory, methods=('DELETE', 'PUT'))
 _bp.add_url_rule('/statistics', 'statistics', RHCategoryStatistics)
 _bp.add_url_rule('/subcat-info', 'subcat_info', RHSubcatInfo)
 _bp.add_url_rule('/calendar', 'calendar', RHCategoryCalendarView)
+_bp.add_url_rule('/upcoming', 'upcoming_event', RHCategoryUpcomingEvent)
 
 # Event creation - redirect to anchor page opening the dialog
 _bp.add_url_rule('/create/event/<any(lecture,meeting,conference):event_type>', view_func=_redirect_event_creation)
@@ -96,6 +100,14 @@ _bp.add_url_rule('!/category/search', 'search', RHCategorySearch)
 
 # Administration
 _bp.add_url_rule('!/admin/upcoming-events', 'manage_upcoming', RHManageUpcomingEvents, methods=('GET', 'POST'))
+
+
+@_bp.before_request
+def _redirect_to_bootstrap():
+    # No users in Indico yet? Redirect from index page to bootstrap form
+    if (request.endpoint == 'categories.display' and not request.view_args['category_id'] and
+            not User.query.filter_by(is_system=False).has_rows()):
+        return redirect(url_for('bootstrap.index'))
 
 
 _compat_bp = IndicoBlueprint('compat_categories', __name__)

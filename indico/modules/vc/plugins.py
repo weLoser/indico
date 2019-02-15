@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -15,19 +15,19 @@
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import unicode_literals
+
 import re
 
 from flask import render_template
 from flask_pluginengine import render_plugin_template
 
 from indico.core import signals
-from indico.util.decorators import classproperty
 from indico.modules.events.contributions import Contribution
 from indico.modules.events.sessions.models.blocks import SessionBlock
 from indico.modules.vc.forms import VCPluginSettingsFormBase
 from indico.modules.vc.models.vc_rooms import VCRoomLinkType
+from indico.util.decorators import classproperty
 from indico.util.string import remove_accents
-from indico.util.user import retrieve_principal
 from indico.web.flask.templating import get_overridable_template_name
 from indico.web.forms.base import FormDefaults
 
@@ -37,7 +37,6 @@ PREFIX_RE = re.compile('^vc_')
 
 class VCPluginMixin(object):
     settings_form = VCPluginSettingsFormBase
-    strict_settings = True
     default_settings = {'notification_emails': []}
     acl_settings = {'acl', 'managers'}
     #: the :class:`IndicoForm` to use for the videoconference room form
@@ -109,8 +108,7 @@ class VCPluginMixin(object):
         :param kwargs: arguments passed to the template
         """
         return render_plugin_template('{}:info_box.html'.format(self.name), plugin=self, event_vc_room=event_vc_room,
-                                      event=event, vc_room=vc_room, retrieve_principal=retrieve_principal,
-                                      settings=self.settings, **kwargs)
+                                      event=event, vc_room=vc_room, settings=self.settings, **kwargs)
 
     def render_manage_event_info_box(self, vc_room, event_vc_room, event, **kwargs):
         """Renders the information shown in the expandable box on a VC room in the management area
@@ -122,7 +120,7 @@ class VCPluginMixin(object):
         """
         return render_plugin_template('{}:manage_event_info_box.html'.format(self.name), plugin=self,
                                       event_vc_room=event_vc_room, event=event, vc_room=vc_room,
-                                      retrieve_principal=retrieve_principal, settings=self.settings, **kwargs)
+                                      settings=self.settings, **kwargs)
 
     def render_buttons(self, vc_room, event_vc_room, **kwargs):
         """Renders a list of plugin specific buttons (eg: Join URL, etc) in the management area
@@ -143,7 +141,7 @@ class VCPluginMixin(object):
         """
         name = get_overridable_template_name('event_buttons.html', self, core_prefix='vc/')
         return render_template(name, plugin=self, vc_room=vc_room, event_vc_room=event_vc_room,
-                               event=event_vc_room.event_new, **kwargs)
+                               event=event_vc_room.event, **kwargs)
 
     def create_form(self, event, existing_vc_room=None, existing_event_vc_room=None):
         """Creates the videoconference room form
@@ -213,7 +211,7 @@ class VCPluginMixin(object):
         """Checks if a user can manage a vc room"""
         return (user.is_admin or
                 self.can_manage_vc(user) or
-                any(evt_assoc.event_new.can_manage(user) for evt_assoc in room.events))
+                any(evt_assoc.event.can_manage(user) for evt_assoc in room.events))
 
     def can_manage_vc(self, user):
         """Checks if a user has management rights on this VC system"""

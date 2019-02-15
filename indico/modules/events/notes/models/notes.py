@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,7 +19,7 @@ from __future__ import unicode_literals
 from functools import partial
 
 from flask import g
-from sqlalchemy.event import listens_for, listen
+from sqlalchemy.event import listen, listens_for
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import joinedload
 
@@ -30,12 +30,12 @@ from indico.core.db.sqlalchemy.links import LinkMixin, LinkType
 from indico.core.db.sqlalchemy.util.models import auto_table_args
 from indico.util.date_time import now_utc
 from indico.util.locators import locator_property
-from indico.util.string import return_ascii, render_markdown, text_to_repr
+from indico.util.string import render_markdown, return_ascii, text_to_repr
 
 
 class EventNote(LinkMixin, db.Model):
     __tablename__ = 'notes'
-    allowed_link_types = LinkMixin.allowed_link_types - {LinkType.category}
+    allowed_link_types = LinkMixin.allowed_link_types - {LinkType.category, LinkType.session_block}
     unique_links = True
     events_backref_name = 'all_notes'
     link_backref_name = 'note'
@@ -105,7 +105,7 @@ class EventNote(LinkMixin, db.Model):
                               be pre-loaded and cached in the app
                               context.
         """
-        event = linked_object.event_new
+        event = linked_object.event
         try:
             return g.event_notes[event].get(linked_object)
         except (AttributeError, KeyError):

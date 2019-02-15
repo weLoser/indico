@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,22 +16,30 @@
 
 from __future__ import unicode_literals
 
+import csv
 from collections import defaultdict
+from datetime import timedelta
 from io import BytesIO
 from operator import attrgetter
 
-from sqlalchemy.orm import load_only, contains_eager, noload, joinedload
+import dateutil.parser
+from sqlalchemy.orm import contains_eager, joinedload, load_only, noload
 
 from indico.core.db import db
+from indico.core.errors import UserValueError
 from indico.modules.attachments.util import get_attached_items
 from indico.modules.events.contributions.models.contributions import Contribution
 from indico.modules.events.contributions.models.persons import ContributionPersonLink, SubContributionPersonLink
 from indico.modules.events.contributions.models.principals import ContributionPrincipal
 from indico.modules.events.contributions.models.subcontributions import SubContribution
+from indico.modules.events.contributions.operations import create_contribution
 from indico.modules.events.models.events import Event
 from indico.modules.events.models.persons import EventPerson
-from indico.modules.events.util import serialize_person_link
-from indico.util.date_time import format_human_timedelta, format_datetime
+from indico.modules.events.persons.util import get_event_person
+from indico.modules.events.util import serialize_person_link, track_time_changes
+from indico.util.date_time import format_human_timedelta
+from indico.util.i18n import _
+from indico.util.string import to_unicode, validate_email
 from indico.web.flask.templating import get_template_module
 from indico.web.flask.util import url_for
 from indico.web.http_api.metadata.serializer import Serializer
@@ -47,7 +55,7 @@ def get_events_with_linked_contributions(user, dt=None):
     """
     def add_acl_data():
         query = (user.in_contribution_acls
-                 .options(load_only('contribution_id', 'roles', 'full_access', 'read_access'))
+                 .options(load_only('contribution_id', 'permissions', 'full_access', 'read_access'))
                  .options(noload('*'))
                  .options(contains_eager(ContributionPrincipal.contribution).load_only('event_id'))
                  .join(Contribution)
@@ -55,7 +63,7 @@ def get_events_with_linked_contributions(user, dt=None):
                  .filter(~Contribution.is_deleted, ~Event.is_deleted, Event.ends_after(dt)))
         for principal in query:
             roles = data[principal.contribution.event_id]
-            if 'submit' in principal.roles:
+            if 'submit' in principal.permissions:
                 roles.add('contribution_submission')
             if principal.full_access:
                 roles.add('contribution_manager')
@@ -103,12 +111,12 @@ def generate_spreadsheet_from_contributions(contributions):
     for c in sorted(contributions, key=attrgetter('friendly_id')):
         contrib_data = {'Id': c.friendly_id, 'Title': c.title, 'Description': c.description,
                         'Duration': format_human_timedelta(c.duration),
-                        'Date': format_datetime(c.timetable_entry.start_dt) if c.timetable_entry else None,
+                        'Date': c.timetable_entry.start_dt if c.timetable_entry else None,
                         'Type': c.type.name if c.type else None,
                         'Session': c.session.title if c.session else None,
                         'Track': c.track.title if c.track else None,
                         'Materials': None,
-                        'Presenters': ', '.join(speaker.person.full_name for speaker in c.speakers)}
+                        'Presenters': ', '.join(speaker.full_name for speaker in c.speakers)}
 
         attachments = []
         attached_items = get_attached_items(c)
@@ -154,7 +162,7 @@ def contribution_type_row(contrib_type):
 
 def _query_contributions_with_user_as_submitter(event, user):
     return (Contribution.query.with_parent(event)
-            .filter(Contribution.acl_entries.any(db.and_(ContributionPrincipal.has_management_role('submit'),
+            .filter(Contribution.acl_entries.any(db.and_(ContributionPrincipal.has_management_permission('submit'),
                                                          ContributionPrincipal.user == user))))
 
 
@@ -189,3 +197,83 @@ def get_contribution_ical_file(contrib):
     data = {'results': serialize_contribution_for_ical(contrib)}
     serializer = Serializer.create('ics')
     return BytesIO(serializer(data))
+
+
+def import_contributions_from_csv(event, f):
+    """Import timetable contributions from a CSV file into an event."""
+    reader = csv.reader(f.read().splitlines())
+    contrib_data = []
+
+    for num_row, row in enumerate(reader, 1):
+        try:
+            start_dt, duration, title, first_name, last_name, affiliation, email = \
+                [to_unicode(value).strip() for value in row]
+            email = email.lower()
+        except ValueError:
+            raise UserValueError(_('Row {}: malformed CSV data - please check that the number of columns is correct')
+                                 .format(num_row))
+        try:
+            parsed_start_dt = event.tzinfo.localize(dateutil.parser.parse(start_dt)) if start_dt else None
+        except ValueError:
+            raise UserValueError(_("Row {row}: can't parse date: \"{date}\"").format(row=num_row, date=start_dt))
+
+        try:
+            parsed_duration = timedelta(minutes=int(duration)) if duration else None
+        except ValueError:
+            raise UserValueError(_("Row {row}: can't parse duration: {duration}").format(row=num_row,
+                                                                                         duration=duration))
+
+        if not title:
+            raise UserValueError(_("Row {}: contribution title is required").format(num_row))
+
+        if email and not validate_email(email):
+            raise UserValueError(_("Row {row}: invalid email address: {email}").format(row=num_row, email=email))
+
+        contrib_data.append({
+            'start_dt': parsed_start_dt,
+            'duration': parsed_duration or timedelta(minutes=20),
+            'title': title,
+            'speaker': {
+                'first_name': first_name,
+                'last_name': last_name,
+                'affiliation': affiliation,
+                'email': email
+            }
+        })
+
+    # now that we're sure the data is OK, let's pre-allocate the friendly ids
+    # for the contributions in question
+    Contribution.allocate_friendly_ids(event, len(contrib_data))
+    contributions = []
+    all_changes = defaultdict(list)
+
+    for contrib_fields in contrib_data:
+        speaker_data = contrib_fields.pop('speaker')
+
+        with track_time_changes() as changes:
+            contribution = create_contribution(event, contrib_fields, extend_parent=True)
+
+        contributions.append(contribution)
+        for key, val in changes[event].viewitems():
+            all_changes[key].append(val)
+
+        email = speaker_data['email']
+        if not email:
+            continue
+
+        # set the information of the speaker
+        person = get_event_person(event, {
+            'firstName': speaker_data['first_name'],
+            'familyName': speaker_data['last_name'],
+            'affiliation': speaker_data['affiliation'],
+            'email': email
+        })
+        link = ContributionPersonLink(person=person, is_speaker=True)
+        link.populate_from_dict({
+            'first_name': speaker_data['first_name'],
+            'last_name': speaker_data['last_name'],
+            'affiliation': speaker_data['affiliation']
+        })
+        contribution.person_links.append(link)
+
+    return contributions, all_changes

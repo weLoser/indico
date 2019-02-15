@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,33 +16,19 @@
 
 from __future__ import unicode_literals
 
-from MaKaC.webinterface.meeting import WPMeetingDisplay
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.conferences import WPConferenceModifBase, WPConferenceDefaultDisplayBase
-from MaKaC.webinterface.simple_event import WPSimpleEventDisplay
+from indico.modules.events.management.views import WPEventManagement
+from indico.modules.events.views import WPConferenceDisplayBase, WPSimpleEventDisplayBase
+from indico.web.views import WPJinjaMixin
 
 
-class WPManageSurvey(WPJinjaMixin, WPConferenceModifBase):
+class WPManageSurvey(WPEventManagement):
     template_prefix = 'events/surveys/'
     sidemenu_option = 'surveys'
-
-    def getJSFiles(self):
-        return WPConferenceModifBase.getJSFiles(self) + self._asset_env['modules_surveys_js'].urls()
-
-    def getCSSFiles(self):
-        return WPConferenceModifBase.getCSSFiles(self) + self._asset_env['surveys_sass'].urls()
+    bundles = ('module_events.surveys.js', 'module_events.surveys.css')
 
 
 class WPSurveyResults(WPManageSurvey):
-    template_prefix = 'events/surveys/'
-
-    def getCSSFiles(self):
-        return (WPManageSurvey.getCSSFiles(self) +
-                self._asset_env['chartist_css'].urls())
-
-    def getJSFiles(self):
-        return (WPManageSurvey.getJSFiles(self) +
-                self._asset_env['chartist_js'].urls())
+    pass
 
 
 class DisplaySurveyMixin(WPJinjaMixin):
@@ -52,24 +38,15 @@ class DisplaySurveyMixin(WPJinjaMixin):
     def _getBody(self, params):
         return WPJinjaMixin._getPageContent(self, params)
 
-    def getJSFiles(self):
-        return self.base_class.getJSFiles(self) + self._asset_env['modules_surveys_js'].urls()
 
-    def getCSSFiles(self):
-        return self.base_class.getCSSFiles(self) + self._asset_env['surveys_sass'].urls()
-
-
-class WPDisplaySurveyConference(DisplaySurveyMixin, WPConferenceDefaultDisplayBase):
+class WPDisplaySurveyConference(DisplaySurveyMixin, WPConferenceDisplayBase):
     template_prefix = 'events/surveys/'
-    base_class = WPConferenceDefaultDisplayBase
+    base_class = WPConferenceDisplayBase
     menu_entry_name = 'surveys'
+    bundles = ('module_events.surveys.js', 'module_events.surveys.css')
 
 
-class WPDisplaySurveyMeeting(DisplaySurveyMixin, WPMeetingDisplay):
+class WPDisplaySurveySimpleEvent(DisplaySurveyMixin, WPSimpleEventDisplayBase):
     template_prefix = 'events/surveys/'
-    base_class = WPMeetingDisplay
-
-
-class WPDisplaySurveyLecture(DisplaySurveyMixin, WPSimpleEventDisplay):
-    template_prefix = 'events/surveys/'
-    base_class = WPSimpleEventDisplay
+    base_class = WPSimpleEventDisplayBase
+    bundles = ('module_events.surveys.js', 'module_events.surveys.css')

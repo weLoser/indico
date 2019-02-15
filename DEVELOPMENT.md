@@ -6,8 +6,6 @@ It's dangerous to go alone. Take these tips in case you need to fit Indico to yo
 Use `indico db prepare` to create your tables based on the SQLAlchemy models and set the migration status to the most
 recent alembic revision.
 
-If you want to import data from ZODB, run `bin/migration/migrate_to_sqlalchemy.py` with the appropriate arguments.
-
 
 ## SQL Database migrations
 Whenever you modify the database structure or want to perform data migrations, create an alembic revision.
@@ -25,7 +23,7 @@ acceptable as long as it's data that didn't exist before that revision. Please m
 directions!
 
 When adding a new column that is not nullable, you need to add it in two steps: First create it with a `server_default`
-value set to whatever default value you want. Afterwars, use the `alter_column` operation to remove the default value.
+value set to whatever default value you want. Afterwards, use the `alter_column` operation to remove the default value.
 While keeping it would not hurt, it's better to stay in sync with the SQLAlchemy model!
 
 

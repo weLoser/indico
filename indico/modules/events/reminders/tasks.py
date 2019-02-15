@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,25 +18,20 @@ from __future__ import unicode_literals
 
 from celery.schedules import crontab
 
-from indico.core.db import db
-from indico.util.date_time import now_utc
 from indico.core.celery import celery
+from indico.core.db import db
 from indico.modules.events import Event
 from indico.modules.events.reminders import logger
 from indico.modules.events.reminders.models.reminders import EventReminder
+from indico.util.date_time import now_utc
 
 
 @celery.periodic_task(name='event_reminders', run_every=crontab(minute='*/5'))
 def send_event_reminders():
     reminders = EventReminder.find_all(~EventReminder.is_sent, ~Event.is_deleted,
                                        EventReminder.scheduled_dt <= now_utc(),
-                                       _join=EventReminder.event_new)
-    try:
-        for reminder in reminders:
-            logger.info('Sending event reminder: %s', reminder)
-            reminder.send()
-    finally:
-        # If we fail at any point during the loop, we'll still commit
-        # the is_sent change for already-sent reminders instead of
-        # sending them over and over and thus spamming people.
-        db.session.commit()
+                                       _join=EventReminder.event)
+    for reminder in reminders:
+        logger.info('Sending event reminder: %s', reminder)
+        reminder.send()
+    db.session.commit()

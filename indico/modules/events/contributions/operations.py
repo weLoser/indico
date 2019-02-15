@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,20 +16,20 @@
 
 from __future__ import unicode_literals
 
-from datetime import timedelta
-
 from flask import session
 
 from indico.core import signals
 from indico.core.db import db
 from indico.core.db.sqlalchemy.util.session import no_autoflush
-from indico.modules.events.contributions import logger
-from indico.modules.events.contributions.models.subcontributions import SubContribution
+from indico.modules.attachments.models.attachments import Attachment, AttachmentFile, AttachmentType
+from indico.modules.attachments.models.folders import AttachmentFolder
+from indico.modules.events.contributions import contribution_settings, logger
 from indico.modules.events.contributions.models.contributions import Contribution
 from indico.modules.events.contributions.models.persons import ContributionPersonLink
-from indico.modules.events.logs.models.entries import EventLogRealm, EventLogKind
-from indico.modules.events.timetable.operations import (schedule_contribution, update_timetable_entry,
-                                                        delete_timetable_entry)
+from indico.modules.events.contributions.models.subcontributions import SubContribution
+from indico.modules.events.logs.models.entries import EventLogKind, EventLogRealm
+from indico.modules.events.timetable.operations import (delete_timetable_entry, schedule_contribution,
+                                                        update_timetable_entry)
 from indico.modules.events.util import set_custom_fields
 
 
@@ -62,18 +62,19 @@ def _ensure_consistency(contrib):
 
 
 def create_contribution(event, contrib_data, custom_fields_data=None, session_block=None, extend_parent=False):
+    user = session.user if session else None
     start_dt = contrib_data.pop('start_dt', None)
-    contrib = Contribution(event_new=event)
+    contrib = Contribution(event=event)
     contrib.populate_from_dict(contrib_data)
-    if start_dt is not None:
-        schedule_contribution(contrib, start_dt=start_dt, session_block=session_block, extend_parent=extend_parent)
     if custom_fields_data:
         set_custom_fields(contrib, custom_fields_data)
     db.session.flush()
+    if start_dt is not None:
+        schedule_contribution(contrib, start_dt=start_dt, session_block=session_block, extend_parent=extend_parent)
     signals.event.contribution_created.send(contrib)
-    logger.info('Contribution %s created by %s', contrib, session.user)
-    contrib.event_new.log(EventLogRealm.management, EventLogKind.positive, 'Contributions',
-                          'Contribution "{}" has been created'.format(contrib.title), session.user)
+    logger.info('Contribution %s created by %s', contrib, user)
+    contrib.event.log(EventLogRealm.management, EventLogKind.positive, 'Contributions',
+                      'Contribution "{}" has been created'.format(contrib.title), user)
     return contrib
 
 
@@ -112,8 +113,8 @@ def update_contribution(contrib, contrib_data, custom_fields_data=None):
     if changes:
         signals.event.contribution_updated.send(contrib, changes=changes)
         logger.info('Contribution %s updated by %s', contrib, session.user)
-        contrib.event_new.log(EventLogRealm.management, EventLogKind.change, 'Contributions',
-                              'Contribution "{}" has been updated'.format(contrib.title), session.user)
+        contrib.event.log(EventLogRealm.management, EventLogKind.change, 'Contributions',
+                          'Contribution "{}" has been updated'.format(contrib.title), session.user)
     return rv
 
 
@@ -124,8 +125,8 @@ def delete_contribution(contrib):
     db.session.flush()
     signals.event.contribution_deleted.send(contrib)
     logger.info('Contribution %s deleted by %s', contrib, session.user)
-    contrib.event_new.log(EventLogRealm.management, EventLogKind.negative, 'Contributions',
-                          'Contribution "{}" has been deleted'.format(contrib.title), session.user)
+    contrib.event.log(EventLogRealm.management, EventLogKind.negative, 'Contributions',
+                      'Contribution "{}" has been deleted'.format(contrib.title), session.user)
 
 
 def create_subcontribution(contrib, data):
@@ -135,8 +136,8 @@ def create_subcontribution(contrib, data):
     db.session.flush()
     signals.event.subcontribution_created.send(subcontrib)
     logger.info('Subcontribution %s created by %s', subcontrib, session.user)
-    subcontrib.event_new.log(EventLogRealm.management, EventLogKind.positive, 'Subcontributions',
-                             'Subcontribution "{}" has been created'.format(subcontrib.title), session.user)
+    subcontrib.event.log(EventLogRealm.management, EventLogKind.positive, 'Subcontributions',
+                         'Subcontribution "{}" has been created'.format(subcontrib.title), session.user)
     return subcontrib
 
 
@@ -145,8 +146,8 @@ def update_subcontribution(subcontrib, data):
     db.session.flush()
     signals.event.subcontribution_updated.send(subcontrib)
     logger.info('Subcontribution %s updated by %s', subcontrib, session.user)
-    subcontrib.event_new.log(EventLogRealm.management, EventLogKind.change, 'Subcontributions',
-                             'Subcontribution "{}" has been updated'.format(subcontrib.title), session.user)
+    subcontrib.event.log(EventLogRealm.management, EventLogKind.change, 'Subcontributions',
+                         'Subcontribution "{}" has been updated'.format(subcontrib.title), session.user)
 
 
 def delete_subcontribution(subcontrib):
@@ -154,13 +155,15 @@ def delete_subcontribution(subcontrib):
     db.session.flush()
     signals.event.subcontribution_deleted.send(subcontrib)
     logger.info('Subcontribution %s deleted by %s', subcontrib, session.user)
-    subcontrib.event_new.log(EventLogRealm.management, EventLogKind.negative, 'Subcontributions',
-                             'Subcontribution "{}" has been deleted'.format(subcontrib.title), session.user)
+    subcontrib.event.log(EventLogRealm.management, EventLogKind.negative, 'Subcontributions',
+                         'Subcontribution "{}" has been deleted'.format(subcontrib.title), session.user)
 
 
 @no_autoflush
 def create_contribution_from_abstract(abstract, contrib_session=None):
-    event = abstract.event_new
+    from indico.modules.events.abstracts.settings import abstracts_settings
+
+    event = abstract.event
     contrib_person_links = set()
     person_link_attrs = {'_title', 'address', 'affiliation', 'first_name', 'last_name', 'phone', 'author_type',
                          'is_speaker', 'display_order'}
@@ -169,15 +172,29 @@ def create_contribution_from_abstract(abstract, contrib_session=None):
         link.populate_from_attrs(abstract_person_link, person_link_attrs)
         contrib_person_links.add(link)
 
-    duration = contrib_session.default_contribution_duration if contrib_session else timedelta(minutes=15)
+    if contrib_session:
+        duration = contrib_session.default_contribution_duration
+    else:
+        duration = contribution_settings.get(event, 'default_duration')
     custom_fields_data = {'custom_{}'.format(field_value.contribution_field.id): field_value.data for
                           field_value in abstract.field_values}
-    return create_contribution(event, {'friendly_id': abstract.friendly_id,
-                                       'title': abstract.title,
-                                       'duration': duration,
-                                       'description': abstract.description,
-                                       'type': abstract.accepted_contrib_type,
-                                       'track': abstract.accepted_track,
-                                       'session': contrib_session,
-                                       'person_link_data': {link: True for link in contrib_person_links}},
-                               custom_fields_data=custom_fields_data)
+    contrib = create_contribution(event, {'friendly_id': abstract.friendly_id,
+                                          'title': abstract.title,
+                                          'duration': duration,
+                                          'description': abstract.description,
+                                          'type': abstract.accepted_contrib_type,
+                                          'track': abstract.accepted_track,
+                                          'session': contrib_session,
+                                          'person_link_data': {link: True for link in contrib_person_links}},
+                                  custom_fields_data=custom_fields_data)
+    if abstracts_settings.get(event, 'copy_attachments') and abstract.files:
+        folder = AttachmentFolder.get_or_create_default(contrib)
+        for abstract_file in abstract.files:
+            attachment = Attachment(user=abstract.submitter, type=AttachmentType.file, folder=folder,
+                                    title=abstract_file.filename)
+            attachment.file = AttachmentFile(user=abstract.submitter, filename=abstract_file.filename,
+                                             content_type=abstract_file.content_type)
+            with abstract_file.open() as fd:
+                attachment.file.save(fd)
+    db.session.flush()
+    return contrib

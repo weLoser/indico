@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,7 +20,7 @@ import re
 from operator import attrgetter
 
 from flask import render_template
-from markupsafe import escape, Markup
+from markupsafe import Markup, escape
 
 from indico.core import signals
 from indico.util.decorators import classproperty
@@ -122,7 +122,7 @@ class ParametrizedPlaceholder(Placeholder):
 
     @classmethod
     def get_regex(cls, **kwargs):
-        param_regex = ('|'.join(re.escape(x[0]) for x in cls.iter_param_info(**kwargs))
+        param_regex = ('|'.join(re.escape(x[0]) for x in cls.iter_param_info(**kwargs) if x[0] is not None)
                        if cls.param_restricted else '[^}]+')
         regex = r'\{%s:(%s)}' if cls.param_required else r'\{%s(?::(%s))?}'
         return re.compile(regex % (re.escape(cls.name), param_regex))
@@ -152,7 +152,7 @@ class ParametrizedPlaceholder(Placeholder):
         raise NotImplementedError
 
 
-def _get_placeholders(context, **kwargs):
+def get_placeholders(context, **kwargs):
     return named_objects_from_signal(signals.get_placeholders.send(context, **kwargs))
 
 
@@ -164,7 +164,7 @@ def replace_placeholders(context, text, escape_html=True, **kwargs):
     :param escape_html: whether HTML escaping should be done
     :param kwargs: arguments specific to the context
     """
-    for name, placeholder in _get_placeholders(context, **kwargs).iteritems():
+    for name, placeholder in get_placeholders(context, **kwargs).iteritems():
         text = placeholder.replace(text, escape_html=escape_html, **kwargs)
     return text
 
@@ -176,7 +176,7 @@ def get_missing_placeholders(context, text, **kwargs):
     :param text: the text to check
     :param kwargs: arguments specific to the context
     """
-    placeholders = {p for p in _get_placeholders(context, **kwargs).itervalues() if p.required}
+    placeholders = {p for p in get_placeholders(context, **kwargs).itervalues() if p.required}
     return {p.friendly_name for p in placeholders if not p.is_in(text, **kwargs)}
 
 
@@ -186,6 +186,6 @@ def render_placeholder_info(context, **kwargs):
     :param context: the context where the placeholders are used
     :param kwargs: arguments specific to the context
     """
-    placeholders = sorted(_get_placeholders(context, **kwargs).values(), key=attrgetter('name'))
+    placeholders = sorted(get_placeholders(context, **kwargs).values(), key=attrgetter('name'))
     return Markup(render_template('placeholder_info.html', placeholder_kwargs=kwargs, placeholders=placeholders,
                                   ParametrizedPlaceholder=ParametrizedPlaceholder))

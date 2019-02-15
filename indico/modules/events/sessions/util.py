@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -22,25 +22,28 @@ from io import BytesIO
 from flask import session
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
-from reportlab.lib.pagesizes import landscape, A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.platypus import Table, TableStyle
-from sqlalchemy.orm import joinedload, load_only, contains_eager, noload
+from sqlalchemy.orm import contains_eager, joinedload, load_only, noload
 
 from indico.core.db import db
+from indico.legacy.pdfinterface.base import Paragraph, PDFBase
 from indico.modules.events import Event
-from indico.modules.events.sessions.models.sessions import Session
 from indico.modules.events.sessions.models.principals import SessionPrincipal
+from indico.modules.events.sessions.models.sessions import Session
 from indico.util.i18n import _
+from indico.web.flask.templating import get_template_module
 from indico.web.flask.util import url_for
-from MaKaC.PDFinterface.base import PDFBase, Paragraph
+from indico.web.util import jsonify_data
 
 
-def can_manage_sessions(user, event, role=None):
+def can_manage_sessions(user, event, permission=None):
     """Check whether a user can manage any sessions in an event"""
     if event.can_manage(user):
         return True
-    return any(s.can_manage(user, role) for s in Session.query.with_parent(event).options(joinedload('acl_entries')))
+    return any(s.can_manage(user, permission)
+               for s in Session.query.with_parent(event).options(joinedload('acl_entries')))
 
 
 def generate_spreadsheet_from_sessions(sessions):
@@ -48,16 +51,19 @@ def generate_spreadsheet_from_sessions(sessions):
 
     :param sessions: The sessions to include in the spreadsheet
     """
-    column_names = ['ID', 'Title', 'Description', 'Code']
-    rows = [{'ID': sess.friendly_id, 'Title': sess.title, 'Description': sess.description, 'Code': sess.code}
+    column_names = ['ID', 'Title', 'Description', 'Type', 'Code']
+    rows = [{'ID': sess.friendly_id,
+             'Title': sess.title,
+             'Description': sess.description,
+             'Type': sess.type.name if sess.type else None,
+             'Code': sess.code}
             for sess in sessions]
     return column_names, rows
 
 
 class SessionListToPDF(PDFBase):
-    def __init__(self, conf, sessions):
+    def __init__(self, sessions):
         PDFBase.__init__(self, story=[])
-        self.conf = conf
         self.sessions = sessions
         self.PAGE_WIDTH, self.PAGE_HEIGHT = landscape(A4)
 
@@ -81,7 +87,7 @@ class SessionListToPDF(PDFBase):
         for sess in self.sessions:
             rows.append([
                 Paragraph(sess.friendly_id, text_style),
-                Paragraph(_('Poster') if sess.is_poster else _('Standard'), text_style),
+                Paragraph(sess.type.name.encode('utf-8') if sess.type else '', text_style),
                 Paragraph(sess.title.encode('utf-8'), text_style),
                 Paragraph(sess.code.encode('utf-8'), text_style),
                 Paragraph(sess.description.encode('utf-8'), text_style)
@@ -98,9 +104,9 @@ class SessionListToPDF(PDFBase):
         return story
 
 
-def generate_pdf_from_sessions(event, sessions):
+def generate_pdf_from_sessions(sessions):
     """Generate a PDF file from a given session list"""
-    pdf = SessionListToPDF(event.as_legacy, sessions)
+    pdf = SessionListToPDF(sessions)
     return BytesIO(pdf.getPDFBin())
 
 
@@ -127,7 +133,7 @@ def get_events_with_linked_sessions(user, dt=None):
     :param dt: Only include events taking place on/after that date
     """
     query = (user.in_session_acls
-             .options(load_only('session_id', 'roles', 'full_access', 'read_access'))
+             .options(load_only('session_id', 'permissions', 'full_access', 'read_access'))
              .options(noload('*'))
              .options(contains_eager(SessionPrincipal.session).load_only('event_id'))
              .join(Session)
@@ -136,9 +142,9 @@ def get_events_with_linked_sessions(user, dt=None):
     data = defaultdict(set)
     for principal in query:
         roles = data[principal.session.event_id]
-        if 'coordinate' in principal.roles:
+        if 'coordinate' in principal.permissions:
             roles.add('session_coordinator')
-        if 'submit' in principal.roles:
+        if 'submit' in principal.permissions:
             roles.add('session_submission')
         if principal.full_access:
             roles.add('session_manager')
@@ -149,7 +155,7 @@ def get_events_with_linked_sessions(user, dt=None):
 
 def _query_sessions_for_user(event, user):
     return (Session.query.with_parent(event)
-            .filter(Session.acl_entries.any(db.and_(SessionPrincipal.has_management_role('coordinate'),
+            .filter(Session.acl_entries.any(db.and_(SessionPrincipal.has_management_permission('coordinate'),
                                                     SessionPrincipal.user == user))))
 
 
@@ -184,14 +190,19 @@ def serialize_session_for_ical(sess):
 
 def get_session_ical_file(sess):
     from indico.web.http_api.metadata.serializer import Serializer
-    data = {'results': serialize_session_for_ical(sess)}
+    data = {'results': serialize_session_for_ical(sess) if sess.start_dt and sess.end_dt else []}
     serializer = Serializer.create('ics')
     return BytesIO(serializer(data))
 
 
 def get_session_timetable_pdf(sess, **kwargs):
-    from MaKaC.PDFinterface.conference import TimeTablePlain, TimetablePDFFormat
+    from indico.legacy.pdfinterface.conference import TimeTablePlain, TimetablePDFFormat
     pdf_format = TimetablePDFFormat(params={'coverPage': False})
-    return TimeTablePlain(sess.event_new, session.user, showSessions=[sess.id], showDays=[],
+    return TimeTablePlain(sess.event, session.user, showSessions=[sess.id], showDays=[],
                           sortingCrit=None, ttPDFFormat=pdf_format, pagesize='A4', fontsize='normal',
                           firstPageNumber=1, showSpeakerAffiliation=False, **kwargs)
+
+
+def render_session_type_row(session_type):
+    template = get_template_module('events/sessions/management/_types_table.html')
+    return template.types_table_row(session_type=session_type)

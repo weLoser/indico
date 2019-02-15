@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -25,7 +25,7 @@ from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.orm import joinedload
 
 from indico.core.db import db
-from indico.core.db.sqlalchemy.links import LinkMixin
+from indico.core.db.sqlalchemy.links import LinkMixin, LinkType
 from indico.core.db.sqlalchemy.protection import ProtectionMixin, ProtectionMode
 from indico.core.db.sqlalchemy.util.models import auto_table_args
 from indico.modules.attachments.models.attachments import Attachment
@@ -38,6 +38,7 @@ from indico.util.string import return_ascii
 
 class AttachmentFolder(LinkMixin, ProtectionMixin, db.Model):
     __tablename__ = 'folders'
+    allowed_link_types = LinkMixin.allowed_link_types - {LinkType.session_block}
     unique_links = 'is_default'
     events_backref_name = 'all_attachment_folders'
     link_backref_name = 'attachment_folders'
@@ -50,6 +51,7 @@ class AttachmentFolder(LinkMixin, ProtectionMixin, db.Model):
         return (db.CheckConstraint(default_inheriting, 'default_inheriting'),
                 db.CheckConstraint('is_default = (title IS NULL)', 'default_or_title'),
                 db.CheckConstraint('not (is_default and is_deleted)', 'default_not_deleted'),
+                db.CheckConstraint('not (is_hidden and is_always_visible)', 'is_hidden_not_is_always_visible'),
                 {'schema': 'attachments'})
 
     @declared_attr
@@ -89,6 +91,12 @@ class AttachmentFolder(LinkMixin, ProtectionMixin, db.Model):
         db.Boolean,
         nullable=False,
         default=True
+    )
+    #: If the folder is never shown in the frontend (even if you can access it)
+    is_hidden = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False
     )
 
     acl_entries = db.relationship(
@@ -159,6 +167,8 @@ class AttachmentFolder(LinkMixin, ProtectionMixin, db.Model):
         This does not mean the user can actually access its contents.
         It just determines if it is visible to him or not.
         """
+        if self.is_hidden:
+            return False
         if not self.object.can_access(user):
             return False
         return self.is_always_visible or super(AttachmentFolder, self).can_access(user)
@@ -213,9 +223,9 @@ class AttachmentFolder(LinkMixin, ProtectionMixin, db.Model):
             self.title,
             ', is_default=True' if self.is_default else '',
             ', is_always_visible=False' if not self.is_always_visible else '',
+            ', is_hidden=True' if self.is_hidden else '',
             ', is_deleted=True' if self.is_deleted else '',
-            self.protection_repr,
-            self.link_repr
+            self.protection_repr
         )
 
 

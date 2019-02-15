@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -24,7 +24,7 @@ from indico.modules.attachments.models.legacy_mapping import LegacyAttachmentFol
 from indico.modules.events import LegacyEventMapping
 from indico.util.string import is_legacy_id
 from indico.web.flask.util import url_for
-from MaKaC.webinterface.rh.base import RHSimple, RH
+from indico.web.rh import RH, RHSimple
 
 
 def _clean_args(kwargs):

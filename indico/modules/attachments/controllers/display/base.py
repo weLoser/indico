@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,8 +16,8 @@
 
 from __future__ import unicode_literals
 
-from flask import redirect, session, request
-from werkzeug.exceptions import Forbidden, BadRequest
+from flask import redirect, request, session
+from werkzeug.exceptions import BadRequest, Forbidden
 
 from indico.core import signals
 from indico.core.errors import NoReportError
@@ -31,7 +31,7 @@ from indico.web.util import jsonify_template
 class DownloadAttachmentMixin(SpecificAttachmentMixin):
     """Download an attachment"""
 
-    def _checkProtection(self):
+    def _check_access(self):
         if not self.attachment.can_access(session.user):
             raise Forbidden
 
@@ -45,8 +45,8 @@ class DownloadAttachmentMixin(SpecificAttachmentMixin):
                 raise BadRequest
             previewer = get_file_previewer(self.attachment.file)
             if not previewer:
-                raise NoReportError(_('There is no preview available for this file type. Please refresh the page.'),
-                                    http_status_code=400)
+                raise NoReportError.wrap_exc(BadRequest(_('There is no preview available for this file type. '
+                                                          'Please refresh the page.')))
             preview_content = previewer.generate_content(self.attachment)
             return jsonify_template('attachments/preview.html', attachment=self.attachment,
                                     preview_content=preview_content)

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,15 +19,13 @@ from __future__ import unicode_literals
 from operator import attrgetter
 
 from flask import session
-from sqlalchemy.orm import load_only, joinedload
+from sqlalchemy.orm import joinedload, load_only
 
+from indico.core.db import db
 from indico.modules.events import Event
-from indico.modules.events.surveys.models.surveys import Survey
 from indico.modules.events.surveys.models.submissions import SurveySubmission
 from indico.util.caching import memoize_request
-from indico.util.date_time import format_datetime
 from indico.util.spreadsheets import unique_col
-from indico.util.string import to_unicode
 from indico.web.forms.base import IndicoForm
 
 
@@ -60,12 +58,30 @@ def save_submitted_survey_to_session(submission):
 @memoize_request
 def was_survey_submitted(survey):
     """Check whether the current user has submitted a survey"""
-    if session.user and session.user.survey_submissions.filter_by(survey=survey).has_rows():
+    from indico.modules.events.surveys.models.surveys import Survey
+    query = (Survey.query.with_parent(survey.event)
+             .filter(Survey.submissions.any(db.and_(SurveySubmission.is_submitted,
+                                                    SurveySubmission.user == session.user))))
+    user_submitted_surveys = set(query)
+    if session.user and survey in user_submitted_surveys:
         return True
     submission_id = session.get('submitted_surveys', {}).get(survey.id)
     if submission_id is None:
         return False
-    return SurveySubmission.find(id=submission_id).has_rows()
+    return SurveySubmission.find(id=submission_id, is_submitted=True).has_rows()
+
+
+def is_submission_in_progress(survey):
+    """Check whether the current user has a survey submission in progress"""
+    from indico.modules.events.surveys.models.surveys import Survey
+    if session.user:
+        query = (Survey.query.with_parent(survey.event)
+                 .filter(Survey.submissions.any(db.and_(~SurveySubmission.is_submitted,
+                                                        SurveySubmission.user == session.user))))
+        user_incomplete_surveys = set(query)
+        return survey in user_incomplete_surveys
+    else:
+        return False
 
 
 def generate_spreadsheet_from_survey(survey, submission_ids):
@@ -74,7 +90,7 @@ def generate_spreadsheet_from_survey(survey, submission_ids):
     :param survey: `Survey` for which the user wants to export submissions
     :param submission_ids: The list of submissions to include in the file
     """
-    field_names = ['Submitter', 'Submission Date']
+    field_names = ['Submitter', 'Submitter Email', 'Submission Date']
     sorted_questions = sorted(survey.questions, key=attrgetter('parent.position', 'position'))
     field_names += [unique_col(_format_title(question), question.id) for question in sorted_questions]
 
@@ -82,8 +98,9 @@ def generate_spreadsheet_from_survey(survey, submission_ids):
     rows = []
     for submission in submissions:
         submission_dict = {
-            'Submitter': submission.user.full_name if submission.user else None,
-            'Submission Date': to_unicode(format_datetime(submission.submitted_dt)),
+            'Submitter': submission.user.full_name if not submission.is_anonymous else None,
+            'Submitter Email': submission.user.email if not submission.is_anonymous else None,
+            'Submission Date': submission.submitted_dt,
         }
         for key in field_names:
             submission_dict.setdefault(key, '')
@@ -104,7 +121,7 @@ def _format_title(question):
 def _filter_submissions(survey, submission_ids):
     if submission_ids:
         return SurveySubmission.find_all(SurveySubmission.id.in_(submission_ids), survey=survey)
-    return survey.submissions
+    return [x for x in survey.submissions if x.is_submitted]
 
 
 def get_events_with_submitted_surveys(user, dt=None):
@@ -114,6 +131,7 @@ def get_events_with_submitted_surveys(user, dt=None):
     :param dt: Only include events taking place on/after that date
     :return: A set of event ids
     """
+    from indico.modules.events.surveys.models.surveys import Survey
     # Survey submissions are not stored in links anymore, so we need to get them directly
     query = (user.survey_submissions
              .options(load_only('survey_id'))
@@ -122,3 +140,12 @@ def get_events_with_submitted_surveys(user, dt=None):
              .join(Event)
              .filter(~Survey.is_deleted, ~Event.is_deleted, Event.ends_after(dt)))
     return {submission.survey.event_id for submission in query}
+
+
+def query_active_surveys(event):
+    from indico.modules.events.surveys.models.surveys import Survey
+    private_criterion = ~Survey.private
+    if session.user:
+        user_pending_criterion = ~SurveySubmission.is_submitted & (SurveySubmission.user == session.user)
+        private_criterion |= Survey.submissions.any(user_pending_criterion)
+    return Survey.query.with_parent(event).filter(Survey.is_active, private_criterion)

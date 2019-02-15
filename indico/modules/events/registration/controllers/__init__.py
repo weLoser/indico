@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,7 +20,7 @@ from flask import flash, redirect, request, session
 from sqlalchemy.orm import defaultload
 
 from indico.modules.events.registration.models.forms import RegistrationForm
-from indico.modules.events.registration.util import modify_registration, get_event_section_data, make_registration_form
+from indico.modules.events.registration.util import get_event_section_data, make_registration_form, modify_registration
 from indico.util.string import camelize_keys
 
 
@@ -33,7 +33,7 @@ class RegistrationFormMixin:
         }
     }
 
-    def _checkParams(self):
+    def _process_args(self):
         self.regform = (RegistrationForm.query
                         .filter_by(id=request.view_args['reg_form_id'], is_deleted=False)
                         .options(defaultload('form_items').joinedload('children').joinedload('current_data'))
@@ -66,7 +66,7 @@ class RegistrationEditMixin:
             'manager': self.management
         }
 
-        return self.view_class.render_template(self.template_file, self._conf, event=self.event_new,
+        return self.view_class.render_template(self.template_file, self.event,
                                                sections=section_data, regform=self.regform,
                                                registration_data=registration_data,
                                                registration_metadata=registration_metadata,

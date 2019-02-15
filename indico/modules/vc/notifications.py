@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,8 +17,8 @@
 from __future__ import unicode_literals
 
 from indico.core.notifications import make_email, send_email
-from indico.web.flask.templating import get_template_module, get_overridable_template_name
 from indico.modules.vc.util import get_linked_to_description
+from indico.web.flask.templating import get_overridable_template_name, get_template_module
 
 
 def notify_created(plugin, room, room_assoc, event, user):

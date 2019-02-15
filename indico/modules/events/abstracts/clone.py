@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,7 +21,7 @@ from indico.core.db.sqlalchemy.util.models import get_simple_column_attrs
 from indico.core.db.sqlalchemy.util.session import no_autoflush
 from indico.modules.events.abstracts.models.email_templates import AbstractEmailTemplate
 from indico.modules.events.abstracts.models.review_questions import AbstractReviewQuestion
-from indico.modules.events.abstracts.settings import abstracts_settings, abstracts_reviewing_settings, boa_settings
+from indico.modules.events.abstracts.settings import abstracts_reviewing_settings, abstracts_settings, boa_settings
 from indico.modules.events.cloning import EventCloner
 from indico.modules.events.models.events import EventType
 from indico.util.i18n import _

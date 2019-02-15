@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,18 +14,18 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals, absolute_import
+from __future__ import absolute_import, unicode_literals
 
 import json
 
 from markupsafe import escape
-from wtforms.fields import SelectMultipleField, RadioField, HiddenField, TextAreaField, PasswordField, Field
+from wtforms.fields import Field, HiddenField, PasswordField, RadioField, SelectMultipleField, TextAreaField
 from wtforms.widgets import CheckboxInput
 
 from indico.util.i18n import _
-from indico.util.string import sanitize_email, is_valid_mail
+from indico.util.string import sanitize_email, validate_email
 from indico.web.forms.fields.util import is_preprocessed_formdata
-from indico.web.forms.widgets import JinjaWidget, HiddenInputs, PasswordWidget
+from indico.web.forms.widgets import HiddenInputs, JinjaWidget, PasswordWidget
 
 
 class IndicoSelectMultipleCheckboxField(SelectMultipleField):
@@ -117,7 +117,7 @@ class EmailListField(TextListField):
         self.data = map(sanitize_email, self.data)
 
     def _validate_item(self, line):
-        if not is_valid_mail(line, False):
+        if not validate_email(line):
             raise ValueError(_('Invalid email address: {}').format(escape(line)))
 
 
@@ -145,6 +145,15 @@ class IndicoStaticTextField(Field):
 
     def _value(self):
         return self.text_value
+
+
+class IndicoEmailRecipientsField(Field):
+    widget = JinjaWidget('forms/email_recipients_widget.html', single_kwargs=True)
+
+    def process_data(self, data):
+        self.data = sorted(data, key=unicode.lower)
+        self.text_value = ', '.join(data)
+        self.count = len(data)
 
 
 class IndicoTagListField(HiddenFieldList):

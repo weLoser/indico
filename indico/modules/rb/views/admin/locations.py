@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,21 +14,24 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from MaKaC.webinterface.wcomponents import WTemplated
+from indico.legacy.webinterface.wcomponents import WTemplated
 from indico.modules.rb.views.admin import WPRoomBookingAdminBase
+from indico.util.i18n import _
 
 
 class WPRoomBookingAdmin(WPRoomBookingAdminBase):
-    def _setActiveTab(self):
-        self._subTabConfig.setActive()
+    subtitle = _(u'Locations')
 
-    def _getTabContent(self, params):
+    def _get_legacy_content(self, params):
         return WTemplated('RoomBookingAdmin').getHTML(params)
 
 
 class WPRoomBookingAdminLocation(WPRoomBookingAdminBase):
-    def _setActiveTab(self):
-        self._subTabConfig.setActive()
+    sidemenu_option = 'rb-rooms'
 
-    def _getTabContent(self, params):
+    @property
+    def subtitle(self):
+        return self._kwargs['location'].name
+
+    def _get_legacy_content(self, params):
         return WTemplated('RoomBookingAdminLocation').getHTML(params)

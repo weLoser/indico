@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -15,7 +15,7 @@
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
 import re
-from datetime import date, datetime, timedelta, time
+from datetime import date, datetime, time, timedelta
 
 from dateutil.relativedelta import relativedelta
 from flask import request, session
@@ -31,26 +31,25 @@ from indico.modules.rb.models.locations import Location
 from indico.modules.rb.models.reservation_occurrences import ReservationOccurrence
 from indico.modules.rb.models.reservations import Reservation
 from indico.modules.rb.models.rooms import Room
-from indico.modules.rb.models.equipment import EquipmentType
 from indico.modules.rb.statistics import calculate_rooms_occupancy, compose_rooms_stats
-from indico.modules.rb.views.user.rooms import (WPRoomBookingSearchRooms, WPRoomBookingMapOfRooms,
-                                                WPRoomBookingMapOfRoomsWidget, WPRoomBookingRoomDetails,
-                                                WPRoomBookingRoomStats, WPRoomBookingSearchRoomsResults)
+from indico.modules.rb.views.user.rooms import (WPRoomBookingMapOfRooms, WPRoomBookingMapOfRoomsWidget,
+                                                WPRoomBookingRoomDetails, WPRoomBookingRoomStats,
+                                                WPRoomBookingSearchRooms, WPRoomBookingSearchRoomsResults)
 from indico.web.forms.base import FormDefaults
 
 
 class RHRoomBookingMapOfRooms(RHRoomBookingBase):
-    def _checkParams(self):
-        RHRoomBookingBase._checkParams(self, request.args)
+    def _process_args(self):
+        RHRoomBookingBase._process_args(self)
         self._room_id = request.args.get('roomID')
 
     def _process(self):
-        return WPRoomBookingMapOfRooms(self, roomID=self._room_id).display()
+        return WPRoomBookingMapOfRooms.render_template('map.html', room_id=self._room_id)
 
 
 class RHRoomBookingMapOfRoomsWidget(RHRoomBookingBase):
-    def _checkParams(self):
-        RHRoomBookingBase._checkParams(self, request.args)
+    def _process_args(self):
+        RHRoomBookingBase._process_args(self)
         self._room_id = request.args.get('roomID')
 
     def _process(self):
@@ -59,11 +58,12 @@ class RHRoomBookingMapOfRoomsWidget(RHRoomBookingBase):
 
 class RHRoomBookingSearchRooms(RHRoomBookingBase):
     menu_item = 'search_rooms'
+    CSRF_ENABLED = False
 
     def _get_form_data(self):
         return request.form
 
-    def _checkParams(self):
+    def _process_args(self):
         defaults = FormDefaults(location=Location.default_location)
         self._form = SearchRoomsForm(self._get_form_data(), obj=defaults, csrf_enabled=False)
         if (not session.user or not Room.user_owns_rooms(session.user)) and not hasattr(self, 'search_criteria'):
@@ -78,9 +78,8 @@ class RHRoomBookingSearchRooms(RHRoomBookingBase):
         if self._is_submitted() and form.validate():
             rooms = Room.find_with_filters(form.data, session.user)
             return WPRoomBookingSearchRoomsResults(self, self.menu_item, rooms=rooms).display()
-        equipment_locations = {eq.id: eq.location_id for eq in EquipmentType.find()}
-        return WPRoomBookingSearchRooms(self, form=form, errors=form.error_list, rooms=Room.find_all(is_active=True),
-                                        equipment_locations=equipment_locations).display()
+        return WPRoomBookingSearchRooms(self, form=form, errors=form.error_list,
+                                        rooms=Room.find_all(is_active=True)).display()
 
 
 class RHRoomBookingSearchRoomsShortcutBase(RHRoomBookingSearchRooms):
@@ -105,7 +104,7 @@ class RHRoomBookingSearchMyRooms(RHRoomBookingSearchRoomsShortcutBase):
 class RHRoomBookingRoomDetails(RHRoomBookingBase):
     @requires_location
     @requires_room
-    def _checkParams(self):
+    def _process_args(self):
         self._calendar_start = datetime.combine(date.today(), time())
         self._calendar_end = datetime.combine(date.today(), time(23, 59))
         try:
@@ -132,7 +131,7 @@ class RHRoomBookingRoomDetails(RHRoomBookingBase):
 
 
 class RHRoomBookingRoomStats(RHRoomBookingBase):
-    def _checkParams(self):
+    def _process_args(self):
         self._room = Room.get(request.view_args['roomID'])
         self._occupancy_period = request.args.get('period', 'pastmonth')
         self._end = date.today()
@@ -147,21 +146,21 @@ class RHRoomBookingRoomStats(RHRoomBookingBase):
         else:
             match = re.match(r'(\d{4})(?:-(\d{2}))?', self._occupancy_period)
             if match is None:
-                raise IndicoError('Invalid period specified')
+                raise IndicoError(u'Invalid period specified')
             year = int(match.group(1))
             month = int(match.group(2)) if match.group(2) else None
             if month:
                 try:
                     self._start = date(year, month, 1)
                 except ValueError:
-                    raise IndicoError('Invalid year or month specified')
+                    raise IndicoError(u'Invalid year or month specified')
                 self._end = self._start + relativedelta(months=1)
                 self._occupancy_period = '{:d}-{:02d}'.format(year, month)
             else:
                 try:
                     self._start = date(year, 1, 1)
                 except ValueError:
-                    raise IndicoError('Invalid year specified')
+                    raise IndicoError(u'Invalid year specified')
                 self._end = self._start + relativedelta(years=1)
                 self._occupancy_period = str(year)
 

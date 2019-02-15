@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,10 +21,9 @@ from datetime import date, timedelta
 from operator import attrgetter
 
 from flask_pluginengine import current_plugin
-from wtforms.ext.dateutil.fields import DateField
 from wtforms.fields.core import BooleanField, SelectField
 from wtforms.fields.html5 import IntegerField
-from wtforms.fields.simple import StringField, HiddenField
+from wtforms.fields.simple import HiddenField, StringField
 from wtforms.validators import DataRequired, Length, NumberRange, Optional, ValidationError
 
 from indico.modules.events.sessions import Session
@@ -33,9 +32,10 @@ from indico.modules.vc.models import VCRoom, VCRoomStatus
 from indico.util.i18n import _
 from indico.web.flask.util import url_for
 from indico.web.forms.base import IndicoForm, generated_data
-from indico.web.forms.fields import PrincipalListField, IndicoRadioField, EmailListField
-from indico.web.forms.validators import UsedIf, Exclusive, IndicoRegexp
-from indico.web.forms.widgets import JinjaWidget, SwitchWidget, SelectizeWidget
+from indico.web.forms.fields import EmailListField, IndicoDateField, IndicoRadioField, PrincipalListField
+from indico.web.forms.validators import Exclusive, IndicoRegexp, UsedIf
+from indico.web.forms.widgets import JinjaWidget, SelectizeWidget, SwitchWidget
+
 
 ROOM_NAME_RE = re.compile(r'[\w\-]+')
 
@@ -97,7 +97,7 @@ class VCRoomLinkFormBase(IndicoForm):
         super(VCRoomLinkFormBase, self).__init__(*args, **kwargs)
         contrib_choices = [(contrib.id, contrib.title) for contrib in
                            sorted(self.event.contributions, key=attrgetter('title'))]
-        blocks = SessionBlock.find(SessionBlock.session.has((Session.event_new == self.event) & ~Session.is_deleted))
+        blocks = SessionBlock.find(SessionBlock.session.has((Session.event == self.event) & ~Session.is_deleted))
         block_choices = [(block.id, block.full_title) for block in sorted(blocks, key=attrgetter('full_title'))]
         self.contribution.choices = [('', _("Please select a contribution"))] + contrib_choices
         self.block.choices = [('', _("Please select a session block"))] + block_choices
@@ -138,10 +138,8 @@ class VCRoomFormBase(VCRoomLinkFormBase):
 class VCRoomListFilterForm(IndicoForm):
     direction = SelectField(_('Sort direction'), [DataRequired()],
                             choices=[('asc', _('Ascending')), ('desc', _('Descending'))])
-    abs_start_date = DateField(_('Start Date'), [Optional(), Exclusive('rel_start_date')],
-                               parse_kwargs={'dayfirst': True})
-    abs_end_date = DateField(_('End Date'), [Optional(), Exclusive('rel_end_date')],
-                             parse_kwargs={'dayfirst': True})
+    abs_start_date = IndicoDateField(_('Start Date'), [Optional(), Exclusive('rel_start_date')])
+    abs_end_date = IndicoDateField(_('End Date'), [Optional(), Exclusive('rel_end_date')])
     rel_start_date = IntegerField(_('Days in the past'), [Optional(), Exclusive('abs_start_date'), NumberRange(min=0)],
                                   default=0)
     rel_end_date = IntegerField(_('Days in the future'), [Optional(), Exclusive('abs_end_date'), NumberRange(min=0)],

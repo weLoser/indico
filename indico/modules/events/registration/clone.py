@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -40,10 +40,7 @@ class RegistrationFormCloner(EventCloner):
 
     @property
     def is_available(self):
-        return self._find_registration_forms().has_rows()
-
-    def _find_registration_forms(self):
-        return self.old_event.registration_forms.filter(~RegistrationForm.is_deleted)
+        return bool(self.old_event.registration_forms)
 
     @no_autoflush
     def run(self, new_event, cloners, shared_data):
@@ -53,7 +50,7 @@ class RegistrationFormCloner(EventCloner):
         attrs = get_simple_column_attrs(RegistrationForm) - {'start_dt', 'end_dt', 'modification_end_dt'}
         self._field_data_map = {}
         self._form_map = {}
-        for old_form in self._find_registration_forms():
+        for old_form in self.old_event.registration_forms:
             new_form = RegistrationForm(**{attr: getattr(old_form, attr) for attr in attrs})
             self._clone_form_items(old_form, new_form, clone_all_revisions)
             new_event.registration_forms.append(new_form)
@@ -102,9 +99,9 @@ class RegistrationCloner(EventCloner):
 
     @property
     def is_available(self):
-        return bool(self.old_event.registration_forms
-                    .filter(~RegistrationForm.is_deleted, RegistrationForm.registrations.any(Registration.is_active))
-                    .count())
+        return (RegistrationForm.query.with_parent(self.old_event)
+                .filter(RegistrationForm.registrations.any(Registration.is_active))
+                .has_rows())
 
     @property
     def is_default(self):
@@ -135,7 +132,7 @@ class RegistrationCloner(EventCloner):
                     with old_registration_data.open() as fd:
                         new_registration_data.save(fd)
             db.session.flush()
-            signals.event.registration_state_updated.send(new_registration)
+            signals.event.registration_state_updated.send(new_registration, previous_state=None)
 
     def _synchronize_registration_friendly_id(self, new_event):
         new_event._last_friendly_registration_id = (

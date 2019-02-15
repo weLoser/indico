@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -44,10 +44,10 @@ class AgreementExportHook(HTTPAPIHook):
         if self.event is None:
             raise HTTPAPIError('No such event', 404)
 
-    def _hasAccess(self, aw):
-        return self._definition.can_access_api(aw.getUser().user, self.event)
+    def _has_access(self, user):
+        return self._definition.can_access_api(user, self.event)
 
-    def export_agreements(self, aw):
+    def export_agreements(self, user):
         sent_agreements = {a.identifier: a for a in self.event.agreements.filter_by(type=self._definition.name)}
         for person in islice(sorted(self._definition.get_people(self.event).itervalues(),
                                     key=attrgetter('name', 'identifier')),

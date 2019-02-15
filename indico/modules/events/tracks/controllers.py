@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,26 +19,24 @@ from __future__ import unicode_literals
 from io import BytesIO
 from operator import itemgetter
 
-from flask import request, flash
+from flask import flash, request
 from sqlalchemy.orm import subqueryload
 
 from indico.core.db.sqlalchemy.descriptions import RENDER_MODE_WRAPPER_MAP
-from indico.modules.events.layout.util import get_menu_entry_by_name
-from indico.modules.events.tracks.forms import TrackForm, ProgramForm
+from indico.legacy.pdfinterface.conference import ProgrammeToPDF
+from indico.modules.events.controllers.base import RHDisplayEventBase
+from indico.modules.events.management.controllers import RHManageEventBase
+from indico.modules.events.tracks.forms import ProgramForm, TrackForm
 from indico.modules.events.tracks.models.tracks import Track
-from indico.modules.events.tracks.operations import create_track, update_track, delete_track, update_program
+from indico.modules.events.tracks.operations import create_track, delete_track, update_program, update_track
 from indico.modules.events.tracks.settings import track_settings
-from indico.modules.events.tracks.views import WPManageTracks, WPDisplayTracks
+from indico.modules.events.tracks.views import WPDisplayTracks, WPManageTracks
 from indico.util.i18n import _
 from indico.util.string import handle_legacy_description
 from indico.web.flask.templating import get_template_module
 from indico.web.flask.util import send_file
 from indico.web.forms.base import FormDefaults
-from indico.web.util import jsonify_form, jsonify_data
-from MaKaC.PDFinterface.conference import ProgrammeToPDF
-from MaKaC.webinterface.rh.base import RH
-from MaKaC.webinterface.rh.conferenceDisplay import RHConferenceBaseDisplay
-from MaKaC.webinterface.rh.conferenceModif import RHConferenceModifBase
+from indico.web.util import jsonify_data, jsonify_form
 
 
 def _render_track_list(event):
@@ -46,13 +44,8 @@ def _render_track_list(event):
     return tpl.render_track_list(event)
 
 
-class RHManageTracksBase(RHConferenceModifBase):
+class RHManageTracksBase(RHManageEventBase):
     """Base class for all track management RHs"""
-
-    CSRF_ENABLED = True
-
-    def _process(self):
-        return RH._process(self)
 
 
 class RHManageTrackBase(RHManageTracksBase):
@@ -64,23 +57,23 @@ class RHManageTrackBase(RHManageTracksBase):
         }
     }
 
-    def _checkParams(self, params):
-        RHManageTracksBase._checkParams(self, params)
+    def _process_args(self):
+        RHManageTracksBase._process_args(self)
         self.track = Track.get_one(request.view_args['track_id'])
 
 
 class RHManageTracks(RHManageTracksBase):
     def _process(self):
-        tracks = self.event_new.tracks
-        return WPManageTracks.render_template('management.html', self._conf, event=self.event_new, tracks=tracks)
+        tracks = self.event.tracks
+        return WPManageTracks.render_template('management.html', self.event, tracks=tracks)
 
 
 class RHEditProgram(RHManageTracksBase):
     def _process(self):
-        settings = track_settings.get_all(self.event_new)
+        settings = track_settings.get_all(self.event)
         form = ProgramForm(obj=FormDefaults(**settings))
         if form.validate_on_submit():
-            update_program(self.event_new, form.data)
+            update_program(self.event, form.data)
             flash(_("The program has been updated."))
             return jsonify_data()
         elif not form.is_submitted():
@@ -91,29 +84,29 @@ class RHEditProgram(RHManageTracksBase):
 
 class RHCreateTrack(RHManageTracksBase):
     def _process(self):
-        form = TrackForm()
+        form = TrackForm(event=self.event)
         if form.validate_on_submit():
-            track = create_track(self.event_new, form.data)
+            track = create_track(self.event, form.data)
             flash(_('Track "{}" has been created.').format(track.title), 'success')
-            return jsonify_data(html=_render_track_list(self.event_new), new_track_id=track.id,
-                                tracks=[{'id': t.id, 'title': t.title} for t in self.event_new.tracks])
+            return jsonify_data(html=_render_track_list(self.event), new_track_id=track.id,
+                                tracks=[{'id': t.id, 'title': t.title} for t in self.event.tracks])
         return jsonify_form(form)
 
 
 class RHEditTrack(RHManageTrackBase):
     def _process(self):
-        form = TrackForm(obj=self.track)
+        form = TrackForm(event=self.event, obj=self.track)
         if form.validate_on_submit():
             update_track(self.track, form.data)
             flash(_('Track "{}" has been modified.').format(self.track.title), 'success')
-            return jsonify_data(html=_render_track_list(self.event_new))
+            return jsonify_data(html=_render_track_list(self.event))
         return jsonify_form(form)
 
 
 class RHSortTracks(RHManageTracksBase):
     def _process(self):
         sort_order = request.json['sort_order']
-        tracks = {t.id: t for t in self.event_new.tracks}
+        tracks = {t.id: t for t in self.event.tracks}
         for position, track_id in enumerate(sort_order, 1):
             if track_id in tracks:
                 tracks[track_id].position = position
@@ -123,25 +116,23 @@ class RHDeleteTrack(RHManageTrackBase):
     def _process(self):
         delete_track(self.track)
         flash(_('Track "{}" has been deleted.').format(self.track.title), 'success')
-        return jsonify_data(html=_render_track_list(self.event_new))
+        return jsonify_data(html=_render_track_list(self.event))
 
 
-class RHDisplayTracks(RHConferenceBaseDisplay):
+class RHDisplayTracks(RHDisplayEventBase):
     def _process(self):
-        page_title = get_menu_entry_by_name('program', self.event_new).localized_title
-        program = track_settings.get(self.event_new, 'program')
-        render_mode = track_settings.get(self.event_new, 'program_render_mode')
+        program = track_settings.get(self.event, 'program')
+        render_mode = track_settings.get(self.event, 'program_render_mode')
         program = RENDER_MODE_WRAPPER_MAP[render_mode](program)
-        tracks = (Track.query.with_parent(self.event_new)
+        tracks = (Track.query.with_parent(self.event)
                   .options(subqueryload('conveners'),
                            subqueryload('abstract_reviewers'))
                   .order_by(Track.position)
                   .all())
-        return WPDisplayTracks.render_template('display.html', self._conf, event=self.event_new, page_title=page_title,
-                                               program=program, tracks=tracks)
+        return WPDisplayTracks.render_template('display.html', self.event, program=program, tracks=tracks)
 
 
-class RHTracksPDF(RHConferenceBaseDisplay):
+class RHTracksPDF(RHDisplayEventBase):
     def _process(self):
-        pdf = ProgrammeToPDF(self.event_new)
+        pdf = ProgrammeToPDF(self.event)
         return send_file('program.pdf', BytesIO(pdf.getPDFBin()), 'application/pdf')

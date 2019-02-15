@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,13 +21,14 @@ from operator import attrgetter
 
 from flask import redirect
 
+from indico.legacy.pdfinterface.conference import AbstractsToPDF, ConfManagerAbstractsToPDF
+from indico.modules.events.abstracts.models.files import AbstractFile
 from indico.modules.events.abstracts.util import generate_spreadsheet_from_abstracts
 from indico.modules.events.util import ZipGeneratorMixin
 from indico.util.fs import secure_filename
 from indico.util.spreadsheets import send_csv, send_xlsx
 from indico.web.flask.util import send_file
-from indico.web.util import jsonify_data
-from MaKaC.PDFinterface.conference import ConfManagerAbstractsToPDF, AbstractsToPDF
+from indico.web.util import jsonify_data, jsonify_template
 
 
 class DisplayAbstractListMixin:
@@ -42,7 +43,13 @@ class DisplayAbstractListMixin:
         return self._render_template(**self.list_generator.get_list_kwargs())
 
     def _render_template(self, **kwargs):
-        return self.view_class.render_template(self.template, self._conf, event=self.event_new, **kwargs)
+        can_download_attachments = self.event.cfa.allow_attachments
+        if not can_download_attachments:
+            can_download_attachments = (AbstractFile.query
+                                        .filter(AbstractFile.abstract.has(event=self.event, is_deleted=False))
+                                        .has_rows())
+        return self.view_class.render_template(self.template, self.event,
+                                               can_download_attachments=can_download_attachments, **kwargs)
 
 
 class CustomizeAbstractListMixin:
@@ -52,12 +59,12 @@ class CustomizeAbstractListMixin:
 
     def _process_GET(self):
         list_config = self.list_generator._get_config()
-        return self.view_class.render_template('management/abstract_list_filter.html', self._conf,
-                                               event=self.event_new, visible_items=list_config['items'],
-                                               static_items=self.list_generator.static_items,
-                                               extra_filters=self.list_generator.extra_filters,
-                                               contrib_fields=self.list_generator.get_all_contribution_fields(),
-                                               filters=list_config['filters'])
+        return jsonify_template('events/abstracts/management/abstract_list_filter.html',
+                                visible_items=list_config['items'],
+                                static_items=self.list_generator.static_items,
+                                extra_filters=self.list_generator.extra_filters,
+                                contrib_fields=self.list_generator.get_all_contribution_fields(),
+                                filters=list_config['filters'])
 
     def _process_POST(self):
         self.list_generator.store_configuration()
@@ -70,7 +77,7 @@ class AbstractsExportPDFMixin:
     def _process(self):
         sorted_abstracts = sorted(self.abstracts, key=attrgetter('friendly_id'))
         cls = ConfManagerAbstractsToPDF if self.management else AbstractsToPDF
-        pdf = cls(self.event_new, sorted_abstracts)
+        pdf = cls(self.event, sorted_abstracts)
         return send_file('abstracts.pdf', pdf.generate(), 'application/pdf')
 
 
@@ -94,14 +101,15 @@ class AbstractsExportExcel(_AbstractsExportBaseMixin):
     """Export list of abstracts to XLSX"""
 
     def _process(self):
-        return send_xlsx('abstracts.xlsx', *self._generate_spreadsheet())
+        return send_xlsx('abstracts.xlsx', *self._generate_spreadsheet(), tz=self.event.tzinfo)
 
 
 class AbstractsDownloadAttachmentsMixin(ZipGeneratorMixin):
     """Generate a ZIP file with attachment files for a given list of abstracts"""
 
     def _prepare_folder_structure(self, item):
-        abstract_title = secure_filename('{}_{}'.format(item.abstract.title, unicode(item.abstract.id)), 'abstract')
+        abstract_title = secure_filename('{}_{}'.format(unicode(item.abstract.friendly_id), item.abstract.title),
+                                         'abstract')
         file_name = secure_filename('{}_{}'.format(unicode(item.id), item.filename), item.filename)
         return os.path.join(*self._adjust_path_length([abstract_title, file_name]))
 
@@ -112,4 +120,4 @@ class AbstractsDownloadAttachmentsMixin(ZipGeneratorMixin):
 
     def _process(self):
         return self._generate_zip_file(self.abstracts, name_prefix='abstract-attachments',
-                                       name_suffix=self.event_new.id)
+                                       name_suffix=self.event.id)

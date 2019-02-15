@@ -1,10 +1,37 @@
-{% extends 'layout/full_content_base.html' %}
+{% extends 'events/management/full_width_base.html' %}
 
 {% from 'events/sessions/management/_session_list.html' import render_session_list %}
 {% from 'events/management/_lists.html' import render_displayed_entries_fragment %}
 
 {% block title %}
     {%- trans %}Sessions{% endtrans -%}
+{% endblock %}
+
+{% block title_actions %}
+    {%- if event.type == 'conference' -%}
+        <a id="contributions-settings-dropdown"
+           class="i-button borderless icon-settings arrow js-dropdown"
+           data-toggle="dropdown">{% trans %}Settings{% endtrans %}</a>
+        <ul class="dropdown">
+            <li>
+                <a href="#"
+                   title="{% trans %}Manage session types{% endtrans %}"
+                   data-reload-after="customData"
+                   data-title="{% trans %}Manage session types{% endtrans %}"
+                   data-href="{{ url_for('.manage_types', event) }}"
+                   data-qtip-position="right"
+                   data-ajax-dialog>
+                    {% trans %}Session types{% endtrans %}</a>
+            </li>
+        </ul>
+    {%- endif -%}
+{% endblock %}
+
+{% block description %}
+    {%- trans -%}
+        Manage the sessions of the event from the list below or configure the <strong>session types</strong>
+        from the settings menu above.
+    {%- endtrans -%}
 {% endblock %}
 
 {% block content %}
@@ -26,7 +53,7 @@
                         </li>
                     </ul>
                 </div>
-                <div class="group">
+                <div class="group hide-if-locked">
                     <a id="add-new-session" class="i-button highlight icon-plus"
                        data-href="{{ url_for('.create_session', event) }}"
                        data-title="{% trans %}Add new session{% endtrans %}"
@@ -35,7 +62,7 @@
                         {% trans %}Add new session{% endtrans %}
                     </a>
                 </div>
-                <div class="group">
+                <div class="group hide-if-locked">
                     <a id="remove-selected-sessions"
                        class="i-button icon-remove js-requires-selected-row disabled"
                        data-title="{% trans %}Remove selected sessions{% endtrans %}"
@@ -91,13 +118,15 @@
             </div>
         </div>
         <div class="list" id="sessions-wrapper">
-            {{- render_session_list(event, sessions, default_colors) -}}
+            {{- render_session_list(event, sessions, default_colors, types) -}}
         </div>
         <div id="filter-placeholder"></div>
     </div>
 
     <script>
-        setupSessionsList();
+        setupSessionsList({
+           createTypeURL: {{ url_for('sessions.create_type', event) | tojson }},
+        });
         {% if selected_entry %}
             $('#search-input').val('#{{ selected_entry }}').trigger('change');
         {% endif %}

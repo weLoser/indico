@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,21 +19,19 @@ from __future__ import unicode_literals
 from datetime import timedelta
 
 from celery.schedules import crontab
-from flask import session, g
+from flask import g, session
 
 from indico.core.celery import celery
 from indico.core.db import db
-from indico.core.notifications import make_email, email_sender
+from indico.core.notifications import email_sender, make_email
+from indico.core.storage import StorageReadOnlyError
 from indico.modules.events.static import logger
 from indico.modules.events.static.models.static import StaticSite, StaticSiteState
-from indico.util.contextManager import ContextManager
+from indico.modules.events.static.offline import create_static_site
 from indico.util.date_time import now_utc
 from indico.web.flask.templating import get_template_module
 from indico.web.flask.util import url_for
-
-from MaKaC.accessControl import AccessWrapper
-from MaKaC.common.offlineWebsiteCreator import OfflineEvent
-from MaKaC.webinterface.rh.conferenceBase import RHCustomizable
+from indico.web.rh import RH
 
 
 @celery.task(request_context=True)
@@ -43,42 +41,29 @@ def build_static_site(static_site):
     try:
         logger.info('Building static site: %s', static_site)
         session.lang = static_site.creator.settings.get('lang')
-        rh = RHCustomizable()
-        rh._aw = AccessWrapper()
-        rh._conf = rh._target = static_site.event_new.as_legacy
+        rh = RH()
 
-        g.rh = rh
-        ContextManager.set('currentRH', rh)
-        g.static_site = True
-
-        # Get event type
-        wf = rh.getWebFactory()
-        event_type = wf.getId() if wf else 'conference'
-
-        zip_file_path = OfflineEvent(rh, rh._conf, event_type).create(static_site.id)
-
-        static_site.path = zip_file_path
+        zip_file_path = create_static_site(rh, static_site.event)
         static_site.state = StaticSiteState.success
+        static_site.content_type = 'application/zip'
+        static_site.filename = 'offline_site_{}.zip'.format(static_site.event.id)
+        with open(zip_file_path, 'rb') as f:
+            static_site.save(f)
         db.session.commit()
 
         logger.info('Building static site successful: %s', static_site)
-        g.static_site = False
-        ContextManager.set('currentRH', None)
         notify_static_site_success(static_site)
     except Exception:
         logger.exception('Building static site failed: %s', static_site)
         static_site.state = StaticSiteState.failed
         db.session.commit()
         raise
-    finally:
-        g.static_site = False
-        ContextManager.set('currentRH', None)
 
 
 @email_sender
 def notify_static_site_success(static_site):
     template = get_template_module('events/static/emails/download_notification_email.txt',
-                                   user=static_site.creator, event=static_site.event_new,
+                                   user=static_site.creator, event=static_site.event,
                                    link=url_for('static_site.download', static_site, _external=True))
     return make_email({static_site.creator.email}, template=template, html=False)
 
@@ -94,9 +79,13 @@ def static_sites_cleanup(days=30):
     logger.info('Removing %d expired static sites from the past %d days', len(expired_sites), days)
     try:
         for site in expired_sites:
-            site.delete_file()
-            site.path = None
-            site.state = StaticSiteState.expired
-            logger.info('Removed static site %s', site)
+            try:
+                site.delete()
+            except StorageReadOnlyError:
+                # If a site is on read-only storage we simply keep it alive.
+                logger.debug('Could not delete static site %r (read-only storage)', site)
+            else:
+                site.state = StaticSiteState.expired
+                logger.info('Removed static site %r', site)
     finally:
         db.session.commit()

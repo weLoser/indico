@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -28,7 +28,7 @@ from indico.modules.categories import Category
     (ProtectionMode.protected, False, {'read_access': True}, True),
     # restricted - authorized
     (ProtectionMode.protected, True, {'full_access': True}, True),
-    (ProtectionMode.protected, True, {'roles': {'create'}}, True),
+    (ProtectionMode.protected, True, {'permissions': {'create'}}, True),
     # restricted - not authorized
     (ProtectionMode.public, True, None, False),
     (ProtectionMode.protected, True, None, False),
@@ -88,7 +88,7 @@ def test_effective_protection_mode(db):
 
 @pytest.fixture
 def category_family(create_category, db):
-    grandpa = create_category(0, title='Grandpa', protection_mode=ProtectionMode.public, parent=None)
+    grandpa = Category.get_root()
     dad = create_category(1, title='Dad', parent=grandpa)
     son = create_category(2, title='Son', parent=dad)
     sibling = create_category(3, title='Sibling', parent=dad)

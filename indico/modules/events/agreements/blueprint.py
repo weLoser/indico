@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,17 +16,17 @@
 
 from __future__ import unicode_literals
 
-from indico.web.flask.wrappers import IndicoBlueprint
-
 from indico.modules.events.agreements.controllers import (RHAgreementForm, RHAgreementManager,
                                                           RHAgreementManagerDetails,
-                                                          RHAgreementManagerDetailsSend,
+                                                          RHAgreementManagerDetailsDownloadAgreement,
                                                           RHAgreementManagerDetailsRemind,
-                                                          RHAgreementManagerDetailsSendAll,
                                                           RHAgreementManagerDetailsRemindAll,
+                                                          RHAgreementManagerDetailsSend,
+                                                          RHAgreementManagerDetailsSendAll,
                                                           RHAgreementManagerDetailsSubmitAnswer,
-                                                          RHAgreementManagerDetailsToggleNotifications,
-                                                          RHAgreementManagerDetailsDownloadAgreement)
+                                                          RHAgreementManagerDetailsToggleNotifications)
+from indico.web.flask.wrappers import IndicoBlueprint
+
 
 _bp = IndicoBlueprint('agreements', __name__, template_folder='templates', virtual_template_folder='events/agreements',
                       url_prefix='/event/<confId>')

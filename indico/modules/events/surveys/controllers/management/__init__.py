@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,15 +18,14 @@ from __future__ import unicode_literals
 
 from flask import request
 
+from indico.modules.events.management.controllers import RHManageEventBase
 from indico.modules.events.surveys.models.surveys import Survey
-from MaKaC.webinterface.rh.conferenceModif import RHConferenceModifBase
 
 
-class RHManageSurveysBase(RHConferenceModifBase):
+class RHManageSurveysBase(RHManageEventBase):
     """Base class for all survey management RHs"""
 
-    CSRF_ENABLED = True
-    ROLE = 'surveys'
+    PERMISSION = 'surveys'
 
 
 class RHManageSurveyBase(RHManageSurveysBase):
@@ -38,6 +37,6 @@ class RHManageSurveyBase(RHManageSurveysBase):
         }
     }
 
-    def _checkParams(self, params):
-        RHManageSurveysBase._checkParams(self, params)
+    def _process_args(self):
+        RHManageSurveysBase._process_args(self)
         self.survey = Survey.find_one(id=request.view_args['survey_id'], is_deleted=False)

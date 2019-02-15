@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,15 +19,15 @@ from __future__ import unicode_literals
 from flask import flash, request
 
 from indico.core.db import db
-from indico.modules.events.views import WPReferenceTypes
+from indico.modules.admin import RHAdminBase
 from indico.modules.events.forms import ReferenceTypeForm
 from indico.modules.events.models.references import ReferenceType
-from indico.modules.events.operations import create_reference_type, update_reference_type, delete_reference_type
+from indico.modules.events.operations import create_reference_type, delete_reference_type, update_reference_type
+from indico.modules.events.views import WPReferenceTypes
 from indico.util.i18n import _
 from indico.web.flask.templating import get_template_module
 from indico.web.forms.base import FormDefaults
 from indico.web.util import jsonify_data, jsonify_form
-from MaKaC.webinterface.rh.admins import RHAdminBase
 
 
 def _get_all_reference_types():
@@ -42,8 +42,8 @@ def _render_reference_type_list():
 class RHManageReferenceTypeBase(RHAdminBase):
     """Base class for a specific reference type"""
 
-    def _checkParams(self, params):
-        RHAdminBase._checkParams(self, params)
+    def _process_args(self):
+        RHAdminBase._process_args(self)
         self.reference_type = ReferenceType.find_one(id=request.view_args['reference_type_id'])
 
 
@@ -52,7 +52,7 @@ class RHReferenceTypes(RHAdminBase):
 
     def _process(self):
         types = _get_all_reference_types()
-        return WPReferenceTypes.render_template('admin/reference_types.html', reference_types=types)
+        return WPReferenceTypes.render_template('admin/reference_types.html', 'reference_types', reference_types=types)
 
 
 class RHCreateReferenceType(RHAdminBase):

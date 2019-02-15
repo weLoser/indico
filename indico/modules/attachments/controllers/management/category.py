@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,25 +19,23 @@ from __future__ import unicode_literals
 from flask import session
 from werkzeug.exceptions import Forbidden
 
-from indico.modules.attachments.controllers.management.base import (ManageAttachmentsMixin, AddAttachmentFilesMixin,
-                                                                    AddAttachmentLinkMixin, EditAttachmentMixin,
-                                                                    CreateFolderMixin, EditFolderMixin,
-                                                                    DeleteFolderMixin, DeleteAttachmentMixin)
+from indico.modules.attachments.controllers.management.base import (AddAttachmentFilesMixin, AddAttachmentLinkMixin,
+                                                                    CreateFolderMixin, DeleteAttachmentMixin,
+                                                                    DeleteFolderMixin, EditAttachmentMixin,
+                                                                    EditFolderMixin, ManageAttachmentsMixin)
 from indico.modules.attachments.util import can_manage_attachments
 from indico.modules.categories.controllers.base import RHManageCategoryBase
 from indico.modules.categories.views import WPCategoryManagement
 
 
 class RHCategoryAttachmentManagementBase(RHManageCategoryBase):
-    CSRF_ENABLED = True
-
-    def _checkParams(self, params):
-        RHManageCategoryBase._checkParams(self)
+    def _process_args(self):
+        RHManageCategoryBase._process_args(self)
         self.object_type = 'category'
         self.object = self.base_object = self.category
 
-    def _checkProtection(self):
-        RHManageCategoryBase._checkProtection(self)
+    def _check_access(self):
+        RHManageCategoryBase._check_access(self)
         # This is already covered by CategModifBase, but if we ever add more
         # checks to can_manage_attachments we are on the safe side...
         if not can_manage_attachments(self.object, session.user):
@@ -57,9 +55,9 @@ class RHAddCategoryAttachmentLink(AddAttachmentLinkMixin, RHCategoryAttachmentMa
 
 
 class RHEditCategoryAttachment(EditAttachmentMixin, RHCategoryAttachmentManagementBase):
-    def _checkParams(self, params):
-        RHCategoryAttachmentManagementBase._checkParams(self, params)
-        EditAttachmentMixin._checkParams(self)
+    def _process_args(self):
+        RHCategoryAttachmentManagementBase._process_args(self)
+        EditAttachmentMixin._process_args(self)
 
 
 class RHCreateCategoryFolder(CreateFolderMixin, RHCategoryAttachmentManagementBase):
@@ -67,18 +65,18 @@ class RHCreateCategoryFolder(CreateFolderMixin, RHCategoryAttachmentManagementBa
 
 
 class RHEditCategoryFolder(EditFolderMixin, RHCategoryAttachmentManagementBase):
-    def _checkParams(self, params):
-        RHCategoryAttachmentManagementBase._checkParams(self, params)
-        EditFolderMixin._checkParams(self)
+    def _process_args(self):
+        RHCategoryAttachmentManagementBase._process_args(self)
+        EditFolderMixin._process_args(self)
 
 
 class RHDeleteCategoryFolder(DeleteFolderMixin, RHCategoryAttachmentManagementBase):
-    def _checkParams(self, params):
-        RHCategoryAttachmentManagementBase._checkParams(self, params)
-        DeleteFolderMixin._checkParams(self)
+    def _process_args(self):
+        RHCategoryAttachmentManagementBase._process_args(self)
+        DeleteFolderMixin._process_args(self)
 
 
 class RHDeleteCategoryAttachment(DeleteAttachmentMixin, RHCategoryAttachmentManagementBase):
-    def _checkParams(self, params):
-        RHCategoryAttachmentManagementBase._checkParams(self, params)
-        DeleteAttachmentMixin._checkParams(self)
+    def _process_args(self):
+        RHCategoryAttachmentManagementBase._process_args(self)
+        DeleteAttachmentMixin._process_args(self)

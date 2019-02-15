@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,11 +14,13 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
+from __future__ import unicode_literals
+
 import pytest
 from flask import render_template_string
 from mock import MagicMock
 
-from indico.web.flask.templating import underline, markdown, get_overridable_template_name, dedent
+from indico.web.flask.templating import dedent, get_overridable_template_name, markdown, underline
 
 
 def test_underline():

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,37 +18,27 @@
 Base export interface
 """
 
-# python stdlib imports
-import itertools
-import pytz
 import re
 import urllib
-from datetime import datetime, timedelta, time
+from datetime import datetime, time, timedelta
 from types import GeneratorType
 
-import transaction
-from flask import request, current_app
-from ZEO.Exceptions import ClientDisconnected
-from ZODB.POSException import ConflictError
+import pytz
+from flask import current_app, request
 
-# indico imports
-from MaKaC.common.mail import GenericMailer
-from indico.core.config import Config
-from indico.core.db import DBMgr
-from indico.core.db.util import flush_after_commit_queue
+from indico.core.config import config
+from indico.core.db import db
+from indico.core.logger import Logger
+from indico.core.notifications import flush_email_queue, init_email_queue
 from indico.util.date_time import now_utc
-from indico.util.fossilize import fossilize
+from indico.web.http_api.exceptions import ArgumentParseError, LimitExceededException
 from indico.web.http_api.metadata import Serializer
-from indico.web.http_api.metadata.html import HTML4Serializer
-from indico.web.http_api.metadata.jsonp import JSONPSerializer
-from indico.web.http_api.metadata.ical import ICalSerializer
 from indico.web.http_api.metadata.atom import AtomSerializer
+from indico.web.http_api.metadata.html import HTML4Serializer
+from indico.web.http_api.metadata.ical import ICalSerializer
+from indico.web.http_api.metadata.jsonp import JSONPSerializer
 from indico.web.http_api.responses import HTTPAPIError
 from indico.web.http_api.util import get_query_parameter
-from indico.web.http_api.exceptions import ArgumentParseError, LimitExceededException
-
-# indico legacy imports
-from MaKaC.common.logger import Logger
 
 
 class HTTPAPIHook(object):
@@ -121,10 +111,8 @@ class HTTPAPIHook(object):
         self._detail = get_query_parameter(self._queryParams, ['d', 'detail'], self.DEFAULT_DETAIL)
         tzName = get_query_parameter(self._queryParams, ['tz'], None)
 
-        self._serverTZ = Config.getInstance().getDefaultTimezone()
-
         if tzName is None:
-            tzName = self._serverTZ
+            tzName = config.DEFAULT_TIMEZONE
         try:
             self._tz = pytz.timezone(tzName)
         except pytz.UnknownTimeZoneError, e:
@@ -148,7 +136,7 @@ class HTTPAPIHook(object):
         self._fromDT = DataFetcher._getDateTime('from', fromDT, self._tz) if fromDT else None
         self._toDT = DataFetcher._getDateTime('to', toDT, self._tz, aux=self._fromDT) if toDT else None
 
-    def _hasAccess(self, aw):
+    def _has_access(self, user):
         return True
 
     @property
@@ -160,11 +148,11 @@ class HTTPAPIHook(object):
             return self.METHOD_NAME
         return self.PREFIX + '_' + self._type.replace('-', '_')
 
-    def _performCall(self, func, aw):
+    def _performCall(self, func, user):
         resultList = []
         complete = True
         try:
-            res = func(aw)
+            res = func(user)
             if isinstance(res, GeneratorType):
                 for obj in res:
                     resultList.append(obj)
@@ -174,21 +162,21 @@ class HTTPAPIHook(object):
             complete = (self._limit == self._userLimit)
         return resultList, complete
 
-    def _perform(self, aw, func, extra_func):
+    def _perform(self, user, func, extra_func):
         self._getParams()
-        if not self._hasAccess(aw):
+        if not self._has_access(user):
             raise HTTPAPIError('Access to this resource is restricted.', 403)
-        resultList, complete = self._performCall(func, aw)
+        resultList, complete = self._performCall(func, user)
         if isinstance(resultList, current_app.response_class):
             return True, resultList, None, None
-        extra = extra_func(aw, resultList) if extra_func else None
+        extra = extra_func(user, resultList) if extra_func else None
         return False, resultList, complete, extra
 
-    def __call__(self, aw):
+    def __call__(self, user):
         """Perform the actual exporting"""
         if self.HTTP_POST != (request.method == 'POST'):
             raise HTTPAPIError('This action requires %s' % ('POST' if self.HTTP_POST else 'GET'), 405)
-        if not self.GUEST_ALLOWED and not aw.getUser():
+        if not self.GUEST_ALLOWED and not user:
             raise HTTPAPIError('Guest access to this resource is forbidden.', 403)
 
         method_name = self._getMethodName()
@@ -198,32 +186,16 @@ class HTTPAPIHook(object):
             raise NotImplementedError(method_name)
 
         if not self.COMMIT:
-            is_response, resultList, complete, extra = self._perform(aw, func, extra_func)
+            is_response, resultList, complete, extra = self._perform(user, func, extra_func)
+            db.session.rollback()
         else:
-            dbi = DBMgr.getInstance()
             try:
-                for i, retry in enumerate(transaction.attempts(10)):
-                    with retry:
-                        if i > 0:
-                            dbi.abort()
-                        flush_after_commit_queue(False)
-                        GenericMailer.flushQueue(False)
-                        dbi.sync()
-                        try:
-                            is_response, resultList, complete, extra = self._perform(aw, func, extra_func)
-                            transaction.commit()
-                            flush_after_commit_queue(True)
-                            GenericMailer.flushQueue(True)
-                            break
-                        except ConflictError:
-                            transaction.abort()
-                        except ClientDisconnected:
-                            transaction.abort()
-                            time.sleep(i * 5)
-                else:
-                    raise HTTPAPIError('An unresolvable database conflict has occured', 500)
+                init_email_queue()
+                is_response, resultList, complete, extra = self._perform(user, func, extra_func)
+                db.session.commit()
+                flush_email_queue()
             except Exception:
-                transaction.abort()
+                db.session.rollback()
                 raise
         if is_response:
             return resultList
@@ -231,17 +203,11 @@ class HTTPAPIHook(object):
 
 
 class DataFetcher(object):
-
     _deltas = {'yesterday': timedelta(-1),
                'tomorrow': timedelta(1)}
 
-    _sortingKeys = {'id': lambda x: x.getId(),
-                    'start': lambda x: x.getStartDate(),
-                    'end': lambda x: x.getEndDate(),
-                    'title': lambda x: x.getTitle()}
-
-    def __init__(self, aw, hook):
-        self._aw = aw
+    def __init__(self, user, hook):
+        self._user = user
         self._hook = hook
 
     @classmethod
@@ -311,13 +277,9 @@ class DataFetcher(object):
 
 
 class IteratedDataFetcher(DataFetcher):
-    DETAIL_INTERFACES = {}
-    FULL_SORTING_TIMEFRAME = timedelta(weeks=4)
-
-    def __init__(self, aw, hook):
-        super(IteratedDataFetcher, self).__init__(aw, hook)
+    def __init__(self, user, hook):
+        super(IteratedDataFetcher, self).__init__(user, hook)
         self._tz = hook._tz
-        self._serverTZ = hook._serverTZ
         self._offset = hook._offset
         self._limit = hook._limit
         self._detail = hook._detail
@@ -325,83 +287,6 @@ class IteratedDataFetcher(DataFetcher):
         self._descending = hook._descending
         self._fromDT = hook._fromDT
         self._toDT = hook._toDT
-
-    def _userAccessFilter(self, obj):
-        return obj.canAccess(self._aw)
-
-    def _limitIterator(self, iterator, limit):
-        counter = 0
-        # this set acts as a checklist to know if a record has already been sent
-        exclude = set()
-        self._intermediateResults = []
-
-        for obj in iterator:
-            if counter >= limit:
-                raise LimitExceededException()
-            if obj not in exclude and (not hasattr(obj, 'canAccess') or obj.canAccess(self._aw)):
-                self._intermediateResults.append(obj)
-                yield obj
-                exclude.add(obj)
-                counter += 1
-
-    def _sortedIterator(self, iterator, limit, orderBy, descending):
-
-        exceeded = False
-        if orderBy or descending:
-            sortingKey = self._sortingKeys.get(orderBy)
-            if self._toDT and self._fromDT and self._toDT - self._fromDT <= self.FULL_SORTING_TIMEFRAME:
-                # If the timeframe is not too big we sort the whole dataset and limit it afterwards. Ths results in
-                # better results but worse performance.
-                limitedIterable = self._limitIterator(sorted(iterator, key=sortingKey, reverse=descending), limit)
-            else:
-                try:
-                    limitedIterable = sorted(self._limitIterator(iterator, limit),
-                                             key=sortingKey, reverse=descending)
-                except LimitExceededException:
-                    exceeded = True
-                    limitedIterable = sorted(self._intermediateResults,
-                                             key=sortingKey, reverse=descending)
-        else:
-            limitedIterable = self._limitIterator(iterator, limit)
-
-        # iterate over result
-        for obj in limitedIterable:
-            yield obj
-
-        # in case the limit was exceeded while sorting the results,
-        # raise the exception as if we were truly consuming an iterator
-        if orderBy and exceeded:
-            raise LimitExceededException()
-
-    def _iterateOver(self, iterator, offset, limit, orderBy, descending, filter=None):
-        """
-        Iterates over a maximum of `limit` elements, starting at the
-        element number `offset`. The elements will be ordered according
-        to `orderby` and `descending` (slooooow) and filtered by the
-        callable `filter`:
-        """
-
-        if filter:
-            iterator = itertools.ifilter(filter, iterator)
-        # offset + limit because offset records are skipped and do not count
-        sortedIterator = self._sortedIterator(iterator, offset + limit, orderBy, descending)
-        # Skip offset elements - http://docs.python.org/library/itertools.html#recipes
-        next(itertools.islice(sortedIterator, offset, offset), None)
-        return sortedIterator
-
-    def _postprocess(self, obj, fossil, iface):
-        return fossil
-
-    def _makeFossil(self, obj, iface):
-        return fossilize(obj, iface, tz=self._tz, naiveTZ=self._serverTZ, filters={'access': self._userAccessFilter})
-
-    def _process(self, iterator, filter=None, iface=None):
-        if iface is None:
-            iface = self.DETAIL_INTERFACES.get(self._detail)
-            if iface is None:
-                raise HTTPAPIError('Invalid detail level: %s' % self._detail, 400)
-        for obj in self._iterateOver(iterator, self._offset, self._limit, self._orderBy, self._descending, filter):
-            yield self._postprocess(obj, self._makeFossil(obj, iface), iface)
 
 
 Serializer.register('html', HTML4Serializer)

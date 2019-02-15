@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -22,11 +22,11 @@ from datetime import date, timedelta
 from sqlalchemy.orm import joinedload, load_only
 
 from indico.modules.events import Event
+from indico.modules.events.abstracts.util import get_events_with_abstract_persons
 from indico.modules.events.contributions.util import get_events_with_linked_contributions
 from indico.modules.events.registration.util import get_events_registered
 from indico.modules.events.surveys.util import get_events_with_submitted_surveys
 from indico.util.date_time import now_utc, utc_to_server
-from indico.util.redis import avatar_links
 from indico.util.struct.iterables import window
 
 
@@ -114,14 +114,16 @@ def _get_category_score(user, categ, attended_events, debug=False):
 def get_category_scores(user, debug=False):
     # XXX: check if we can add some more roles such as 'contributor' to assume attendance
     event_ids = set()
-    event_ids.update(int(id_)
-                     for id_, roles in avatar_links.get_links(user).iteritems()
+    event_ids.update(id_
+                     for id_, roles in get_events_with_abstract_persons(user).iteritems()
                      if 'abstract_submitter' in roles)
     event_ids.update(id_
                      for id_, roles in get_events_with_linked_contributions(user).iteritems()
                      if 'contribution_submission' in roles)
     event_ids |= get_events_registered(user)
     event_ids |= get_events_with_submitted_surveys(user)
+    if not event_ids:
+        return {}
     attended = (Event.query
                 .filter(Event.id.in_(event_ids), ~Event.is_deleted)
                 .options(joinedload('category'))

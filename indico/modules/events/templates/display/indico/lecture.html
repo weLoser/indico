@@ -1,13 +1,16 @@
+{% from 'events/display/_event_header_message.html' import render_event_header_msg %}
 {% from 'events/display/common/_manage_button.html' import render_manage_button %}
 {% from 'events/display/indico/_common.html' import render_location, render_users, render_event_time %}
 {% from 'events/notes/_note.html' import render_note %}
 
-{% set hook_event_header = template_hook('event-header', event=conf) | trim %}
-{% set has_subheader = event.description or files or folders or lectures or conf.getOrgText()
-                       or conf.getSupportInfo().getEmail() or conf.getSupportInfo().getTelephone()
-                       or (event.references and conf.getType() == "meeting") or hook_event_header %}
+{{ render_event_header_msg(event) }}
 
-<div class="eventWrapper" itemscope itemtype="http://schema.org/Event">
+{% set hook_event_header = template_hook('event-header', event=event) | trim %}
+{% set has_subheader = event.description or files or folders or lectures or event.organizer_info
+                       or event.contact_emails or event.contact_phones
+                       or (event.references and event.type == 'meeting') or hook_event_header %}
+
+<div class="event-wrapper">
     {% block header %}
         <div class="event-header event-header-lecture {%- if not has_subheader %} round-bottom-corners{% endif %}">
             {% if not g.static_site %}
@@ -17,17 +20,17 @@
             {% else %}
                 <div>{{ category }}</div>
             {% endif %}
-            {% set show_button = not conf.isClosed() and event.can_manage_attachments(session.user) %}
+            {% set show_button = not event.is_locked and event.can_manage_attachments(session.user) %}
             <div class="event-manage-button">
                 {{ render_manage_button(event, 'EVENT', show_button=show_button, toggle_notes=false) }}
             </div>
 
-            <h1 itemprop="name">{{ event.get_verbose_title(show_series_pos=true) }}</h1>
+            <h1>{{ event.get_verbose_title(show_series_pos=true) }}</h1>
             {% set chairpersons = event.person_links %}
             {% if chairpersons %}
                 <h2>
                     {% trans %}by{% endtrans %}
-                    {{ render_users(chairpersons, span_class='author', title=True) }}
+                    {{ render_users(chairpersons|sort(attribute='display_order_key'), span_class='author', title=true) }}
                 </h2>
             {% endif %}
             <div class="details">

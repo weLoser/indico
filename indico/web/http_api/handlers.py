@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -24,33 +24,27 @@ import posixpath
 import re
 import time
 import urllib
+from urlparse import parse_qs
 from uuid import UUID
 
-import transaction
-from flask import request, session, g, current_app
-from urlparse import parse_qs
-from werkzeug.exceptions import NotFound, BadRequest
+from flask import current_app, g, request, session
+from werkzeug.exceptions import BadRequest, NotFound
 
-from indico.core.db import DBMgr
-from indico.core.config import Config
+from indico.core.db import db
 from indico.core.logger import Logger
-from indico.modules.api import APIMode
-from indico.modules.api import settings as api_settings
+from indico.legacy.common.cache import GenericCache
+from indico.legacy.common.fossilize import clearCache, fossilize
+from indico.modules.api import APIMode, api_settings
 from indico.modules.api.models.keys import APIKey
 from indico.modules.oauth import oauth
 from indico.modules.oauth.provider import load_token
-from indico.util.contextManager import ContextManager
 from indico.util.string import to_unicode
+from indico.web.flask.util import ResponseUtil
 from indico.web.http_api import HTTPAPIHook
-from indico.web.http_api.responses import HTTPAPIResult, HTTPAPIError
-from indico.web.http_api.util import get_query_parameter
 from indico.web.http_api.fossils import IHTTPAPIExportResultFossil
 from indico.web.http_api.metadata.serializer import Serializer
-from indico.web.flask.util import ResponseUtil
-
-from MaKaC.common.fossilize import fossilize, clearCache
-from MaKaC.accessControl import AccessWrapper
-from MaKaC.common.cache import GenericCache
+from indico.web.http_api.responses import HTTPAPIError, HTTPAPIResult
+from indico.web.http_api.util import get_query_parameter
 
 
 # Remove the extension at the end or before the querystring
@@ -117,21 +111,8 @@ def checkAK(apiKey, signature, timestamp, path, query):
     return ak, onlyPublic
 
 
-def buildAW(ak, onlyPublic=False):
-    aw = AccessWrapper()
-    if ak and not onlyPublic:
-        # If we have an authenticated request, require HTTPS
-        # Dirty hack: Google calendar converts HTTP API requests from https to http
-        # Therefore, not working with Indico setup (requiring https for HTTP API authenticated)
-        if not request.is_secure and api_settings.get('require_https') and request.user_agent.browser != 'google':
-            raise HTTPAPIError('HTTPS is required', 403)
-        aw.setUser(ak.user.as_avatar)
-    return aw
-
-
 def handler(prefix, path):
     path = posixpath.join('/', prefix, path)
-    ContextManager.destroy()
     clearCache()  # init fossil cache
     logger = Logger.get('httpapi')
     if request.method == 'POST':
@@ -147,9 +128,6 @@ def handler(prefix, path):
         # Parse the actual query string
         queryParams = dict((key, value.encode('utf-8')) for key, value in request.args.iteritems())
         query = request.query_string
-
-    dbi = DBMgr.getInstance()
-    dbi.startRequest()
 
     apiKey = get_query_parameter(queryParams, ['ak', 'apikey'], None)
     cookieAuth = get_query_parameter(queryParams, ['ca', 'cookieauth'], 'no') == 'yes'
@@ -200,12 +178,12 @@ def handler(prefix, path):
                 if enforceOnlyPublic:
                     onlyPublic = True
                 # Create an access wrapper for the API key's user
-                aw = buildAW(ak, onlyPublic)
+                user = ak.user if ak and not onlyPublic else None
             else:  # Access Token (OAuth)
                 at = load_token(oauth_request.access_token.access_token)
-                aw = buildAW(at, onlyPublic)
+                user = at.user if at and not onlyPublic else None
             # Get rid of API key in cache key if we did not impersonate a user
-            if ak and aw.getUser() is None:
+            if ak and user is None:
                 cacheKey = normalizeQuery(path, query,
                                           remove=('_', 'ak', 'apiKey', 'signature', 'timestamp', 'nc', 'nocache',
                                                   'oa', 'onlyauthed'))
@@ -217,20 +195,17 @@ def handler(prefix, path):
                     cacheKey = 'signed_' + cacheKey
         else:
             # We authenticated using a session cookie.
-            if Config.getInstance().getCSRFLevel() >= 2:
-                token = request.headers.get('X-CSRF-Token', get_query_parameter(queryParams, ['csrftoken']))
-                if used_session.csrf_protected and used_session.csrf_token != token:
-                    raise HTTPAPIError('Invalid CSRF token', 403)
-            aw = AccessWrapper()
-            if not onlyPublic:
-                aw.setUser(used_session.avatar)
+            token = request.headers.get('X-CSRF-Token', get_query_parameter(queryParams, ['csrftoken']))
+            if used_session.csrf_protected and used_session.csrf_token != token:
+                raise HTTPAPIError('Invalid CSRF token', 403)
+            user = used_session.user if not onlyPublic else None
             userPrefix = 'user-{}_'.format(used_session.user.id)
             cacheKey = userPrefix + normalizeQuery(path, query,
                                                    remove=('_', 'nc', 'nocache', 'ca', 'cookieauth', 'oa', 'onlyauthed',
                                                            'csrftoken'))
 
         # Bail out if the user requires authentication but is not authenticated
-        if onlyAuthed and not aw.getUser():
+        if onlyAuthed and not user:
             raise HTTPAPIError('Not authenticated', 403)
 
         addToCache = not hook.NO_CACHE
@@ -242,9 +217,9 @@ def handler(prefix, path):
                 result, extra, ts, complete, typeMap = obj
                 addToCache = False
         if result is None:
-            ContextManager.set("currentAW", aw)
+            g.current_api_user = user
             # Perform the actual exporting
-            res = hook(aw)
+            res = hook(user)
             if isinstance(res, current_app.response_class):
                 addToCache = False
                 is_response = True
@@ -273,11 +248,11 @@ def handler(prefix, path):
             norm_path, norm_query = normalizeQuery(path, query, remove=('signature', 'timestamp'), separate=True)
             uri = to_unicode('?'.join(filter(None, (norm_path, norm_query))))
             ak.register_used(request.remote_addr, uri, not onlyPublic)
-            transaction.commit()
+            db.session.commit()
         else:
             # No need to commit stuff if we didn't use an API key (nothing was written)
             # XXX do we even need this?
-            transaction.abort()
+            db.session.rollback()
 
         # Log successful POST api requests
         if error is None and request.method == 'POST':

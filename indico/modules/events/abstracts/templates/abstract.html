@@ -1,14 +1,15 @@
 {% extends 'events/abstracts/management/_base.html' if management else 'events/abstracts/display/_base.html' %}
 
-{% from 'events/abstracts/reviewing/judgment.html' import render_decision_box, render_reviewed_for_tracks_box,
-                                                         render_review_summary_box %}
-{% from 'events/abstracts/reviewing/public.html' import render_abstract_info, render_abstract_judgment %}
+{% from 'events/abstracts/reviewing/judgment.html' import render_reviewed_for_tracks_box, render_review_summary_box %}
+{% from 'events/abstracts/reviewing/public.html' import render_abstract_info, render_abstract_judgment,
+                                                        render_submission_info %}
 {% from 'events/abstracts/reviewing/timeline.html' import render_multiple_review_group_text %}
 {% from 'events/reviews/timeline.html' import render_timeline %}
+{% from 'events/reviews/_common.html' import render_decision_box %}
 
 {% block back_button_url -%}
     {% if management -%}
-        {{ url_for('.manage_abstract_list', abstract.event_new) }}
+        {{ url_for('.manage_abstract_list', abstract.event) }}
     {%- endif %}
 {%- endblock %}
 
@@ -21,14 +22,17 @@
 {% block content %}
     {{ render_abstract_info(abstract) }}
 
-    <div class="i-timeline">
-        {% call(block) render_timeline(abstract, comment_form, review_form) %}
-            {% if block == 'multiple-review-group-text' %}
-                {{ render_multiple_review_group_text(abstract) }}
-            {% endif %}
-        {% endcall %}
+    {% call(block, __) render_timeline(abstract, comment_form, review_form) %}
+        {% if block == 'multiple-review-group-text' %}
+            {{ render_multiple_review_group_text(abstract) }}
+        {% endif %}
+        {% if block == 'revision-info' %}
+            {{ render_submission_info(abstract, field_values) }}
+        {% endif %}
+    {% endcall %}
 
-        {% if abstract.can_judge(session.user, check_state=true) and abstract.event_new.tracks %}
+    <div class="i-timeline">
+        {% if abstract.can_judge(session.user, check_state=true) and abstract.event.tracks %}
             {{ render_reviewed_for_tracks_box(abstract, review_track_list_form) }}
         {% endif %}
 
@@ -38,8 +42,8 @@
             </div>
         {% endif %}
 
-        {% if abstract.can_judge(session.user, check_state=true) %}
-            <div id="abstract-decision-box" class="i-timeline-item">
+        {% if not abstract.event.is_locked and abstract.can_judge(session.user, check_state=true) %}
+            <div id="proposal-decision-box" class="i-timeline-item">
                 {{ render_decision_box(abstract, judgment_form, session.user) }}
             </div>
         {% endif %}
@@ -66,6 +70,9 @@
     {% if not no_javascript %}
         <script>
             setupReviewingPage();
+            setupAbstractJudgment({
+                trackSessionMap: {{ track_session_map|tojson }}
+            });
         </script>
     {% endif %}
 {% endblock %}

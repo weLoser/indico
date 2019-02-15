@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,10 +17,11 @@
 import pytest
 from freezegun import freeze_time
 from mock import MagicMock
+from werkzeug.exceptions import ServiceUnavailable
 
-from indico.core.errors import IndicoError
 from indico.modules.events.agreements.models.agreements import Agreement, AgreementState
 from indico.util.date_time import now_utc
+
 
 pytest_plugins = 'indico.modules.events.agreements.testing.fixtures'
 
@@ -95,11 +96,11 @@ def test_locator():
 
 
 @pytest.mark.parametrize('person_with_user', (True, False))
-def test_create_from_data(dummy_event_new, dummy_person, dummy_user, person_with_user):
+def test_create_from_data(dummy_event, dummy_person, dummy_user, person_with_user):
     type_ = 'dummy'
     dummy_person.user = dummy_user if person_with_user else None
-    agreement = Agreement.create_from_data(event=dummy_event_new, type_=type_, person=dummy_person)
-    assert agreement.event_new == dummy_event_new
+    agreement = Agreement.create_from_data(event=dummy_event, type_=type_, person=dummy_person)
+    assert agreement.event == dummy_event
     assert agreement.type == type_
     assert agreement.state == AgreementState.pending
     assert agreement.uuid
@@ -169,7 +170,7 @@ def test_render():
 def test_render_no_definition(monkeypatch):
     monkeypatch.setattr(Agreement, 'definition', property(lambda s: None))
     agreement = Agreement()
-    with pytest.raises(IndicoError):
+    with pytest.raises(ServiceUnavailable):
         agreement.render(None)
 
 
@@ -180,7 +181,14 @@ def test_belongs_to():
 
 
 @pytest.mark.usefixtures('mock_agreement_definition')
-def test_is_orphan(dummy_event_new):
-    agreement = Agreement(event_new=dummy_event_new)
+def test_is_orphan(dummy_event):
+    agreement = Agreement(event=dummy_event)
     agreement.is_orphan()
-    agreement.definition.is_agreement_orphan(agreement.event_new, agreement)
+    agreement.definition.is_agreement_orphan(agreement.event, agreement)
+
+
+def test_is_orphan_no_definition(monkeypatch):
+    monkeypatch.setattr(Agreement, 'definition', property(lambda s: None))
+    agreement = Agreement()
+    with pytest.raises(ServiceUnavailable):
+        agreement.is_orphan()

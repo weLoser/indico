@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,18 +19,18 @@ from __future__ import unicode_literals
 from io import BytesIO
 from itertools import ifilter
 
-from lxml import html
-from lxml.etree import ParserError
-
 import icalendar as ical
 from flask import session
+from lxml import html
+from lxml.etree import ParserError
 from pyatom import AtomFeed
 from sqlalchemy.orm import joinedload, load_only, subqueryload, undefer
+from werkzeug.urls import url_parse
 
+from indico.core.config import config
 from indico.modules.categories import Category
 from indico.modules.events import Event
 from indico.util.date_time import now_utc
-from indico.web.flask.util import url_for
 
 
 def serialize_categories_ical(category_ids, user, event_filter=True, event_filter_fn=None, update_query=None):
@@ -80,16 +80,15 @@ def serialize_categories_ical(category_ids, user, event_filter=True, event_filte
     for event in events:
         if not event.can_access(user):
             continue
-        url = url_for('event.conferenceDisplay', confId=event.id, _external=True)
         location = ('{} ({})'.format(event.room_name, event.venue_name)
                     if event.venue_name and event.room_name
                     else (event.venue_name or event.room_name))
         cal_event = ical.Event()
-        cal_event.add('uid', u'indico-event-{}@cern.ch'.format(event.id))
+        cal_event.add('uid', u'indico-event-{}@{}'.format(event.id, url_parse(config.BASE_URL).host))
         cal_event.add('dtstamp', now)
         cal_event.add('dtstart', event.start_dt)
         cal_event.add('dtend', event.end_dt)
-        cal_event.add('url', url)
+        cal_event.add('url', event.external_url)
         cal_event.add('summary', event.title)
         cal_event.add('location', location)
         description = []
@@ -105,7 +104,7 @@ def serialize_categories_ical(category_ids, user, event_filter=True, event_filte
             except ParserError:
                 # this happens e.g. if desc_text contains only a html comment
                 pass
-        description.append(url)
+        description.append(event.external_url)
         cal_event.add('description', u'\n'.join(description))
         cal.add_component(cal_event)
     return BytesIO(cal.to_ical())
@@ -135,7 +134,7 @@ def serialize_category_atom(category, url, user, event_filter):
     for event in events:
         feed.add(title=event.title,
                  summary=unicode(event.description),  # get rid of RichMarkup
-                 url=url_for('event.conferenceDisplay', confId=event.id, _external=True),
+                 url=event.external_url,
                  updated=event.start_dt)
     return BytesIO(feed.to_string().encode('utf-8'))
 

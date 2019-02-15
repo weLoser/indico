@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -61,7 +61,7 @@ def test_get_full_name(last_name_first, last_name_upper, abbrev_first_name, expe
     user.title = UserTitle.mr
     titled_name = user.get_full_name(last_name_first=last_name_first, last_name_upper=last_name_upper,
                                      abbrev_first_name=abbrev_first_name, show_title=True)
-    assert titled_name == 'Mr. {}'.format(expected)
+    assert titled_name == 'Mr {}'.format(expected)
 
 
 @pytest.mark.parametrize(('first_name', 'last_name'), (

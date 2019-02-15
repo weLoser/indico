@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,21 +18,22 @@ from __future__ import unicode_literals
 
 from operator import itemgetter
 
-
-from pytz import all_timezones
-from wtforms.fields.core import SelectField, BooleanField, StringField
+from pytz import common_timezones, common_timezones_set
+from wtforms.fields.core import BooleanField, SelectField, StringField
 from wtforms.fields.html5 import EmailField
 from wtforms.fields.simple import TextAreaField
 from wtforms.validators import DataRequired, ValidationError
 
+from indico.core.config import config
 from indico.modules.auth.forms import LocalRegistrationForm, _check_existing_email
 from indico.modules.users import User
 from indico.modules.users.models.emails import UserEmail
-from indico.modules.users.models.users import UserTitle, NameFormat
+from indico.modules.users.models.users import NameFormat, UserTitle
 from indico.util.i18n import _, get_all_locales
 from indico.web.forms.base import IndicoForm, SyncedInputsMixin
-from indico.web.forms.fields import IndicoEnumSelectField, PrincipalField
-from indico.web.forms.validators import used_if_not_synced
+from indico.web.forms.fields import IndicoEnumSelectField, PrincipalField, PrincipalListField
+from indico.web.forms.util import inject_validators
+from indico.web.forms.validators import HiddenUnless, used_if_not_synced
 from indico.web.forms.widgets import SwitchWidget, SyncedInputWidget
 
 
@@ -54,6 +55,11 @@ class UserPreferencesForm(IndicoForm):
         widget=SwitchWidget(),
         description=_("Always use my current timezone instead of an event's timezone."))
 
+    show_future_events = BooleanField(
+        _('Show future events'),
+        widget=SwitchWidget(),
+        description=_('Show future events by default.'))
+
     show_past_events = BooleanField(
         _('Show past events'),
         widget=SwitchWidget(),
@@ -70,7 +76,9 @@ class UserPreferencesForm(IndicoForm):
     def __init__(self, *args, **kwargs):
         super(UserPreferencesForm, self).__init__(*args, **kwargs)
         self.lang.choices = sorted(get_all_locales().items(), key=itemgetter(1))
-        self.timezone.choices = zip(all_timezones, all_timezones)
+        self.timezone.choices = zip(common_timezones, common_timezones)
+        if self.timezone.object_data and self.timezone.object_data not in common_timezones_set:
+            self.timezone.choices.append((self.timezone.object_data, self.timezone.object_data))
 
 
 class UserEmailsForm(IndicoForm):
@@ -107,7 +115,20 @@ class AdminUserSettingsForm(IndicoForm):
 
 class AdminAccountRegistrationForm(LocalRegistrationForm):
     email = EmailField(_('Email address'), [DataRequired(), _check_existing_email])
+    create_identity = BooleanField(_("Set login details"), widget=SwitchWidget(), default=True)
 
     def __init__(self, *args, **kwargs):
+        if config.LOCAL_IDENTITIES:
+            for field in ('username', 'password', 'confirm_password'):
+                inject_validators(self, field, [HiddenUnless('create_identity')], early=True)
         super(AdminAccountRegistrationForm, self).__init__(*args, **kwargs)
         del self.comment
+        if not config.LOCAL_IDENTITIES:
+            del self.username
+            del self.password
+            del self.confirm_password
+            del self.create_identity
+
+
+class AdminsForm(IndicoForm):
+    admins = PrincipalListField(_('Admins'), [DataRequired()])

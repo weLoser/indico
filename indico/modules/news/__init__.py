@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -15,6 +15,8 @@
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import unicode_literals
+
+from flask import session
 
 from indico.core import signals
 from indico.core.logger import Logger
@@ -40,4 +42,5 @@ news_settings = SettingsProxy('news', {
 
 @signals.menu.items.connect_via('admin-sidemenu')
 def _sidemenu_items(sender, **kwargs):
-    yield SideMenuItem('news', _('News'), url_for('news.manage'), section='homepage')
+    if session.user.is_admin:
+        yield SideMenuItem('news', _('News'), url_for('news.manage'), section='homepage')

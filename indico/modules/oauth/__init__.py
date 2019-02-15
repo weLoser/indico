@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,6 +20,7 @@ import os
 from datetime import timedelta
 from uuid import uuid4
 
+from flask import session
 from flask_oauthlib.provider import OAuth2Provider
 
 from indico.core import signals
@@ -43,12 +44,13 @@ logger = Logger.get('oauth')
 
 @signals.menu.items.connect_via('admin-sidemenu')
 def _extend_admin_menu(sender, **kwargs):
-    return SideMenuItem('applications', 'Applications', url_for('oauth.apps'), section='integration')
+    if session.user.is_admin:
+        return SideMenuItem('applications', 'Applications', url_for('oauth.apps'), section='integration')
 
 
 @signals.menu.items.connect_via('user-profile-sidemenu')
-def _extend_profile_sidemenu(sender, **kwargs):
-    yield SideMenuItem('applications', _('Applications'), url_for('oauth.user_profile'), 40)
+def _extend_profile_sidemenu(sender, user, **kwargs):
+    yield SideMenuItem('applications', _('Applications'), url_for('oauth.user_profile'), 40, disabled=user.is_system)
 
 
 @signals.app_created.connect

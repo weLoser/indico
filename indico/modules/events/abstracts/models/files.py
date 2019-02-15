@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,10 +18,10 @@ from __future__ import unicode_literals
 
 import posixpath
 
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.storage import StoredFileMixin
-from indico.util.string import format_repr, return_ascii, text_to_repr, strict_unicode
+from indico.util.string import format_repr, return_ascii, strict_unicode, text_to_repr
 
 
 class AbstractFile(StoredFileMixin, db.Model):
@@ -57,12 +57,12 @@ class AbstractFile(StoredFileMixin, db.Model):
 
     def _build_storage_path(self):
         self.abstract.assign_id()
-        path_segments = ['event', strict_unicode(self.abstract.event_new.id),
+        path_segments = ['event', strict_unicode(self.abstract.event.id),
                          'abstracts', strict_unicode(self.abstract.id)]
         self.assign_id()
         filename = '{}-{}'.format(self.id, self.filename)
         path = posixpath.join(*(path_segments + [filename]))
-        return Config.getInstance().getAttachmentStorage(), path
+        return config.ATTACHMENT_STORAGE, path
 
     @return_ascii
     def __repr__(self):

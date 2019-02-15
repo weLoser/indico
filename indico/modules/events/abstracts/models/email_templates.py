@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,7 +20,7 @@ from sqlalchemy.dialects.postgresql import ARRAY, JSON
 
 from indico.core.db import db
 from indico.util.locators import locator_property
-from indico.util.string import return_ascii, format_repr
+from indico.util.string import format_repr, return_ascii
 
 
 def _get_next_position(context):
@@ -108,7 +108,7 @@ class AbstractEmailTemplate(db.Model):
         nullable=False
     )
 
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -122,7 +122,7 @@ class AbstractEmailTemplate(db.Model):
 
     @locator_property
     def locator(self):
-        return dict(self.event_new.locator, email_tpl_id=self.id)
+        return dict(self.event.locator, email_tpl_id=self.id)
 
     @return_ascii
     def __repr__(self):

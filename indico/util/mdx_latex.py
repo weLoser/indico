@@ -1,4 +1,3 @@
-#!/usr/bin/env python2
 """Extension to python-markdown to support LaTeX (rather than html) output.
 
 Authored by Rufus Pollock: <http://www.rufuspollock.org/>
@@ -66,21 +65,22 @@ Version 2.1: (August 2013)
 
 from __future__ import absolute_import
 
-__version__ = '2.1'
-
 import re
-import requests
-import sys
 import textwrap
+import xml.dom.minidom
 from io import BytesIO
 from mimetypes import guess_extension
-from requests.exceptions import InvalidURL
 from tempfile import NamedTemporaryFile
 from urlparse import urlparse
 
 import markdown
-import xml.dom.minidom
+import requests
+from lxml.html import html5parser
 from PIL import Image
+from requests.exceptions import ConnectionError, InvalidURL
+
+
+__version__ = '2.1'
 
 
 start_single_quote_re = re.compile("(^|\s|\")'")
@@ -222,11 +222,8 @@ def latex_render_error(message):
     :returns: LaTeX code for error box
     """
     return textwrap.dedent(r"""
-       \begin{tcolorbox}[width=\textwidth,colback=red!5!white,colframe=red!75!black,
-                         title={Indico rendering error}]
-          \begin{verbatim}
-            %s
-          \end{verbatim}
+       \begin{tcolorbox}[width=\textwidth,colback=red!5!white,colframe=red!75!black,title={Indico rendering error}]
+          \begin{verbatim}%s\end{verbatim}
        \end{tcolorbox}""" % message)
 
 
@@ -250,9 +247,11 @@ def latex_render_image(src, alt, strict=False):
             raise ImageURLException("URL scheme not supported: {}".format(src))
         else:
             try:
-                resp = requests.get(src, verify=False)
+                resp = requests.get(src, verify=False, timeout=5)
             except InvalidURL:
                 raise ImageURLException("Cannot understand URL '{}'".format(src))
+            except (requests.Timeout, ConnectionError):
+                raise ImageURLException("Problem downloading image ({})".format(src))
             extension = None
 
             if resp.status_code != 200:
@@ -295,6 +294,7 @@ def makeExtension(configs=None):
 
 class LaTeXExtension(markdown.Extension):
     def __init__(self, configs=None):
+        self.configs = configs
         self.reset()
 
     def extendMarkdown(self, md, md_globals):
@@ -307,7 +307,7 @@ class LaTeXExtension(markdown.Extension):
                 self.md.inlinePatterns.pop(key)
                 break
 
-        latex_tp = LaTeXTreeProcessor()
+        latex_tp = LaTeXTreeProcessor(self.configs)
         math_pp = MathTextPostProcessor()
         table_pp = TableTextPostProcessor()
         link_pp = LinkTextPostProcessor()
@@ -343,6 +343,9 @@ class NonEncodedAutoMailPattern(markdown.inlinepatterns.Pattern):
 
 
 class LaTeXTreeProcessor(markdown.treeprocessors.Treeprocessor):
+    def __init__(self, configs):
+        self.configs = configs
+
     def run(self, doc):
         """Walk the dom converting relevant nodes to text nodes with relevant
         content."""
@@ -405,6 +408,8 @@ class LaTeXTreeProcessor(markdown.treeprocessors.Treeprocessor):
         elif ournode.tag == 'q':
             buffer += "`%s'" % subcontent.strip()
         elif ournode.tag == 'p':
+            if 'apply_br' in self.configs:
+                subcontent = subcontent.replace('\n', '\\\\\\relax\n')
             buffer += '\n%s\n' % subcontent.strip()
         elif ournode.tag == 'strong':
             buffer += '\\textbf{%s}' % subcontent.strip()
@@ -618,81 +623,12 @@ class Table2Latex:
 # ========================== LINKS =================================
 
 class LinkTextPostProcessor(markdown.postprocessors.Postprocessor):
-
     def run(self, instr):
-        # Process all hyperlinks
-        converter = Link2Latex()
-        new_blocks = []
-        for block in instr.split("\n\n"):
-            stripped = block.strip()
-            match = re.search(r'<a[^>]*>([^<]+)</a>', stripped)
-            # <table catches modified verions (e.g. <table class="..">
-            if match:
-                latex_link = re.sub(r'<a[^>]*>([^<]+)</a>',
-                                    converter.convert(match.group(0)).strip(),
-                                    stripped)
-                new_blocks.append(latex_link)
-            else:
-                new_blocks.append(block)
+        new_blocks = [re.sub(ur'<a[^>]*>([^<]+)</a>', lambda m: convert_link_to_latex(m.group(0)).strip(), block)
+                      for block in instr.split("\n\n")]
         return '\n\n'.join(new_blocks)
 
 
-class Link2Latex(object):
-    def convert(self, instr):
-        dom = xml.dom.minidom.parseString(instr.encode('utf-8'))
-        link = dom.documentElement
-        href = link.getAttribute('href')
-
-        desc = re.search(r'>([^<]+)', instr)
-        out = \
-            """
-            \\href{%s}{%s}
-            """ % (href, desc.group(0)[1:])
-        return out
-
-
-def template(template_fo, latex_to_insert):
-    tmpl = template_fo.read()
-    tmpl = tmpl.replace('INSERT-TEXT-HERE', latex_to_insert)
-    return tmpl
-    # title_items = [ '\\title', '\\end{abstract}', '\\thanks', '\\author' ]
-    # has_title_stuff = False
-    # for it in title_items:
-    #    has_title_stuff = has_title_stuff or (it in tmpl)
-
-
-def main():
-    import optparse
-    usage = \
-        """usage: %prog [options] <in-file-path>
-
-        Given a file path, process it using markdown2latex and print the result on
-        stdout.
-
-        If using template option template should place text INSERT-TEXT-HERE in the
-        template where text should be inserted.
-        """
-    parser = optparse.OptionParser(usage)
-    parser.add_option('-t', '--template', dest='template',
-                      default='',
-                      help='path to latex template file (optional)')
-    (options, args) = parser.parse_args()
-    if not len(args) > 0:
-        parser.print_help()
-        sys.exit(1)
-    inpath = args[0]
-    infile = file(inpath)
-
-    md = markdown.Markdown()
-    mkdn2latex = LaTeXExtension()
-    mkdn2latex.extendMarkdown(md, markdown.__dict__)
-    out = md.convert(infile.read())
-
-    if options.template:
-        tmpl_fo = file(options.template)
-        out = template(tmpl_fo, out)
-
-    print out
-
-if __name__ == '__main__':
-    main()
+def convert_link_to_latex(instr):
+    dom = html5parser.fragment_fromstring(instr)
+    return ur'\href{%s}{%s}' % (dom.get('href'), dom.text)

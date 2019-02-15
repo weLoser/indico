@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,13 +16,14 @@
 
 from __future__ import unicode_literals
 
-from flask import request, jsonify, session
+from flask import jsonify, request, session
 from werkzeug.exceptions import BadRequest
 
 from indico.core.db import db
 from indico.modules.events.registration import logger
 from indico.modules.events.registration.controllers.management import RHManageRegFormBase
-from indico.modules.events.registration.models.items import RegistrationFormSection, RegistrationFormItemType
+from indico.modules.events.registration.models.items import RegistrationFormItemType, RegistrationFormSection
+from indico.modules.events.registration.util import update_regform_item_positions
 from indico.web.util import jsonify_data
 
 
@@ -35,8 +36,8 @@ class RHManageRegFormSectionBase(RHManageRegFormBase):
         }
     }
 
-    def _checkParams(self, params):
-        RHManageRegFormBase._checkParams(self, params)
+    def _process_args(self):
+        RHManageRegFormBase._process_args(self)
         self.section = RegistrationFormSection.get_one(request.view_args['section_id'])
 
 
@@ -67,7 +68,7 @@ class RHRegistrationFormModifySection(RHManageRegFormSectionBase):
 
     def _process_PATCH(self):
         changes = request.json['changes']
-        if changes.viewkeys() > {'title', 'description'}:
+        if set(changes.viewkeys()) > {'title', 'description'}:
             raise BadRequest
         for field, value in changes.iteritems():
             setattr(self.section, field, value)
@@ -84,6 +85,7 @@ class RHRegistrationFormToggleSection(RHManageRegFormSectionBase):
         if not enabled and self.section.type == RegistrationFormItemType.section_pd:
             raise BadRequest
         self.section.is_enabled = enabled
+        update_regform_item_positions(self.regform)
         db.session.flush()
         if self.section.is_enabled:
             logger.info('Section %s enabled by %s', self.section, session.user)
@@ -102,12 +104,13 @@ class RHRegistrationFormMoveSection(RHManageRegFormSectionBase):
             return jsonify(success=True)
         elif new_position < old_position:
             def fn(section):
-                return section.position >= new_position and section.id != self.section.id
+                return (section.position >= new_position and section.id != self.section.id and not section.is_deleted
+                        and section.is_enabled)
             start_enum = new_position + 1
         else:
             def fn(section):
-                return (section.position > old_position and section.position <= new_position
-                        and section.id != self.section.id)
+                return (old_position < section.position <= new_position and section.id != self.section.id
+                        and not section.is_deleted and section.is_enabled)
             start_enum = self.section.position
         to_update = filter(fn, RegistrationFormSection.find(registration_form=self.regform, is_deleted=False)
                                                       .order_by(RegistrationFormSection.position).all())

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -23,7 +23,7 @@ from pytz import timezone
 from sqlalchemy.orm import load_only
 from sqlalchemy.orm.attributes import set_committed_value
 
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.db.sqlalchemy.links import LinkType
 from indico.core.db.sqlalchemy.protection import ProtectionMode
@@ -35,6 +35,7 @@ from indico.modules.events.contributions import Contribution
 from indico.modules.events.contributions.models.subcontributions import SubContribution
 from indico.modules.events.sessions import Session
 from indico.modules.events.timetable.models.entries import TimetableEntry, TimetableEntryType
+from indico.modules.events.util import serialize_event_for_json_ld
 from indico.util.caching import memoize_redis
 from indico.util.date_time import now_utc
 from indico.util.i18n import _, ngettext
@@ -71,7 +72,7 @@ def get_contribs_by_year(category_id=None):
     query = (db.session
              .query(db.cast(db.extract('year', TimetableEntry.start_dt), db.Integer).label('year'),
                     db.func.count())
-             .join(TimetableEntry.event_new)
+             .join(TimetableEntry.event)
              .filter(TimetableEntry.type == TimetableEntryType.CONTRIBUTION,
                      ~Event.is_deleted,
                      category_filter)
@@ -93,7 +94,7 @@ def get_attachment_count(category_id=None):
     query = (db.session
              .query(db.func.count(Attachment.id))
              .join(Attachment.folder)
-             .join(AttachmentFolder.event_new)
+             .join(AttachmentFolder.event)
              .outerjoin(AttachmentFolder.session)
              .outerjoin(AttachmentFolder.contribution)
              .outerjoin(AttachmentFolder.subcontribution)
@@ -134,7 +135,7 @@ def get_upcoming_events():
     data = upcoming_events_settings.get_all()
     if not data['max_entries'] or not data['entries']:
         return
-    tz = timezone(Config.getInstance().getDefaultTimezone())
+    tz = timezone(config.DEFAULT_TIMEZONE)
     now = now_utc(False).astimezone(tz)
     base_query = (Event.query
                   .filter(Event.effective_protection_mode == ProtectionMode.public,

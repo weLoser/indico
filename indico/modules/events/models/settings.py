@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -45,7 +45,7 @@ class EventSettingsMixin(object):
         )
 
     @declared_attr
-    def event_new(cls):
+    def event(cls):
         return db.relationship(
             'Event',
             lazy=True,
@@ -77,6 +77,7 @@ class EventSettingPrincipal(PrincipalSettingsBase, EventSettingsMixin, db.Model)
     principal_backref_name = 'in_event_settings_acls'
     settings_backref_name = 'settings_principals'
     extra_key_cols = ('event_id',)
+    allow_event_roles = True
 
     @declared_attr
     def __table_args__(cls):

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,12 +14,10 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-# indico imports
-from indico.web.http_api.metadata.serializer import Serializer
-
 from indico.modules.attachments.models.attachments import Attachment, AttachmentType
 from indico.modules.events.api import EventBaseHook
 from indico.web.http_api.hooks.base import HTTPAPIHook
+from indico.web.http_api.metadata.serializer import Serializer
 from indico.web.http_api.responses import HTTPAPIError
 
 
@@ -46,15 +44,13 @@ class FileHook(EventBaseHook):
         if not self._attachment:
             raise HTTPAPIError("File not found", 404)
 
-    def export_file(self, aw):
+    def export_file(self, user):
         if self._attachment.type != AttachmentType.file:
             raise HTTPAPIError("Resource is not a file", 404)
 
         return self._attachment.file.send()
 
-    def _hasAccess(self, aw):
-        avatar = aw.getUser()
-        user = avatar.user if avatar else None
+    def _has_access(self, user):
         return self._attachment.can_access(user)
 
 

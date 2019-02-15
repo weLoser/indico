@@ -1,8 +1,13 @@
-{% extends 'events/registration/display/_event_registration_base.html' %}
+{% if event.type == 'conference' %}
+    {% extends 'events/registration/display/_event_registration_base.html' %}
+{% else %}
+    {% extends 'events/registration/display/_meeting_registration_base.html' %}
+{% endif %}
+
 {% from 'message_box.html' import message_box %}
 
 {% block title %}
-    {% trans %}Participant List{% endtrans %}
+    {{- page_title -}}
 {% endblock %}
 
 {% block subtitle %}
@@ -26,7 +31,7 @@
                 <th class="i-table thin-column" data-sorter="false"></th>
             {% endif %}
             {% for column in columns %}
-                <th class="i-table">{{ column }}</th>
+                <th class="i-table" data-sorter="text">{{ column }}</th>
             {% endfor %}
         </tr>
     </thead>

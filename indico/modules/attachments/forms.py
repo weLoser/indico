@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,13 +16,11 @@
 
 from __future__ import unicode_literals
 
-
 from wtforms.ext.sqlalchemy.fields import QuerySelectField
-from wtforms.ext.dateutil.fields import DateField
 from wtforms.fields import BooleanField, TextAreaField
 from wtforms.fields.html5 import URLField
-from wtforms.fields.simple import StringField, HiddenField
-from wtforms.validators import DataRequired, Optional
+from wtforms.fields.simple import HiddenField, StringField
+from wtforms.validators import DataRequired, Optional, ValidationError
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy.protection import ProtectionMode
@@ -31,9 +29,9 @@ from indico.modules.attachments.util import get_default_folder_names
 from indico.util.i18n import _
 from indico.web.flask.util import url_for
 from indico.web.forms.base import IndicoForm, generated_data
-from indico.web.forms.fields import (IndicoSelectMultipleCheckboxField, IndicoRadioField, AccessControlListField,
-                                     FileField, EditableFileField)
-from indico.web.forms.validators import UsedIf, HiddenUnless
+from indico.web.forms.fields import (AccessControlListField, EditableFileField, FileField, IndicoDateField,
+                                     IndicoRadioField, IndicoSelectMultipleCheckboxField)
+from indico.web.forms.validators import HiddenUnless, UsedIf
 from indico.web.forms.widgets import SwitchWidget, TypeaheadWidget
 
 
@@ -103,10 +101,18 @@ class AttachmentFolderForm(IndicoForm):
     acl = AccessControlListField(_("Access control list"), [UsedIf(lambda form, field: form.protected.data)],
                                  groups=True, allow_external=True, default_text=_('Restrict access to this folder'),
                                  description=_("The list of users and groups allowed to access the folder"))
-    is_always_visible = BooleanField(_("Always Visible"), widget=SwitchWidget(),
+    is_always_visible = BooleanField(_("Always Visible"),
+                                     [HiddenUnless('is_hidden', value=False)],
+                                     widget=SwitchWidget(),
                                      description=_("By default, folders are always visible, even if a user cannot "
                                                    "access them. You can disable this behavior here, hiding the folder "
                                                    "for anyone who does not have permission to access it."))
+    is_hidden = BooleanField(_("Always hidden"),
+                             [HiddenUnless('is_always_visible', value=False)],
+                             widget=SwitchWidget(),
+                             description=_("Always hide the folder and its contents from public display areas of "
+                                           "the event. You can use this for folders to store non-image files used "
+                                           "e.g. in download links. The access permissions still apply."))
 
     def __init__(self, *args, **kwargs):
         self.linked_object = kwargs.pop('linked_object')
@@ -122,26 +128,35 @@ class AttachmentFolderForm(IndicoForm):
             suggestions.add(self.title.data)
         return sorted(suggestions)
 
+    def validate_is_always_visible(self, field):
+        if self.is_always_visible.data and self.is_hidden.data:
+            raise ValidationError('These two options cannot be used at the same time')
+
+    validate_is_hidden = validate_is_always_visible
+
     @generated_data
     def protection_mode(self):
         return ProtectionMode.protected if self.protected.data else ProtectionMode.inheriting
 
 
 class AttachmentPackageForm(IndicoForm):
-    added_since = DateField(_('Added Since'), [Optional()], parse_kwargs={'dayfirst': True},
-                            description=_('Include only attachments uploaded after this date'))
+    added_since = IndicoDateField(_('Added Since'), [Optional()],
+                                  description=_('Include only attachments uploaded after this date'))
 
     filter_type = IndicoRadioField(_('Include'), [DataRequired()])
 
-    sessions = IndicoSelectMultipleCheckboxField(_('Sessions'), [HiddenUnless('filter_type', 'sessions'),
-                                                                 DataRequired()],
+    sessions = IndicoSelectMultipleCheckboxField(_('Sessions'),
+                                                 [UsedIf(lambda form, _: form.filter_type.data == 'sessions'),
+                                                  DataRequired()],
                                                  description=_('Include materials from selected sessions'),
                                                  coerce=int)
     contributions = IndicoSelectMultipleCheckboxField(_('Contributions'),
-                                                      [HiddenUnless('filter_type', 'contributions'), DataRequired()],
+                                                      [UsedIf(lambda form, _: form.filter_type.data == 'contributions'),
+                                                       DataRequired()],
                                                       description=_('Include materials from selected contributions'),
                                                       coerce=int)
-    dates = IndicoSelectMultipleCheckboxField(_('Events scheduled on'), [HiddenUnless('filter_type', 'dates'),
-                                                                         DataRequired()],
+    dates = IndicoSelectMultipleCheckboxField(_('Events scheduled on'),
+                                              [UsedIf(lambda form, _: form.filter_type.data == 'dates'),
+                                               DataRequired()],
                                               description=_('Include materials from sessions/contributions scheduled '
                                                             'on the selected dates'))

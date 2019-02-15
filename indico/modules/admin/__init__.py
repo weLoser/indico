@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,10 +16,16 @@
 
 from __future__ import unicode_literals
 
+from flask import session
+
 from indico.core import signals
+from indico.modules.admin.controllers.base import RHAdminBase
 from indico.util.i18n import _
 from indico.web.flask.util import url_for
-from indico.web.menu import SideMenuSection, SideMenuItem
+from indico.web.menu import SideMenuSection, TopMenuItem
+
+
+__all__ = ('RHAdminBase',)
 
 
 @signals.menu.sections.connect_via('admin-sidemenu')
@@ -31,9 +37,7 @@ def _sidemenu_sections(sender, **kwargs):
     yield SideMenuSection('homepage', _("Homepage"), 40, icon='home')
 
 
-@signals.menu.items.connect_via('admin-sidemenu')
-def _sidemenu_items(sender, **kwargs):
-    yield SideMenuItem('general', _('General Settings'), url_for('admin.adminList'), 100, icon='settings')
-    yield SideMenuItem('storage', _('Disk Storage'), url_for('admin.adminSystem'), 70, icon='stack')
-    yield SideMenuItem('ip_acl', _('IP-based ACL'), url_for('admin.adminServices-ipbasedacl'), section='security')
-    yield SideMenuItem('layout', _('Layout'), url_for('admin.adminLayout'), section='customization')
+@signals.menu.items.connect_via('top-menu')
+def _topmenu_items(sender, **kwargs):
+    if session.user and session.user.is_admin:
+        yield TopMenuItem('admin', _('Administration'), url_for('core.admin_dashboard'), 70)

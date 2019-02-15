@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,60 +16,30 @@
 
 from __future__ import unicode_literals
 
-from indico.web.flask.util import url_for
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.conferences import WPConferenceDefaultDisplayBase, WPConferenceModifBase
-from MaKaC.webinterface.pages.main import WPMainBase
-from MaKaC.webinterface.wcomponents import WSimpleNavigationDrawer
+from indico.modules.events.management.views import WPEventManagement
+from indico.modules.events.views import WPConferenceDisplayBase
+from indico.util.i18n import _
+from indico.web.breadcrumbs import render_breadcrumbs
+from indico.web.views import WPDecorated, WPJinjaMixin
 
 
-class WPVCJinjaMixin(WPJinjaMixin):
+class WPVCManageEvent(WPEventManagement):
+    sidemenu_option = 'videoconference'
+    template_prefix = 'vc/'
+    bundles = ('module_vc.js', 'module_vc.css')
+
+
+class WPVCEventPage(WPConferenceDisplayBase):
+    menu_entry_name = 'videoconference_rooms'
+    template_prefix = 'vc/'
+    bundles = ('module_vc.js', 'module_vc.css')
+
+
+class WPVCService(WPJinjaMixin, WPDecorated):
     template_prefix = 'vc/'
 
-
-class WPVCManageEvent(WPVCJinjaMixin, WPConferenceModifBase):
-    sidemenu_option = 'videoconference'
-
-    def getCSSFiles(self):
-        return (WPConferenceModifBase.getCSSFiles(self) +
-                self._asset_env['vc_sass'].urls() +
-                self._asset_env['selectize_css'].urls())
-
-    def getJSFiles(self):
-        return (WPConferenceModifBase.getJSFiles(self) +
-                self._asset_env['modules_vc_js'].urls() +
-                self._asset_env['selectize_js'].urls())
-
-    def _getPageContent(self, params):
-        return WPVCJinjaMixin._getPageContent(self, params)
-
-
-class WPVCEventPage(WPVCJinjaMixin, WPConferenceDefaultDisplayBase):
-    menu_entry_name = 'videoconference_rooms'
-
-    def __init__(self, rh, conf, **kwargs):
-        WPConferenceDefaultDisplayBase.__init__(self, rh, conf, **kwargs)
-        self._conf = conf
-        self._aw = rh.getAW()
-
-    def getCSSFiles(self):
-        return WPConferenceDefaultDisplayBase.getCSSFiles(self) + self._asset_env['eventservices_sass'].urls()
-
-    def getJSFiles(self):
-        return (WPConferenceDefaultDisplayBase.getJSFiles(self) +
-                self._asset_env['modules_event_display_js'].urls() +
-                self._asset_env['modules_vc_js'].urls())
-
-    def _getBody(self, params):
-        return self._getPageContent(params)
-
-
-class WPVCService(WPVCJinjaMixin, WPMainBase):
-    def getCSSFiles(self):
-        return WPMainBase.getCSSFiles(self) + self._asset_env['overviews_sass'].urls()
-
-    def _getNavigationDrawer(self):
-        return WSimpleNavigationDrawer('Videoconference', lambda: url_for('.vc_room_list'))
+    def _get_breadcrumbs(self):
+        return render_breadcrumbs(_('Videoconference'))
 
     def _getBody(self, params):
         return self._getPageContent(params)

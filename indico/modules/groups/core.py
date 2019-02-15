@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -24,11 +24,11 @@ from werkzeug.utils import cached_property
 from indico.core.auth import multipass
 from indico.core.db import db
 from indico.core.db.sqlalchemy.principals import PrincipalType
+from indico.legacy.common.cache import GenericCache
 from indico.modules.auth import Identity
 from indico.modules.groups.models.groups import LocalGroup
 from indico.util.caching import memoize_request
 from indico.util.string import return_ascii
-from MaKaC.common.cache import GenericCache
 
 
 class GroupProxy(object):
@@ -47,7 +47,8 @@ class GroupProxy(object):
     is_group = True
     is_network = False
     is_single_person = False
-    principal_order = 2
+    is_event_role = False
+    principal_order = 3
 
     def __new__(cls, name_or_id, provider=None, _group=None):
         """Creates the correct GroupProxy for the group type"""
@@ -86,6 +87,11 @@ class GroupProxy(object):
     def as_principal(self):
         """The serializable principal identifier of this group"""
         raise NotImplementedError
+
+    @property
+    def identifier(self):
+        provider, id_or_name = self.as_principal[1]
+        return 'Group:{}:{}'.format(provider or '', id_or_name)
 
     @cached_property
     def as_legacy_group(self):

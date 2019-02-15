@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,7 +20,7 @@ from collections import OrderedDict
 from datetime import timedelta
 from operator import attrgetter
 
-from flask import flash, request
+from flask import flash, request, session
 from sqlalchemy.orm import joinedload, subqueryload
 
 from indico.core.db import db
@@ -35,14 +35,15 @@ class ContributionListGenerator(ListGeneratorBase):
 
     endpoint = '.manage_contributions'
     list_link_type = 'contribution'
+    check_access = False
 
     def __init__(self, event):
         super(ContributionListGenerator, self).__init__(event)
         self.default_list_config = {'filters': {'items': {}}}
 
-        session_empty = {None: 'No session'}
-        track_empty = {None: 'No track'}
-        type_empty = {None: 'No type'}
+        session_empty = {None: _('No session')}
+        track_empty = {None: _('No track')}
+        type_empty = {None: _('No type')}
         session_choices = OrderedDict((unicode(s.id), s.title) for s in sorted(self.event.sessions,
                                                                                key=attrgetter('title')))
         track_choices = OrderedDict((unicode(t.id), t.title) for t in sorted(self.event.tracks,
@@ -104,9 +105,13 @@ class ContributionListGenerator(ListGeneratorBase):
         return query.filter(*criteria)
 
     def get_list_kwargs(self):
+        if self.check_access:
+            self.event.preload_all_acl_entries()
         contributions_query = self._build_query()
-        total_entries = contributions_query.count()
-        contributions = self._filter_list_entries(contributions_query, self.list_config['filters']).all()
+        total_entries = (sum(1 for c in contributions_query if c.can_access(session.user)) if self.check_access else
+                         contributions_query.count())
+        contributions = [c for c in self._filter_list_entries(contributions_query, self.list_config['filters'])
+                         if not self.check_access or c.can_access(session.user)]
         sessions = [{'id': s.id, 'title': s.title, 'colors': s.colors} for s in self.event.sessions]
         tracks = [{'id': int(t.id), 'title': t.title} for t in self.event.tracks]
         total_duration = (sum((c.duration for c in contributions), timedelta()),
@@ -122,8 +127,8 @@ class ContributionListGenerator(ListGeneratorBase):
         :param contrib: Used in RHs responsible for CRUD operations on a
                         contribution.
         :return: dict containing the list's entries, the fragment of
-                 displayed entries and whether the contrib passed is displayed
-                 in the results.
+                 displayed entries and whether the contribution passed is
+                 displayed in the results.
         """
         contrib_list_kwargs = self.get_list_kwargs()
         total_entries = contrib_list_kwargs.pop('total_entries')
@@ -146,12 +151,13 @@ class ContributionListGenerator(ListGeneratorBase):
 class ContributionDisplayListGenerator(ContributionListGenerator):
     endpoint = '.contribution_list'
     list_link_type = 'contribution_display'
+    check_access = True
 
     def render_contribution_list(self):
         """Render the contribution list template components.
 
         :return: dict containing the list's entries, the fragment of
-                 displayed entries and whether the contrib passed is displayed
+                 displayed entries and whether the contribution passed is displayed
                  in the results.
         """
         contrib_list_kwargs = self.get_list_kwargs()

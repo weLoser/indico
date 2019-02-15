@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,16 +17,16 @@
 from __future__ import unicode_literals
 
 import pytz
-from sqlalchemy import orm, DDL
-from sqlalchemy.dialects.postgresql import ARRAY, array, JSON
+from sqlalchemy import DDL, orm
+from sqlalchemy.dialects.postgresql import ARRAY, JSON, array
 from sqlalchemy.event import listens_for
 from sqlalchemy.ext.declarative import declared_attr
 from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import column_property
-from sqlalchemy.sql import select, literal, exists, func
+from sqlalchemy.sql import exists, func, literal, select
 
 from indico.core import signals
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.db.sqlalchemy import PyIntEnum
 from indico.core.db.sqlalchemy.attachments import AttachedItemsMixin
@@ -34,11 +34,12 @@ from indico.core.db.sqlalchemy.descriptions import DescriptionMixin, RenderMode
 from indico.core.db.sqlalchemy.protection import ProtectionManagersMixin, ProtectionMode
 from indico.core.db.sqlalchemy.searchable_titles import SearchableTitleMixin
 from indico.core.db.sqlalchemy.util.models import auto_table_args
+from indico.util.date_time import get_display_tz
 from indico.util.decorators import strict_classproperty
 from indico.util.i18n import _
 from indico.util.locators import locator_property
-from indico.util.string import MarkdownText, text_to_repr, format_repr, return_ascii
-from indico.util.struct.enum import TitledIntEnum
+from indico.util.string import MarkdownText, format_repr, return_ascii, text_to_repr
+from indico.util.struct.enum import RichIntEnum
 from indico.web.flask.util import url_for
 
 
@@ -56,7 +57,7 @@ def _get_default_event_themes():
     }
 
 
-class EventMessageMode(TitledIntEnum):
+class EventMessageMode(RichIntEnum):
     __titles__ = [_('None'), _('Info'), _('Warning'), _('Danger')]
     disabled = 0
     info = 1
@@ -137,7 +138,7 @@ class Category(SearchableTitleMixin, DescriptionMixin, ProtectionManagersMixin, 
     timezone = db.Column(
         db.String,
         nullable=False,
-        default=lambda: Config.getInstance().getDefaultTimezone()
+        default=lambda: config.DEFAULT_TIMEZONE
     )
     default_event_themes = db.Column(
         JSON,
@@ -175,6 +176,11 @@ class Category(SearchableTitleMixin, DescriptionMixin, ProtectionManagersMixin, 
         nullable=False,
         default=False
     )
+    default_ticket_template_id = db.Column(
+        db.ForeignKey('indico.designer_templates.id'),
+        nullable=True,
+        index=True
+    )
 
     children = db.relationship(
         'Category',
@@ -193,16 +199,24 @@ class Category(SearchableTitleMixin, DescriptionMixin, ProtectionManagersMixin, 
         cascade='all, delete-orphan',
         collection_class=set
     )
+    default_ticket_template = db.relationship(
+        'DesignerTemplate',
+        lazy=True,
+        foreign_keys=default_ticket_template_id,
+        backref='default_ticket_template_of'
+    )
 
     # column properties:
     # - deep_events_count
 
     # relationship backrefs:
     # - attachment_folders (AttachmentFolder.category)
+    # - designer_templates (DesignerTemplate.category)
     # - events (Event.category)
     # - favorite_of (User.favorite_categories)
     # - legacy_mapping (LegacyCategoryMapping.category)
     # - parent (Category.children)
+    # - settings (CategorySetting.category)
     # - suggestions (SuggestedCategory.category)
 
     @hybrid_property
@@ -231,12 +245,8 @@ class Category(SearchableTitleMixin, DescriptionMixin, ProtectionManagersMixin, 
 
     @classmethod
     def get_root(cls):
-        """Get the root category or create if if needed"""
-        root = cls.query.filter(cls.is_root).one_or_none()
-        if not root:
-            root = cls(id=0, title='Home', protection_mode=ProtectionMode.public)
-            db.session.add(root)
-        return root
+        """Get the root category"""
+        return cls.query.filter(cls.is_root).one()
 
     @property
     def url(self):
@@ -277,8 +287,7 @@ class Category(SearchableTitleMixin, DescriptionMixin, ProtectionManagersMixin, 
     @property
     def display_tzinfo(self):
         """The tzinfo of the category or the one specified by the user"""
-        from MaKaC.common.timezoneUtils import DisplayTZ
-        return DisplayTZ(conf=self).getDisplayTZ(as_timezone=True)
+        return get_display_tz(self, as_timezone=True)
 
     def can_create_events(self, user):
         """Check whether the user can create events in the category."""
@@ -286,7 +295,7 @@ class Category(SearchableTitleMixin, DescriptionMixin, ProtectionManagersMixin, 
         # can also create events in it, otherwise only people with the
         # creation role can
         return user and ((not self.event_creation_restricted and self.can_access(user)) or
-                         self.can_manage(user, role='create'))
+                         self.can_manage(user, permission='create'))
 
     def move(self, target):
         """Move the category into another category."""
@@ -301,7 +310,8 @@ class Category(SearchableTitleMixin, DescriptionMixin, ProtectionManagersMixin, 
     def get_tree_cte(cls, col='id'):
         """Create a CTE for the category tree.
 
-        The CTE contains the followign columns:
+        The CTE contains the following columns:
+
         - ``id`` -- the category id
         - ``path`` -- an array containing the path from the root to
                       the category itself
@@ -522,7 +532,7 @@ def _mappers_configured():
     # parent category
     cte = Category.get_protection_cte()
     query = select([cte.c.protection_mode]).where(cte.c.id == Category.id).correlate_except(cte)
-    Category.effective_protection_mode = column_property(query, deferred=True)
+    Category.effective_protection_mode = column_property(query, deferred=True, expire_on_flush=False)
 
     # Category.effective_icon_data -- the effective icon data of the category,
     # either set on the category itself or inherited from it

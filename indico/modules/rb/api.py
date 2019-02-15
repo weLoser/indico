@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,19 +19,19 @@ from datetime import datetime
 import icalendar
 import pytz
 from babel.dates import get_timezone
-from sqlalchemy import Time, Date, or_
+from sqlalchemy import Date, Time, or_
 from sqlalchemy.sql import cast
-from werkzeug.datastructures import OrderedMultiDict, MultiDict
+from werkzeug.datastructures import MultiDict, OrderedMultiDict
 
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.errors import IndicoError
 from indico.modules.auth import Identity
-from indico.modules.users import User
-from indico.modules.rb.util import rb_check_user_access
-from indico.modules.rb.models.reservations import Reservation, RepeatMapping, RepeatFrequency, ConflictingOccurrences
 from indico.modules.rb.models.locations import Location
+from indico.modules.rb.models.reservations import ConflictingOccurrences, RepeatFrequency, RepeatMapping, Reservation
 from indico.modules.rb.models.rooms import Room
+from indico.modules.rb.util import rb_check_user_access
+from indico.modules.users import User
 from indico.util.date_time import utc_to_server
 from indico.web.http_api import HTTPAPIHook
 from indico.web.http_api.metadata import ical
@@ -48,8 +48,8 @@ class RoomBookingHookBase(HTTPAPIHook):
         self._toDT = utc_to_server(self._toDT.astimezone(pytz.utc)).replace(tzinfo=None) if self._toDT else None
         self._occurrences = _yesno(get_query_parameter(self._queryParams, ['occ', 'occurrences'], 'no'))
 
-    def _hasAccess(self, aw):
-        return Config.getInstance().getIsRoomBookingActive() and rb_check_user_access(aw.getUser())
+    def _has_access(self, user):
+        return config.ENABLE_ROOMBOOKING and rb_check_user_access(user)
 
 
 @HTTPAPIHook.register
@@ -71,14 +71,13 @@ class RoomHook(RoomBookingHookBase):
         if self._detail not in {'rooms', 'reservations'}:
             raise HTTPAPIError('Invalid detail level: %s' % self._detail, 400)
 
-    def export_room(self, aw):
+    def export_room(self, user):
         loc = Location.find_first(name=self._location)
         if loc is None:
             return
 
         # Retrieve rooms
-        rooms_data = list(Room.get_with_data('vc_equipment', 'non_vc_equipment',
-                                             filters=[Room.id.in_(self._ids), Room.location_id == loc.id]))
+        rooms_data = list(Room.get_with_data(filters=[Room.id.in_(self._ids), Room.location_id == loc.id]))
 
         # Retrieve reservations
         reservations = None
@@ -108,21 +107,21 @@ class RoomNameHook(RoomBookingHookBase):
         self._location = self._pathParams['location']
         self._room_name = self._pathParams['room_name']
 
-    def _hasAccess(self, aw):
+    def _has_access(self, user):
         # Access to RB data (no reservations) is public
-        return Config.getInstance().getIsRoomBookingActive()
+        return config.ENABLE_ROOMBOOKING
 
-    def export_roomName(self, aw):
+    def export_roomName(self, user):
         loc = Location.find_first(name=self._location)
         if loc is None:
             return
 
         search_str = '%{}%'.format(self._room_name)
         rooms_data = Room.get_with_data(
-            'vc_equipment', 'non_vc_equipment', filters=[
+            filters=[
                 Room.location_id == loc.id,
-                or_((Room.building + '-' + Room.floor + '-' + Room.number).ilike(search_str),
-                    Room.name.ilike(search_str))
+                or_(Room.name.ilike(search_str),
+                    Room.verbose_name.ilike(search_str))
             ])
 
         for result in rooms_data:
@@ -148,7 +147,7 @@ class ReservationHook(RoomBookingHookBase):
         super(ReservationHook, self)._getParams()
         self._locations = self._pathParams['loclist'].split('-')
 
-    def export_reservation(self, aw):
+    def export_reservation(self, user):
         locations = Location.find_all(Location.name.in_(self._locations))
         if not locations:
             return
@@ -181,7 +180,7 @@ class BookRoomHook(HTTPAPIHook):
         username = get_query_parameter(self._queryParams, 'username')
         if not username:
             raise HTTPAPIError('No username provided')
-        users = User.find_all(~User.is_deleted, Identity.identifier == username)
+        users = User.query.join(User.identities).filter(~User.is_deleted, Identity.identifier == username).all()
         if not users:
             raise HTTPAPIError('Username does not exist')
         elif len(users) != 1:
@@ -202,16 +201,16 @@ class BookRoomHook(HTTPAPIHook):
         if not self._room:
             raise HTTPAPIError('A room with this ID does not exist')
 
-    def _hasAccess(self, aw):
-        if not Config.getInstance().getIsRoomBookingActive() or not rb_check_user_access(aw.getUser()):
+    def _has_access(self, user):
+        if not config.ENABLE_ROOMBOOKING or not rb_check_user_access(user):
             return False
-        if self._room.can_be_booked(aw.getUser()):
+        if self._room.can_book(user):
             return True
-        elif self._room.can_be_prebooked(aw.getUser()):
+        elif self._room.can_prebook(user):
             raise HTTPAPIError('The API only supports direct bookings but this room only allows pre-bookings.')
         return False
 
-    def api_roomBooking(self, aw):
+    def api_roomBooking(self, user):
         data = MultiDict({
             'start_dt': self._params['from'],
             'end_dt': self._params['to'],
@@ -219,12 +218,10 @@ class BookRoomHook(HTTPAPIHook):
             'repeat_interval': 0,
             'room_id': self._room.id,
             'booked_for_user': self._params['booked_for'],
-            'contact_email': self._params['booked_for'].email,
-            'contact_phone': self._params['booked_for'].phone,
             'booking_reason': self._params['reason']
         })
         try:
-            reservation = Reservation.create_from_data(self._room, data, aw.getUser())
+            reservation = Reservation.create_from_data(self._room, data, user)
         except ConflictingOccurrences:
             raise HTTPAPIError('Failed to create the booking due to conflicts with other bookings')
         except IndicoError as e:
@@ -256,7 +253,7 @@ def _export_reservations(hook, limit_per_room, include_rooms, extra_filters=None
     filters += _get_reservation_state_filter(hook._queryParams)
     occurs = [datetime.strptime(x, '%Y-%m-%d').date()
               for x in filter(None, get_query_parameter(hook._queryParams, ['occurs'], '').split(','))]
-    data = ['vc_equipment']
+    data = []
     if hook._occurrences:
         data.append('occurrences')
     order = {
@@ -279,9 +276,6 @@ def _serializable_room(room_data, reservations=None):
     """
     data = room_data['room'].to_serializable('__api_public__')
     data['_type'] = 'Room'
-    data['avc'] = bool(room_data['vc_equipment'])
-    data['vcList'] = room_data['vc_equipment']
-    data['equipment'] = room_data['non_vc_equipment']
     if reservations is not None:
         data['reservations'] = reservations.getlist(room_data['room'].id)
     return data
@@ -309,7 +303,6 @@ def _serializable_reservation(reservation_data, include_room=False):
     data['repeatability'] = None
     if reservation.repeat_frequency:
         data['repeatability'] = RepeatMapping.get_short_name(*reservation.repetition)
-    data['vcList'] = reservation_data['vc_equipment']
     if include_room:
         data['room'] = _serializable_room_minimal(reservation_data['reservation'].room)
     if 'occurrences' in reservation_data:
@@ -355,7 +348,7 @@ def _ical_serialize_reservation(cal, data, now):
 
 def _add_server_tz(dt):
     if dt.tzinfo is None:
-        return dt.replace(tzinfo=get_timezone(Config.getInstance().getDefaultTimezone()))
+        return dt.replace(tzinfo=get_timezone(config.DEFAULT_TIMEZONE))
     return dt
 
 

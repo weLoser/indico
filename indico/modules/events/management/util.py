@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -24,16 +24,9 @@ from sqlalchemy.orm import joinedload
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy.links import LinkType
-from indico.util.event import unify_event_args
 from indico.util.i18n import _, ngettext
 from indico.util.struct.iterables import materialize_iterable
 from indico.web.flask.util import url_for
-
-
-@unify_event_args
-def can_lock(event, user):
-    """Checks whether a user can lock/unlock an event."""
-    return user and (user.is_admin or user == event.creator or event.category.can_manage(user))
 
 
 class _ProtectedObjectWrapper(object):
@@ -96,7 +89,7 @@ def get_non_inheriting_objects(root):
     """
     def _query_folders(obj, crit):
         return (db.m.AttachmentFolder.query
-                .filter_by(event_new=obj.event_new, is_deleted=False)
+                .filter_by(event=obj.event, is_deleted=False)
                 .filter(crit)
                 .options(joinedload('attachments')))
 

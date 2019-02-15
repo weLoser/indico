@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,15 +19,17 @@ from __future__ import unicode_literals
 from functools import partial
 
 from indico.modules.events.sessions.controllers.compat import compat_session
-from indico.modules.events.sessions.controllers.display import (RHDisplaySessionList, RHDisplaySession,
-                                                                RHExportSessionToICAL, RHExportSessionTimetableToPDF)
-from indico.modules.events.sessions.controllers.management.sessions import (RHSessionsList, RHCreateSession,
-                                                                            RHModifySession, RHDeleteSessions,
-                                                                            RHExportSessionsCSV, RHExportSessionsExcel,
-                                                                            RHExportSessionsPDF, RHSessionREST,
+from indico.modules.events.sessions.controllers.display import (RHDisplaySession, RHDisplaySessionList,
+                                                                RHExportSessionTimetableToPDF, RHExportSessionToICAL)
+from indico.modules.events.sessions.controllers.management.sessions import (RHCreateSession, RHCreateSessionType,
+                                                                            RHDeleteSessions, RHDeleteSessionType,
+                                                                            RHEditSessionType, RHExportSessionsCSV,
+                                                                            RHExportSessionsExcel, RHExportSessionsPDF,
+                                                                            RHManageSessionBlock, RHManageSessionTypes,
+                                                                            RHModifySession, RHSessionACL,
+                                                                            RHSessionACLMessage, RHSessionBlocks,
                                                                             RHSessionPersonList, RHSessionProtection,
-                                                                            RHManageSessionBlock, RHSessionBlocks,
-                                                                            RHSessionACL, RHSessionACLMessage)
+                                                                            RHSessionREST, RHSessionsList)
 from indico.web.flask.util import make_compat_redirect_func
 from indico.web.flask.wrappers import IndicoBlueprint
 
@@ -51,6 +53,14 @@ _bp.add_url_rule('/manage/sessions/<int:session_id>/blocks/<int:block_id>', 'man
                  RHManageSessionBlock, methods=('GET', 'POST'))
 _bp.add_url_rule('/manage/sessions/<int:session_id>/acl', 'acl', RHSessionACL)
 _bp.add_url_rule('/manage/sessions/<int:session_id>/acl-message', 'acl_message', RHSessionACLMessage)
+
+# Session types
+_bp.add_url_rule('/manage/sessions/types/', 'manage_types', RHManageSessionTypes)
+_bp.add_url_rule('/manage/sessions/types/create', 'create_type', RHCreateSessionType, methods=('GET', 'POST'))
+_bp.add_url_rule('/manage/sessions/types/<int:session_type_id>', 'manage_type', RHEditSessionType,
+                 methods=('GET', 'POST'))
+_bp.add_url_rule('/manage/sessions/types/<int:session_type_id>/delete', 'delete_type', RHDeleteSessionType,
+                 methods=('POST',))
 
 
 # Display

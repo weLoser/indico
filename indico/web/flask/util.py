@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,24 +14,24 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
 
 import inspect
 import os
-import re
 import time
 from importlib import import_module
 
-from flask import Blueprint, g, redirect, request
-from flask import current_app as app
-from flask import url_for as _url_for
+from flask import Blueprint, current_app, g, redirect, request
 from flask import send_file as _send_file
-from werkzeug.wrappers import Response as WerkzeugResponse
-from werkzeug.datastructures import Headers, FileStorage
-from werkzeug.exceptions import NotFound, HTTPException
-from werkzeug.routing import BaseConverter, UnicodeConverter, RequestRedirect, BuildError
+from flask import url_for as _url_for
+from flask.helpers import get_root_path
+from werkzeug.datastructures import FileStorage, Headers
+from werkzeug.exceptions import HTTPException, NotFound
+from werkzeug.routing import BaseConverter, BuildError, RequestRedirect, UnicodeConverter
 from werkzeug.urls import url_parse
+from werkzeug.wrappers import Response as WerkzeugResponse
 
+from indico.core.config import config
 from indico.util.caching import memoize
 from indico.util.fs import secure_filename
 from indico.util.locators import get_locator
@@ -48,9 +48,7 @@ def discover_blueprints():
     :return: a ``blueprints, compat_blueprints`` tuple containing two
              sets of blueprints
     """
-    # Don't use pkg_resources since `indico` is still a namespace package...`
-    up_segments = ['..'] * __name__.count('.')
-    package_root = os.path.normpath(os.path.join(__file__, *up_segments))
+    package_root = get_root_path('indico')
     modules = set()
     for root, dirs, files in os.walk(package_root):
         for name in files:
@@ -84,11 +82,8 @@ def _convert_request_value(x):
     if isinstance(x, unicode):
         return x.encode('utf-8')
     elif isinstance(x, FileStorage):
-        x.file = x.stream
-        if isinstance(x.filename, unicode):
-            x.filename = x.filename.encode('utf-8')
         return x
-    raise ValueError('Unexpected item in request data: %s' % type(x))
+    raise TypeError('Unexpected item in request data: %s' % type(x))
 
 
 def create_flat_args():
@@ -118,9 +113,7 @@ def make_view_func(obj):
         if hasattr(obj, 'process'):
             # Indico RH
             def wrapper(**kwargs):
-                params = create_flat_args()
-                params.update(kwargs)
-                return obj().process(params)
+                return obj().process()
         else:
             # Some class we didn't expect.
             raise ValueError('Unexpected view func class: %r' % obj)
@@ -146,19 +139,6 @@ def redirect_view(endpoint, code=302):
     return _redirect
 
 
-def iter_blueprint_rules(blueprint):
-    for func in blueprint.deferred_functions:
-        yield dict(zip(func.func_code.co_freevars, (c.cell_contents for c in func.func_closure)))
-
-
-def legacy_rule_from_endpoint(endpoint):
-    endpoint = re.sub(r':\d+$', '', endpoint)
-    if '-' in endpoint:
-        return '/' + endpoint.replace('-', '.py/')
-    else:
-        return '/' + endpoint + '.py'
-
-
 def make_compat_redirect_func(blueprint, endpoint, view_func=None, view_args_conv=None):
     def _redirect(**view_args):
         # In case of POST we can't safely redirect since the method would switch to GET
@@ -175,77 +155,24 @@ def make_compat_redirect_func(blueprint, endpoint, view_func=None, view_args_con
                     view_args[newkey] = value
         try:
             target = _url_for('%s.%s' % (getattr(blueprint, 'name', blueprint), endpoint), **view_args)
-        except BuildError:
+        except (BuildError, ValueError):
             raise NotFound
-        return redirect(target, 302 if app.debug else 301)
+        return redirect(target, 302 if current_app.debug else 301)
     return _redirect
-
-
-def make_compat_blueprint(blueprint):
-    from indico.web.flask.blueprints.legacy import legacy_endpoints
-
-    compat = Blueprint('compat_' + blueprint.name, __name__)
-    used_endpoints = set()
-    for rule in iter_blueprint_rules(blueprint):
-        # Rules without an endpoint are never legacy rules
-        if not rule.get('endpoint'):
-            continue
-        # Rules which do not have a matching .py file are also not legacy rules
-        if rule['endpoint'] not in legacy_endpoints:
-            continue
-
-        endpoint = rule['endpoint']
-        i = 0
-        while endpoint in used_endpoints:
-            i += 1
-            endpoint = '%s:%s' % (rule['endpoint'], i)
-        used_endpoints.add(endpoint)
-        compat.add_url_rule(legacy_rule_from_endpoint(endpoint), endpoint,
-                            make_compat_redirect_func(blueprint, rule['endpoint'], rule['view_func']),
-                            methods=rule['options'].get('methods'))
-    return compat
-
-
-def endpoint_for_url(url):
-    urldata = url_parse(url)
-    adapter = app.url_map.bind(urldata.netloc)
-    try:
-        return adapter.match(urldata.path)
-    except RequestRedirect, e:
-        return endpoint_for_url(e.new_url)
-    except HTTPException:
-        return None
 
 
 def url_for(endpoint, *targets, **values):
     """Wrapper for Flask's url_for() function.
 
-    Instead of an endpoint you can also pass an URLHandler - in this case **only** its _endpoint will be used.
-    However, there is usually no need to do so. This is just so you can use it in places where sometimes a UH
-    might be passed instead.
-
-    The `target` argument allows you to pass some object having a `locator` property or `getLocator` method
-    returning a dict. This should be used e.g. when generating an URL for an event since ``getLocator()``
-    provides the ``{'confId': 123}`` dict instead of you having to pass ``confId=event.getId()`` as a kwarg.
+    The `target` argument allows you to pass some object having a `locator` property returning a dict.
 
     For details on Flask's url_for, please see its documentation.
-    Anyway, the important arguments you can put in `values` besides actual arguments are:
+    The important special arguments you can put in `values` are:
+
     _external: if set to `True`, an absolute URL is generated
-    _secure: if True/False, set _scheme to https/http if possible (only with _external)
     _scheme: a string specifying the desired URL scheme (only with _external) - use _secure if possible!
     _anchor: if provided this is added as #anchor to the URL.
     """
-
-    if hasattr(endpoint, '_endpoint'):
-        endpoint = endpoint._endpoint
-
-    secure = values.pop('_secure', None)
-    if secure is not None:
-        from indico.core.config import Config
-        if secure and Config.getInstance().getBaseSecureURL():
-            values['_scheme'] = 'https'
-        elif not secure:
-            values['_scheme'] = 'http'
 
     if targets:
         locator = {}
@@ -263,13 +190,15 @@ def url_for(endpoint, *targets, **values):
             values[key] = int(value)
 
     url = _url_for(endpoint, **values)
-    if g.get('static_site') and not values.get('_external'):
+    if g.get('static_site') and 'custom_manifests' in g and not values.get('_external'):
         # for static sites we assume all relative urls need to be
         # mangled to a filename
         # we should really fine a better way to handle anything
         # related to offline site urls...
         from indico.modules.events.static.util import url_to_static_filename
-        url = url_to_static_filename(url)
+        url = url_to_static_filename(endpoint, url)
+        # mark asset as used so that generator can include it
+        g.used_url_for_assets.add(url)
     return url
 
 
@@ -288,9 +217,6 @@ def url_rule_to_js(endpoint):
     ``params`` is is an object containing the arguments and ``fragment``
     a string containing the ``#anchor`` if needed.
     """
-
-    if hasattr(endpoint, '_endpoint'):
-        endpoint = endpoint._endpoint
 
     if endpoint[0] == '.':
         endpoint = request.blueprint + endpoint
@@ -313,7 +239,7 @@ def url_rule_to_js(endpoint):
                 'converters': dict((key, type(converter).__name__)
                                    for key, converter in rule._converters.iteritems()
                                    if type(converter) is not UnicodeConverter)
-            } for rule in app.url_map.iter_rules(endpoint)
+            } for rule in current_app.url_map.iter_rules(endpoint)
         ]
     }
 
@@ -344,7 +270,8 @@ def _is_office_mimetype(mimetype):
     return False
 
 
-def send_file(name, path_or_fd, mimetype, last_modified=None, no_cache=True, inline=None, conditional=False, safe=True):
+def send_file(name, path_or_fd, mimetype, last_modified=None, no_cache=True, inline=None, conditional=False, safe=True,
+              **kwargs):
     """Sends a file to the user.
 
     `name` is required and should be the filename visible to the user.
@@ -362,25 +289,21 @@ def send_file(name, path_or_fd, mimetype, last_modified=None, no_cache=True, inl
     """
 
     name = secure_filename(name, 'file')
+    assert '/' in mimetype
     if inline is None:
-        inline = mimetype not in ('XML', 'CSV')
+        inline = mimetype not in ('text/csv', 'text/xml', 'application/xml')
     if request.user_agent.platform == 'android':
         # Android is just full of fail when it comes to inline content-disposition...
         inline = False
-    if mimetype.isupper() and '/' not in mimetype:
-        # Indico file type such as "JPG" or "CSV"
-        from indico.core.config import Config
-        mimetype = Config.getInstance().getFileTypeMimeType(mimetype)
     if _is_office_mimetype(mimetype):
         inline = False
     if safe and mimetype in ('text/html', 'image/svg+xml'):
         inline = False
     try:
         rv = _send_file(path_or_fd, mimetype=mimetype, as_attachment=not inline, attachment_filename=name,
-                        conditional=conditional)
+                        conditional=conditional, **kwargs)
     except IOError:
-        from MaKaC.common.info import HelperMaKaCInfo
-        if not app.debug:
+        if not current_app.debug:
             raise
         raise NotFound('File not found: %s' % path_or_fd)
     if safe:
@@ -399,6 +322,28 @@ def send_file(name, path_or_fd, mimetype, last_modified=None, no_cache=True, inl
         rv.cache_control.private = True
         rv.cache_control.no_cache = True
     return rv
+
+
+def endpoint_for_url(url, base_url=None):
+    if base_url is None:
+        base_url = config.BASE_URL
+    base_url_data = url_parse(base_url)
+    url_data = url_parse(url)
+    netloc = url_data.netloc or base_url_data.netloc
+    # absolute url not matching our hostname
+    if url_data.netloc and url_data.netloc != base_url_data.netloc:
+        return None
+    # application root set but the url doesn't start with it
+    if base_url_data.path and not url_data.path.startswith(base_url_data.path):
+        return None
+    path = url_data.path[len(base_url_data.path):]
+    adapter = current_app.url_map.bind(netloc)
+    try:
+        return adapter.match(path)
+    except RequestRedirect as exc:
+        return endpoint_for_url(exc.new_url)
+    except HTTPException:
+        return None
 
 
 # Note: When adding custom converters please do not forget to add them to converter_functions in routing.js
@@ -425,71 +370,33 @@ class ResponseUtil(object):
     The purpose of this is to allow e.g. an Indico RH to trigger a redirect but revoke
     it later in case of an error or to simply have something to pass around to functions
     which want to modify headers while there is no response available.
-
-    When you want a RH to call another RH assign a lambda performing the call to `.call`.
-    This ensures it's called after the current RH has finished and cleaned everything up.
     """
 
     def __init__(self):
         self.headers = Headers()
-        self._redirect = None
         self.status = 200
         self.content_type = None
-        self.call = None
 
     @property
     def modified(self):
-        return bool(self.headers) or self._redirect or self.status != 200 or self.content_type
-
-    @property
-    def redirect(self):
-        return self._redirect
-
-    @redirect.setter
-    def redirect(self, value):
-        if isinstance(value, tuple) and len(value) == 2:
-            if isinstance(value[0], str):
-                value = (value[0].decode('utf-8'), value[1])
-        elif value is not None:
-            raise ValueError('redirect must be None or a 2-tuple containing URL and status code')
-        self._redirect = value
+        return bool(self.headers) or self.status != 200 or self.content_type
 
     def make_empty(self):
         return self.make_response('')
 
-    def make_redirect(self):
-        if not self._redirect:
-            raise Exception('Cannot create a redirect response without a redirect')
-        if self.call:
-            raise Exception('Cannot use make_redirect when a callable is set')
-        return redirect(*self.redirect)
-
-    def make_call(self):
-        if self.modified:
-            # If we receive a callabke - e.g. a lambda calling another RH - we do not allow any
-            # external modifications
-            raise Exception('Cannot combine callable with custom modifications or a return value')
-        return self.call()
-
     def make_response(self, res):
-        if self.call:
-            raise Exception('Cannot use make_response when a callable is set')
-
-        if isinstance(res, (app.response_class, WerkzeugResponse, tuple)):
+        if isinstance(res, (current_app.response_class, WerkzeugResponse, tuple)):
             if self.modified:
                 # If we receive a response - most likely one created by send_file - we do not allow any
                 # external modifications.
                 raise Exception('Cannot combine response object with custom modifications')
             return res
 
-        if self._redirect:
-            return self.make_redirect()
-
         # Return a plain string if that's all we have
         if not res and not self.modified:
             return ''
 
-        res = app.make_response((res, self.status, self.headers))
+        res = current_app.make_response((res, self.status, self.headers))
         if self.content_type:
             res.content_type = self.content_type
         return res
@@ -505,7 +412,7 @@ class XAccelMiddleware(object):
 
     def __init__(self, app, mapping):
         self.app = app
-        self.mapping = mapping.items()
+        self.mapping = [(str(k), str(v)) for k, v in mapping.iteritems()]
 
     def __call__(self, environ, start_response):
         def _start_response(status, headers, exc_info=None):
@@ -519,23 +426,13 @@ class XAccelMiddleware(object):
             if xsf_path:
                 uri = self.make_x_accel_header(xsf_path)
                 if not uri:
-                    raise ValueError('Could not map %s to an URI' % xsf_path)
-                new_headers.append(('X-Accel-Redirect', uri))
+                    raise ValueError('Could not map {} to a URI'.format(xsf_path))
+                new_headers.append((b'X-Accel-Redirect', uri))
             return start_response(status, new_headers, exc_info)
 
         return self.app(environ, _start_response)
 
     def make_x_accel_header(self, path):
         for base, uri in self.mapping:
-            if path.startswith(base + '/'):
+            if path.startswith(str(base + '/')):
                 return uri + path[len(base):]
-
-
-class IndicoConfigWrapper(object):
-    """Makes Indico config vars available as vars instead of ugly getter methods."""
-    def __init__(self, config):
-        self.config = config
-
-    def __getattr__(self, item):
-        getter = 'get' + item[0].upper() + item[1:]
-        return getattr(self.config, getter)()

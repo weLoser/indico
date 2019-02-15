@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import unicode_literals, absolute_import
+from __future__ import absolute_import, unicode_literals
 
 import json
 from collections import OrderedDict
@@ -25,12 +25,12 @@ import pytz
 from flask import session
 from markupsafe import escape
 from wtforms import Field, SelectField
-from wtforms.ext.dateutil.fields import DateTimeField
+from wtforms.ext.dateutil.fields import DateField, DateTimeField
 from wtforms.validators import StopValidation
 
-from indico.core.config import Config
-from indico.util.date_time import localize_as_utc
-from indico.util.i18n import _
+from indico.core.config import config
+from indico.util.date_time import localize_as_utc, relativedelta
+from indico.util.i18n import _, get_current_locale
 from indico.web.forms.fields import JSONField
 from indico.web.forms.validators import DateTimeRange, LinkedDateTime
 from indico.web.forms.widgets import JinjaWidget
@@ -108,6 +108,88 @@ class TimeDeltaField(Field):
             return '', ''
         else:
             return int(self.data.total_seconds()) // self.magnitudes[self.best_unit], self.best_unit
+
+
+class RelativeDeltaField(Field):
+    """A field that lets the user select a simple timedelta.
+
+    It does not support mixing multiple units, but it is smart enough
+    to switch to a different unit to represent a timedelta that could
+    not be represented otherwise.
+
+    :param units: The available units. Must be a tuple containing any
+                  any of 'seconds', 'minutes', 'hours' and 'days'.
+                  If not specified, ``('hours', 'days')`` is assumed.
+    """
+
+    widget = JinjaWidget('forms/timedelta_widget.html', single_line=True, single_kwargs=True)
+    # XXX: do not translate, "Minutes" is ambiguous without context
+    unit_names = {
+        'seconds': 'Seconds',
+        'minutes': 'Minutes',
+        'hours': 'Hours',
+        'days': 'Days',
+        'weeks': 'Weeks',
+        'months': 'Months',
+        'years': 'Years'
+    }
+    magnitudes = OrderedDict([
+        ('years', relativedelta(years=1)),
+        ('months', relativedelta(months=1)),
+        ('weeks', relativedelta(weeks=1)),
+        ('days', relativedelta(days=1)),
+        ('hours', relativedelta(hours=1)),
+        ('minutes', relativedelta(minutes=1)),
+        ('seconds', relativedelta(seconds=1))
+    ])
+
+    def __init__(self, *args, **kwargs):
+        self.units = kwargs.pop('units', ('hours', 'days'))
+        super(RelativeDeltaField, self).__init__(*args, **kwargs)
+
+    @property
+    def split_data(self):
+        if self.data is None:
+            return None, None
+        for unit in self.magnitudes:
+            number = getattr(self.data, unit)
+            if number:
+                return number, unit
+        raise ValueError('Unsupported relativedelta() unit')
+
+    @property
+    def choices(self):
+        choices = [(unit, self.unit_names[unit]) for unit in self.units]
+        number, unit = self.split_data
+        if number is not None and unit not in self.units:
+            # Add whatever unit is necessary to represent the currenet value if we have one
+            choices.append((unit, '({})'.format(self.unit_names[unit])))
+        return choices
+
+    def process_formdata(self, valuelist):
+        if valuelist and len(valuelist) == 2:
+            value = int(valuelist[0])
+            unit = valuelist[1]
+            if unit not in self.magnitudes:
+                raise ValueError('Invalid unit')
+            self.data = (self.magnitudes[unit] * value).normalized()
+
+    def pre_validate(self, form):
+        if self.object_data is None:
+            raise ValueError(_('Please choose a valid unit.'))
+
+    def _value(self):
+        if self.data is None:
+            return '', ''
+        return self.split_data
+
+
+class IndicoDateField(DateField):
+    widget = JinjaWidget('forms/date_widget.html', single_line=True, single_kwargs=True)
+
+    def __init__(self, *args, **kwargs):
+        super(IndicoDateField, self).__init__(*args, parse_kwargs={'dayfirst': True},
+                                              display_format='%d/%m/%Y', **kwargs)
 
 
 class IndicoDateTimeField(DateTimeField):
@@ -250,11 +332,50 @@ class OccurrencesField(JSONField):
 class IndicoTimezoneSelectField(SelectField):
     def __init__(self, *args, **kwargs):
         super(IndicoTimezoneSelectField, self).__init__(*args, **kwargs)
-        config = Config.getInstance()
         self.choices = [(v, v) for v in pytz.common_timezones]
-        self.default = config.getDefaultTimezone()
+        self.default = config.DEFAULT_TIMEZONE
 
     def process_data(self, value):
         super(IndicoTimezoneSelectField, self).process_data(value)
         if self.data is not None and self.data not in pytz.common_timezones_set:
             self.choices.append((self.data, self.data))
+
+
+class IndicoWeekDayRepetitionField(Field):
+    """ Field that lets you select an ordinal day of the week."""
+
+    widget = JinjaWidget('forms/week_day_repetition_widget.html', single_line=True)
+
+    WEEK_DAY_NUMBER_CHOICES = (
+        (1, _('first')),
+        (2, _('second')),
+        (3, _('third')),
+        (4, _('fourth')),
+        (-1, _('last'))
+    )
+
+    def __init__(self, *args, **kwargs):
+        locale = get_current_locale()
+        self.day_number_options = self.WEEK_DAY_NUMBER_CHOICES
+        self.week_day_options = [(n, locale.weekday(n, short=False)) for n in xrange(7)]
+        self.day_number_missing = False
+        self.week_day_missing = False
+        super(IndicoWeekDayRepetitionField, self).__init__(*args, **kwargs)
+
+    def process_formdata(self, valuelist):
+        self.data = ()
+        if any(valuelist):
+            if not valuelist[0]:
+                self.day_number_missing = True
+            if not valuelist[1]:
+                self.week_day_missing = True
+        if valuelist:
+            self.data = tuple(map(int, valuelist))
+
+    @property
+    def day_number_data(self):
+        return self.data[0] if len(self.data) > 0 else None
+
+    @property
+    def week_day_data(self):
+        return self.data[1] if len(self.data) > 1 else None

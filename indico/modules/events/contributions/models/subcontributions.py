@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -121,8 +121,8 @@ class SubContribution(DescriptionMixin, AttachedItemsMixin, AttachedNotesMixin, 
         super(SubContribution, self).__init__(**kwargs)
 
     @property
-    def event_new(self):
-        return self.contribution.event_new
+    def event(self):
+        return self.contribution.event
 
     @locator_property
     def locator(self):
@@ -167,5 +167,5 @@ class SubContribution(DescriptionMixin, AttachedItemsMixin, AttachedNotesMixin, 
     def can_access(self, user, **kwargs):
         return self.contribution.can_access(user, **kwargs)
 
-    def can_manage(self, user, role=None, **kwargs):
-        return self.contribution.can_manage(user, role, **kwargs)
+    def can_manage(self, user, permission=None, **kwargs):
+        return self.contribution.can_manage(user, permission=permission, **kwargs)

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,11 +17,10 @@
 from __future__ import unicode_literals
 
 from indico.modules.users.views import WPUser
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.main import WPMainBase
+from indico.web.views import WPDecorated, WPJinjaMixin
 
 
-class WPAuth(WPJinjaMixin, WPMainBase):
+class WPAuth(WPJinjaMixin, WPDecorated):
     template_prefix = 'auth/'
 
     def _getBody(self, params):

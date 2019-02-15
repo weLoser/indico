@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,18 +14,17 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from indico.modules.rb import Room
-from indico.modules.rb import settings as rb_settings
+from indico.legacy.webinterface.wcomponents import WTemplated
+from indico.modules.rb import Room, rb_settings
 from indico.modules.rb.models.reservation_edit_logs import ReservationEditLog
 from indico.modules.rb.models.reservations import RepeatMapping
-from indico.modules.rb.views import WPRoomBookingBase
+from indico.modules.rb.views import WPRoomBookingLegacyBase
 from indico.modules.rb.views.calendar import RoomBookingCalendarWidget
 from indico.util.caching import memoize_redis
 from indico.util.i18n import _
-from MaKaC.webinterface.wcomponents import WTemplated
 
 
-class WPRoomBookingBookingDetails(WPRoomBookingBase):
+class WPRoomBookingBookingDetails(WPRoomBookingLegacyBase):
     endpoints = {
         'room_details': 'rooms.roomBooking-roomDetails',
         'booking_details': 'rooms.roomBooking-bookingDetails',
@@ -38,34 +37,33 @@ class WPRoomBookingBookingDetails(WPRoomBookingBase):
         'booking_occurrence_reject': 'rooms.roomBooking-rejectBookingOccurrence'
     }
 
-    def _getBody(self, params):
+    def _getPageContent(self, params):
         reservation = params['reservation']
         params['endpoints'] = self.endpoints
         params['assistance_emails'] = rb_settings.get('assistance_emails')
-        params['vc_equipment'] = ', '.join(eq.name for eq in reservation.get_vc_equipment())
         params['repetition'] = RepeatMapping.get_message(*reservation.repetition)
         params['edit_logs'] = reservation.edit_logs.order_by(ReservationEditLog.timestamp.desc()).all()
         params['excluded_days'] = reservation.find_excluded_days().all()
         return WTemplated('RoomBookingDetails').getHTML(params)
 
 
-class WPRoomBookingCalendar(WPRoomBookingBase):
+class WPRoomBookingCalendar(WPRoomBookingLegacyBase):
     sidemenu_option = 'calendar'
 
-    def _getBody(self, params):
+    def _getPageContent(self, params):
         params['calendar'] = RoomBookingCalendarWidget(params['occurrences'], params['start_dt'], params['end_dt'],
                                                        rooms=params['rooms']).render()
         return WTemplated('RoomBookingCalendar').getHTML(params)
 
 
-class WPRoomBookingSearchBookings(WPRoomBookingBase):
+class WPRoomBookingSearchBookings(WPRoomBookingLegacyBase):
     sidemenu_option = 'search_bookings'
 
-    def _getBody(self, params):
+    def _getPageContent(self, params):
         return WTemplated('RoomBookingSearchBookings').getHTML(params)
 
 
-class WPRoomBookingSearchBookingsResults(WPRoomBookingBase):
+class WPRoomBookingSearchBookingsResults(WPRoomBookingLegacyBase):
     mapping = {
     #    x - only for my rooms
     #    |  x - only pending bookings
@@ -88,7 +86,7 @@ class WPRoomBookingSearchBookingsResults(WPRoomBookingBase):
 
     def __init__(self, rh, menu_item, **kwargs):
         self.sidemenu_option = menu_item
-        WPRoomBookingBase.__init__(self, rh, **kwargs)
+        WPRoomBookingLegacyBase.__init__(self, rh, **kwargs)
 
     def _get_criteria_summary(self, params):
         form = params['form']
@@ -103,7 +101,7 @@ class WPRoomBookingSearchBookingsResults(WPRoomBookingBase):
         return self.mapping.get((only_my_rooms, only_pending_bookings, only_confirmed_bookings, only_my_bookings),
                                 _('{} occurrences found').format(len(params['occurrences'])))
 
-    def _getBody(self, params):
+    def _getPageContent(self, params):
         params['summary'] = self._get_criteria_summary(params)
         calendar = RoomBookingCalendarWidget(params['occurrences'], params['start_dt'], params['end_dt'],
                                              rooms=params['rooms'], show_blockings=params['show_blockings'])
@@ -111,7 +109,7 @@ class WPRoomBookingSearchBookingsResults(WPRoomBookingBase):
         return WTemplated('RoomBookingSearchBookingsResults').getHTML(params)
 
 
-class WPRoomBookingNewBookingBase(WPRoomBookingBase):
+class WPRoomBookingNewBookingBase(WPRoomBookingLegacyBase):
     sidemenu_option = 'book_room'
 
 
@@ -122,13 +120,14 @@ def _get_serializable_rooms(room_ids):
 
 
 class WPRoomBookingNewBookingSelectRoom(WPRoomBookingNewBookingBase):
-    def _getBody(self, params):
+    def _getPageContent(self, params):
         params['serializable_rooms'] = _get_serializable_rooms([r.id for r in params['rooms']])
+        params['booking_limit'] = rb_settings.get('booking_limit')
         return WTemplated('RoomBookingNewBookingSelectRoom').getHTML(params)
 
 
 class WPRoomBookingNewBookingSelectPeriod(WPRoomBookingNewBookingBase):
-    def _getBody(self, params):
+    def _getPageContent(self, params):
         calendar = RoomBookingCalendarWidget(params['occurrences'], params['start_dt'], params['end_dt'],
                                              candidates=params['candidates'], rooms=params['rooms'],
                                              repeat_frequency=params['repeat_frequency'],
@@ -143,7 +142,7 @@ class WPRoomBookingNewBookingConfirm(WPRoomBookingNewBookingBase):
         'room_details': 'rooms.roomBooking-roomDetails'
     }
 
-    def _getBody(self, params):
+    def _getPageContent(self, params):
         params['endpoints'] = self.endpoints
         return WTemplated('RoomBookingNewBookingConfirm').getHTML(params)
 
@@ -153,7 +152,7 @@ class WPRoomBookingNewBookingSimple(WPRoomBookingNewBookingBase):
         'room_details': 'rooms.roomBooking-roomDetails'
     }
 
-    def _getBody(self, params):
+    def _getPageContent(self, params):
         params['endpoints'] = self.endpoints
         if params['start_dt'] and params['end_dt']:
             calendar = RoomBookingCalendarWidget(params['occurrences'], params['start_dt'], params['end_dt'],
@@ -164,19 +163,23 @@ class WPRoomBookingNewBookingSimple(WPRoomBookingNewBookingBase):
             params['calendar'] = calendar.render(show_navbar=False, details_in_new_tab=True)
         else:
             params['calendar'] = ''
+        params['serializable_room'] = Room.get(params['room'].id).to_serializable('__public_exhaustive__')
+        params['booking_limit'] = rb_settings.get('booking_limit')
         return WTemplated('RoomBookingBookingForm').getHTML(params)
 
 
-class WPRoomBookingModifyBooking(WPRoomBookingBase):
+class WPRoomBookingModifyBooking(WPRoomBookingLegacyBase):
     endpoints = {
         'room_details': 'rooms.roomBooking-roomDetails'
     }
 
-    def _getBody(self, params):
+    def _getPageContent(self, params):
         params['endpoints'] = self.endpoints
         calendar = RoomBookingCalendarWidget(params['occurrences'], params['start_dt'], params['end_dt'],
                                              candidates=params['candidates'], specific_room=params['room'],
                                              repeat_frequency=params['repeat_frequency'],
                                              repeat_interval=params['repeat_interval'])
         params['calendar'] = calendar.render(show_navbar=False, details_in_new_tab=True)
+        params['serializable_room'] = Room.get(params['room'].id).to_serializable('__public_exhaustive__')
+        params['booking_limit'] = rb_settings.get('booking_limit')
         return WTemplated('RoomBookingBookingForm').getHTML(params)

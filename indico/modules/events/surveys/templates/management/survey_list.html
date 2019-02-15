@@ -1,4 +1,5 @@
-{% extends 'layout/base.html' %}
+{% extends 'events/management/base.html' %}
+
 {% from 'message_box.html' import message_box %}
 {% from 'forms/_form.html' import form_rows %}
 
@@ -37,18 +38,18 @@
                 </div>
                 <div class="toolbar">
                     <div class="group">
-                        <a href="#" class="i-button icon-remove"
-                           data-href="{{ url_for('.delete_survey', survey) }}"
-                           data-method="POST"
-                           data-title="{% trans %}Delete survey?{% endtrans %}"
-                           data-confirm="{% trans title=survey.title %}Do you really want to delete the survey &quot;{{ title }}&quot;?{% endtrans %}">
-                            {% trans %}Delete{% endtrans %}
-                        </a>
-                    </div>
-                    <div class="group">
                         <a href="{{ url_for('.manage_survey', survey) }}" class="i-button highlight icon-settings">
                             {% trans %}Manage{% endtrans %}
                         </a>
+                    </div>
+                    <div class="group hide-if-locked">
+                        <a href="#" class="i-button icon-remove danger text-color"
+                           title="{% trans %}Delete this survey{% endtrans %}"
+                           data-qtip-style="danger"
+                           data-href="{{ url_for('.delete_survey', survey) }}"
+                           data-method="POST"
+                           data-title="{% trans %}Delete survey?{% endtrans %}"
+                           data-confirm="{% trans title=survey.title %}Do you really want to delete the survey &quot;{{ title }}&quot;?{% endtrans %}"></a>
                     </div>
                 </div>
             </div>
@@ -58,7 +59,7 @@
             {% trans %}There are no surveys yet.{% endtrans %}
         {%- endcall %}
     {% endfor %}
-    <div class="toolbar f-j-end">
+    <div class="toolbar f-j-end hide-if-locked">
         <a href="#" class="i-button"
            data-href="{{ url_for('.create', event) }}"
            data-title="{% trans %}Create survey{% endtrans %}"

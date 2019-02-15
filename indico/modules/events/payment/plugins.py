@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,13 +18,13 @@ from __future__ import unicode_literals
 
 import re
 
-from flask import session, render_template
+from flask import render_template, session
 from flask_pluginengine import render_plugin_template
-from wtforms.fields.core import StringField, BooleanField
+from wtforms.fields.core import BooleanField, StringField
 from wtforms.validators import DataRequired
 
 from indico.core import signals
-from indico.core.config import Config
+from indico.core.config import config
 from indico.util.decorators import classproperty
 from indico.util.i18n import _
 from indico.web.flask.util import url_for
@@ -74,7 +74,7 @@ class PaymentPluginMixin(object):
 
     @property
     def logo_url(self):
-        return Config.getInstance().getImagesBaseURL() + '/payment_logo.png'
+        return config.IMAGES_BASE_URL + '/payment_logo.png'
 
     def can_be_modified(self, user, event):
         """Checks if the user is allowed to enable/disable/modify the payment method.
@@ -98,8 +98,9 @@ class PaymentPluginMixin(object):
         from indico.modules.events.registration.models.forms import RegistrationForm
         invalid_regforms = []
         if self.valid_currencies is not None:
-            invalid_regforms = event.registration_forms.filter(~RegistrationForm.currency.in_(self.valid_currencies),
-                                                               ~RegistrationForm.is_deleted).all()
+            invalid_regforms = (RegistrationForm.query.with_parent(event)
+                                .filter(~RegistrationForm.currency.in_(self.valid_currencies))
+                                .all())
         return invalid_regforms
 
     def supports_currency(self, currency):
@@ -128,7 +129,7 @@ class PaymentPluginMixin(object):
 
         :param registration: a :class:`Registration` object
         """
-        event = registration.registration_form.event_new
+        event = registration.registration_form.event
         settings = self.settings.get_all()
         event_settings = self.event_settings.get_all(event)
         data = {'event': event,

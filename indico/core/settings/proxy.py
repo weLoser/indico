@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,11 +16,14 @@
 
 from __future__ import unicode_literals
 
-from functools import update_wrapper, partial
+from collections import defaultdict
+from functools import partial, update_wrapper
 from operator import attrgetter
 
-from flask import has_request_context, g
+from flask import g, has_request_context
 
+from indico.core.settings.models.settings import Setting, SettingPrincipal
+from indico.core.settings.util import get_all_settings, get_setting, get_setting_acl
 from indico.util.string import return_ascii
 
 
@@ -163,6 +166,126 @@ class SettingsProxyBase(object):
             return rv
 
 
+class ACLProxy(ACLProxyBase):
+    """Proxy class for core ACL settings"""
+
+    def get(self, name):
+        """Retrieves an ACL setting
+
+        :param name: Setting name
+        """
+        self._check_name(name)
+        return get_setting_acl(SettingPrincipal, self, name, self._cache)
+
+    def set(self, name, acl):
+        """Replaces an ACL with a new one
+
+        :param name: Setting name
+        :param acl: A set containing principals (users/groups)
+        """
+        self._check_name(name)
+        SettingPrincipal.set_acl(self.module, name, acl)
+        self._flush_cache()
+
+    def contains_user(self, name, user):
+        """Checks if a user is in an ACL.
+
+        To pass this check, the user can either be in the ACL itself
+        or in a group in the ACL.
+
+        :param name: Setting name
+        :param user: A :class:`.User`
+        """
+        from indico.util.user import iter_acl
+        return any(user in principal for principal in iter_acl(self.get(name)))
+
+    def add_principal(self, name, principal):
+        """Adds a principal to an ACL
+
+        :param name: Setting name
+        :param principal: A :class:`.User` or a :class:`.GroupProxy`
+        """
+        self._check_name(name)
+        SettingPrincipal.add_principal(self.module, name, principal)
+        self._flush_cache()
+
+    def remove_principal(self, name, principal):
+        """Removes a principal from an ACL
+
+        :param name: Setting name
+        :param principal: A :class:`.User` or a :class:`.GroupProxy`
+        """
+        self._check_name(name)
+        SettingPrincipal.remove_principal(self.module, name, principal)
+        self._flush_cache()
+
+    def merge_users(self, target, source):
+        """Replaces all ACL user entries for `source` with `target`"""
+        SettingPrincipal.merge_users(self.module, target, source)
+        self._flush_cache()
+
+
+class SettingsProxy(SettingsProxyBase):
+    """Proxy class to access settings for a certain module"""
+
+    acl_proxy_class = ACLProxy
+
+    def get_all(self, no_defaults=False):
+        """Retrieves all settings, including ACLs
+
+        :param no_defaults: Only return existing settings and ignore defaults.
+        :return: Dict containing the settings
+        """
+        return get_all_settings(Setting, SettingPrincipal, self, no_defaults)
+
+    def get(self, name, default=SettingsProxyBase.default_sentinel):
+        """Retrieves the value of a single setting.
+
+        :param name: Setting name
+        :param default: Default value in case the setting does not exist
+        :return: The settings's value or the default value
+        """
+        self._check_name(name)
+        return get_setting(Setting, self, name, default, self._cache)
+
+    def set(self, name, value):
+        """Sets a single setting.
+
+        :param name: Setting name
+        :param value: Setting value; must be JSON-serializable
+        """
+        self._check_name(name)
+        Setting.set(self.module, name, self._convert_from_python(name, value))
+        self._flush_cache()
+
+    def set_multi(self, items):
+        """Sets multiple settings at once.
+
+        :param items: Dict containing the new settings
+        """
+        items = {k: self._convert_from_python(k, v) for k, v in items.iteritems()}
+        self._split_call(items,
+                         lambda x: Setting.set_multi(self.module, x),
+                         lambda x: SettingPrincipal.set_acl_multi(self.module, x))
+        self._flush_cache()
+
+    def delete(self, *names):
+        """Deletes settings.
+
+        :param names: One or more names of settings to delete
+        """
+        self._split_call(names,
+                         lambda name: Setting.delete(self.module, *name),
+                         lambda name: SettingPrincipal.delete(self.module, *name))
+        self._flush_cache()
+
+    def delete_all(self):
+        """Deletes all settings."""
+        Setting.delete_all(self.module)
+        SettingPrincipal.delete_all(self.module)
+        self._flush_cache()
+
+
 class SettingProperty(object):
     """Expose a SettingsProxy value as a property.
 
@@ -185,7 +308,7 @@ class SettingProperty(object):
         self.name = name
         self.default = default
         attr = attr or self.attr
-        self.attrgetter = attrgetter(attr) if attr else None
+        self.attrgetter = attr if callable(attr) else attrgetter(attr) if attr else None
 
     def _make_args(self, obj, *args):
         if self.attrgetter is not None:
@@ -203,3 +326,92 @@ class SettingProperty(object):
 
     def __delete__(self, obj):
         self.proxy.delete(*self._make_args(obj, self.name))
+
+
+class AttributeProxyProperty(object):
+    def __init__(self, attr):
+        self.attr = attr
+
+    def __get__(self, obj, objtype=None):
+        if obj is None:
+            return self
+        return getattr(getattr(obj, obj.proxied_attr), self.attr)
+
+    def __set__(self, obj, value):
+        setattr(getattr(obj, obj.proxied_attr), self.attr, value)
+
+    def __delete__(self, obj):
+        delattr(getattr(obj, obj.proxied_attr), self.attr)
+
+
+class PrefixSettingsProxy(object):
+    """A SettingsProxy that exposes settings with prefixes
+
+    This allows for simple form handling when a single form contains
+    settings from more than one proxy.
+
+    All proxies must be of the same type, e.g. `SettingsProxy` or
+    `EventSettingsProxy`.
+
+    If the proxy type requires an extra argument, it must be passed
+    in the ``arg`` kwarg to every method of this proxy. Additionally,
+    ``has_arg`` must be set to ``True``.
+
+    :param mapping: A dict mapping prefixes to SettingsProxy instances
+    :param sep: The separator between the prefix and the setting name
+    :param has_arg: Whether the underlying proxies require an extra arg
+    """
+
+    def __init__(self, mapping, sep='_', has_arg=False):
+        self.mapping = mapping
+        self.sep = sep
+        self.has_arg = has_arg
+
+    def _call(self, fn, arg, *args, **kwargs):
+        if self.has_arg:
+            args = [arg] + list(args)
+        return fn(*args, **kwargs)
+
+    def _resolve_prefix(self, name):
+        try:
+            prefix, local_name = name.split(self.sep, 1)
+            return self.mapping[prefix], local_name
+        except (ValueError, KeyError):
+            raise ValueError('no/invalid prefix specified')
+
+    def get_all(self, no_defaults=False, arg=None):
+        rv = {}
+        for prefix, proxy in self.mapping.iteritems():
+            for key, value in self._call(proxy.get_all, arg, no_defaults=no_defaults).iteritems():
+                rv[prefix + self.sep + key] = value
+        return rv
+
+    def get(self, name, default=SettingsProxyBase.default_sentinel, arg=None):
+        proxy, local_name = self._resolve_prefix(name)
+        return self._call(proxy.get, arg, local_name, default)
+
+    def set(self, name, value, arg=None):
+        proxy, local_name = self._resolve_prefix(name)
+        self._call(proxy.set, arg, local_name, value)
+
+    def set_multi(self, items, arg=None):
+        by_proxy = defaultdict(dict)
+        for name, value in items.iteritems():
+            proxy, local_name = self._resolve_prefix(name)
+            by_proxy[proxy][local_name] = value
+        for proxy, local_items in by_proxy.iteritems():
+            self._call(proxy.set_multi, arg, local_items)
+
+    def delete(self, *names, **kwargs):
+        arg = kwargs.pop('arg', None)
+        assert not kwargs
+        by_proxy = defaultdict(list)
+        for name in names:
+            proxy, local_name = self._resolve_prefix(name)
+            by_proxy[proxy].append(local_name)
+        for proxy, local_names in by_proxy.iteritems():
+            self._call(proxy.delete, arg, *local_names)
+
+    def delete_all(self, arg=None):
+        for proxy in self.mapping.itervalues():
+            self._call(proxy.delete_all, arg)

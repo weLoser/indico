@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -22,11 +22,11 @@ from indico.modules.events.timetable.models.entries import TimetableEntry
 
 
 @pytest.fixture
-def create_entry(db, dummy_event_new):
+def create_entry(db, dummy_event):
     """Returns a a callable which lets you create timetable"""
 
     def _create_entry(obj, start_dt):
-        entry = TimetableEntry(event_new=dummy_event_new, object=obj, start_dt=start_dt)
+        entry = TimetableEntry(event=dummy_event, object=obj, start_dt=start_dt)
         db.session.add(entry)
         db.session.flush()
         return entry

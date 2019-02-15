@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,42 +16,41 @@
 
 from __future__ import unicode_literals
 
-from flask import session, jsonify
-from werkzeug.exceptions import NotFound, Forbidden
+from flask import jsonify, session
+from werkzeug.exceptions import Forbidden, NotFound
 
-from indico.modules.attachments.controllers.management.base import (ManageAttachmentsMixin, AddAttachmentFilesMixin,
-                                                                    AddAttachmentLinkMixin, EditAttachmentMixin,
-                                                                    CreateFolderMixin, EditFolderMixin,
-                                                                    DeleteFolderMixin, DeleteAttachmentMixin)
-from indico.modules.attachments.util import can_manage_attachments
 from indico.modules.attachments.controllers.event_package import AttachmentPackageMixin
+from indico.modules.attachments.controllers.management.base import (AddAttachmentFilesMixin, AddAttachmentLinkMixin,
+                                                                    CreateFolderMixin, DeleteAttachmentMixin,
+                                                                    DeleteFolderMixin, EditAttachmentMixin,
+                                                                    EditFolderMixin, ManageAttachmentsMixin)
+from indico.modules.attachments.util import can_manage_attachments
 from indico.modules.attachments.views import WPEventAttachments, WPPackageEventAttachmentsManagement
-from indico.modules.events.util import get_object_from_args
+from indico.modules.events.controllers.base import RHEventBase
+from indico.modules.events.management.controllers import RHManageEventBase
+from indico.modules.events.util import check_event_locked, get_object_from_args
 from indico.web.flask.templating import get_template_module
-from MaKaC.webinterface.rh.base import RHProtected
-from MaKaC.webinterface.rh.conferenceBase import RHConferenceBase
-from MaKaC.webinterface.rh.conferenceModif import RHConferenceModifBase
+from indico.web.rh import RHProtected
 
 
-class RHEventAttachmentManagementBase(RHConferenceBase, RHProtected):
-    CSRF_ENABLED = True
-
+class RHEventAttachmentManagementBase(RHEventBase, RHProtected):
     normalize_url_spec = {
         'locators': {
             lambda self: self.object
         }
     }
 
-    def _checkParams(self, params):
-        RHConferenceBase._checkParams(self, params)
+    def _process_args(self):
+        RHEventBase._process_args(self)
         self.object_type, self.base_object, self.object = get_object_from_args()
         if self.object is None:
             raise NotFound
 
-    def _checkProtection(self):
-        RHProtected._checkProtection(self)
+    def _check_access(self):
+        RHProtected._check_access(self)
         if not can_manage_attachments(self.object, session.user):
             raise Forbidden
+        check_event_locked(self, self.event)
 
 
 class RHManageEventAttachments(ManageAttachmentsMixin, RHEventAttachmentManagementBase):
@@ -73,9 +72,9 @@ class RHAddEventAttachmentLink(AddAttachmentLinkMixin, RHEventAttachmentManageme
 
 
 class RHEditEventAttachment(EditAttachmentMixin, RHEventAttachmentManagementBase):
-    def _checkParams(self, params):
-        RHEventAttachmentManagementBase._checkParams(self, params)
-        EditAttachmentMixin._checkParams(self)
+    def _process_args(self):
+        RHEventAttachmentManagementBase._process_args(self)
+        EditAttachmentMixin._process_args(self)
 
 
 class RHCreateEventFolder(CreateFolderMixin, RHEventAttachmentManagementBase):
@@ -83,24 +82,24 @@ class RHCreateEventFolder(CreateFolderMixin, RHEventAttachmentManagementBase):
 
 
 class RHEditEventFolder(EditFolderMixin, RHEventAttachmentManagementBase):
-    def _checkParams(self, params):
-        RHEventAttachmentManagementBase._checkParams(self, params)
-        EditFolderMixin._checkParams(self)
+    def _process_args(self):
+        RHEventAttachmentManagementBase._process_args(self)
+        EditFolderMixin._process_args(self)
 
 
 class RHDeleteEventFolder(DeleteFolderMixin, RHEventAttachmentManagementBase):
-    def _checkParams(self, params):
-        RHEventAttachmentManagementBase._checkParams(self, params)
-        DeleteFolderMixin._checkParams(self)
+    def _process_args(self):
+        RHEventAttachmentManagementBase._process_args(self)
+        DeleteFolderMixin._process_args(self)
 
 
 class RHDeleteEventAttachment(DeleteAttachmentMixin, RHEventAttachmentManagementBase):
-    def _checkParams(self, params):
-        RHEventAttachmentManagementBase._checkParams(self, params)
-        DeleteAttachmentMixin._checkParams(self)
+    def _process_args(self):
+        RHEventAttachmentManagementBase._process_args(self)
+        DeleteAttachmentMixin._process_args(self)
 
 
-class RHPackageEventAttachmentsManagement(AttachmentPackageMixin, RHConferenceModifBase):
+class RHPackageEventAttachmentsManagement(AttachmentPackageMixin, RHManageEventBase):
     wp = WPPackageEventAttachmentsManagement
     management = True
-    CSRF_ENABLED = True
+    ALLOW_LOCKED = True

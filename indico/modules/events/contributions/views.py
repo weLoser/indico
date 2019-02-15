@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,35 +16,23 @@
 
 from __future__ import unicode_literals
 
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.conferences import WPConferenceModifBase, WPConferenceDefaultDisplayBase
+from indico.modules.events.management.views import WPEventManagement
+from indico.modules.events.views import WPConferenceDisplayBase
+from indico.util.mathjax import MathjaxMixin
 
 
-class WPManageContributions(WPJinjaMixin, WPConferenceModifBase):
+class WPManageContributions(MathjaxMixin, WPEventManagement):
     template_prefix = 'events/contributions/'
     sidemenu_option = 'contributions'
+    bundles = ('markdown.js', 'module_events.contributions.js')
 
-    def getJSFiles(self):
-        return WPConferenceModifBase.getJSFiles(self) + self._asset_env['modules_contributions_js'].urls()
-
-    def getCSSFiles(self):
-        return WPConferenceModifBase.getCSSFiles(self) + self._asset_env['contributions_sass'].urls()
+    def _getHeadContent(self):
+        return WPEventManagement._getHeadContent(self) + MathjaxMixin._getHeadContent(self)
 
 
-class WPContributionsDisplayBase(WPJinjaMixin, WPConferenceDefaultDisplayBase):
+class WPContributionsDisplayBase(WPConferenceDisplayBase):
     template_prefix = 'events/contributions/'
-
-    def _getBody(self, params):
-        return WPJinjaMixin._getPageContent(self, params).encode('utf-8')
-
-    def getJSFiles(self):
-        return (WPConferenceDefaultDisplayBase.getJSFiles(self) +
-                self._asset_env['modules_contributions_js'].urls() +
-                self._asset_env['modules_event_display_js'].urls())
-
-    def getCSSFiles(self):
-        return (WPConferenceDefaultDisplayBase.getCSSFiles(self) + self._asset_env['contributions_sass'].urls() +
-                self._asset_env['event_display_sass'].urls())
+    bundles = ('markdown.js', 'module_events.contributions.js')
 
 
 class WPMyContributions(WPContributionsDisplayBase):
@@ -53,12 +41,6 @@ class WPMyContributions(WPContributionsDisplayBase):
 
 class WPContributions(WPContributionsDisplayBase):
     menu_entry_name = 'contributions'
-
-    def getJSFiles(self):
-        return (WPContributionsDisplayBase.getJSFiles(self) + self._asset_env['dropzone_js'].urls())
-
-    def getCSSFiles(self):
-        return (WPContributionsDisplayBase.getCSSFiles(self) + self._asset_env['dropzone_css'].urls())
 
 
 class WPAuthorList(WPContributionsDisplayBase):

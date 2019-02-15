@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -15,21 +15,23 @@
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
 import ast
-import traceback
 import re
 import textwrap
+import traceback
 import warnings
 from contextlib import contextmanager
 
 from babel import negotiate_locale
-from babel.core import Locale, LOCALE_ALIASES
+from babel.core import LOCALE_ALIASES, Locale
 from babel.messages.pofile import read_po
-from babel.support import Translations, NullTranslations
-from flask import session, request, has_request_context, current_app, has_app_context, g
-from flask_babelex import Babel, get_domain, Domain
+from babel.support import NullTranslations, Translations
+from flask import current_app, g, has_app_context, has_request_context, request, session
+from flask_babelex import Babel, Domain, get_domain
 from flask_pluginengine import current_plugin
 from speaklater import is_lazy_string, make_lazy_string
 from werkzeug.utils import cached_property
+
+from indico.util.caching import memoize_request
 
 
 LOCALE_ALIASES = dict(LOCALE_ALIASES, en='en_GB')
@@ -95,6 +97,7 @@ def smart_func(func_name, plugin_name=None, force_unicode=False):
         Returns either a translated string or a lazy-translatable object,
         depending on whether there is a session language or not (respectively)
         """
+
         if has_request_context() or func_name != 'ugettext':
             # straight translation
             return gettext_unicode(*args, func_name=func_name, plugin_name=plugin_name, force_unicode=force_unicode,
@@ -179,21 +182,21 @@ class IndicoTranslations(Translations):
         msg = ('Using the gettext function (`_`) patched into the builtins is disallowed.\n'
                'Please import it from `indico.util.i18n` instead.\n'
                'The offending code was found in this location:\n{}').format(frame_msg)
-        if 'MaKaC/' in frame[0]:
+        if 'indico/legacy/' in frame[0]:
             # legacy code gets off with a warning
             warnings.warn(msg, RuntimeWarning)
         else:
             raise RuntimeError(msg)
 
     def ugettext(self, message):
-        from indico.core.config import Config
-        if Config.getInstance().getDebug():
+        from indico.core.config import config
+        if config.DEBUG:
             self._check_stack()
         return gettext(message)
 
     def ungettext(self, msgid1, msgid2, n):
-        from indico.core.config import Config
-        if Config.getInstance().getDebug():
+        from indico.core.config import config
+        if config.DEBUG:
             self._check_stack()
         return ngettext(msgid1, msgid2, n)
 
@@ -209,10 +212,10 @@ def set_best_lang(check_session=True):
     language, we will try to guess it from the browser settings and only
     after that fall back to the server's default.
     """
-    from indico.core.config import Config
+    from indico.core.config import config
 
     if not has_request_context():
-        return 'en_GB' if current_app.config['TESTING'] else Config.getInstance().getDefaultLocale()
+        return 'en_GB' if current_app.config['TESTING'] else config.DEFAULT_LOCALE
     elif 'lang' in g:
         return g.lang
     elif check_session and session.lang is not None:
@@ -227,7 +230,7 @@ def set_best_lang(check_session=True):
             return 'en_GB'
 
         # fall back to server default
-        resolved_lang = Config.getInstance().getDefaultLocale()
+        resolved_lang = config.DEFAULT_LOCALE
 
     # As soon as we looked up a language, cache it during the request.
     # This will be returned when accessing `session.lang` since there's code
@@ -237,6 +240,7 @@ def set_best_lang(check_session=True):
     return resolved_lang
 
 
+@memoize_request
 def get_current_locale():
     return IndicoLocale.parse(set_best_lang())
 
@@ -275,27 +279,6 @@ def parse_locale(locale):
     Get a Locale object from a locale id
     """
     return IndicoLocale.parse(locale)
-
-
-def i18nformat(text):
-    """
-    ATTENTION: only used for backward-compatibility
-    Parses old '_() inside strings hack', translating as needed
-    """
-
-    # this is a bit of a dirty hack, but cannot risk emitting lazy proxies here
-    if not session.lang:
-        set_best_lang()
-
-    return RE_TR_FUNCTION.sub(lambda x: _(next(y for y in x.groups() if y is not None)), text)
-
-
-def extract(fileobj, keywords, commentTags, options):
-    """
-    Babel mini-extractor for old-style _() inside strings
-    """
-    astree = ast.parse(fileobj.read())
-    return extract_node(astree, keywords, commentTags, options)
 
 
 def extract_node(node, keywords, commentTags, options, parents=[None]):

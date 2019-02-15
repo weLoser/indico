@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,19 +18,19 @@ from __future__ import unicode_literals
 
 import json
 
-from wtforms.fields import RadioField, BooleanField
-from wtforms.widgets.core import Input, Select, TextArea, HiddenInput
+from wtforms.fields import BooleanField, RadioField
 from wtforms.validators import Length, NumberRange
+from wtforms.widgets.core import HiddenInput, Input, Select, TextArea
 
-from indico.util.struct.enum import TitledEnum
-from indico.web.forms.fields import (IndicoSelectMultipleCheckboxField, IndicoQuerySelectMultipleCheckboxField,
-                                     IndicoEnumRadioField)
-from indico.web.forms.validators import ConfirmPassword, HiddenUnless, IndicoRegexp, WordCount, SoftLength
-from indico.web.forms.widgets import SelectizeWidget
+from indico.util.struct.enum import RichEnum
+from indico.web.forms.fields import (IndicoEnumRadioField, IndicoQuerySelectMultipleCheckboxField,
+                                     IndicoSelectMultipleCheckboxField)
+from indico.web.forms.validators import ConfirmPassword, HiddenUnless, IndicoRegexp, SoftLength, WordCount
+from indico.web.forms.widgets import SelectizeWidget, TypeaheadWidget
 
 
 def is_single_line_field(field):
-    if isinstance(field.widget, SelectizeWidget):
+    if isinstance(field.widget, (SelectizeWidget, TypeaheadWidget)):
         return True
     if isinstance(field.widget, Select):
         return not field.widget.multiple
@@ -77,7 +77,7 @@ def _attrs_for_validators(field, validators):
                 val = []
             elif not isinstance(val, (set, list, tuple)):
                 val = [val]
-            values = [(v.name if isinstance(v, TitledEnum) else v) for v in val]
+            values = [(v.name if isinstance(v, RichEnum) else v) for v in val]
 
             attrs['data-hidden-unless'] = json.dumps({'field': condition_field.name,
                                                       'values': values,

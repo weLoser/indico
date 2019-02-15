@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,7 +19,7 @@ from __future__ import unicode_literals
 from collections import OrderedDict
 from operator import attrgetter
 
-from flask import request, flash, session
+from flask import flash, request, session
 from sqlalchemy.orm import joinedload, subqueryload
 
 from indico.core.db import db
@@ -45,8 +45,8 @@ class AbstractListGeneratorBase(ListGeneratorBase):
             'items': (),
             'filters': {'fields': {}, 'items': {}, 'extra': {}}
         }
-        track_empty = {None: 'No track'}
-        type_empty = {None: 'No type'}
+        track_empty = {None: _('No track')}
+        type_empty = {None: _('No type')}
         track_choices = OrderedDict((unicode(t.id), t.title) for t in sorted(self.event.tracks,
                                                                              key=attrgetter('title')))
         type_choices = OrderedDict((unicode(t.id), t.name) for t in sorted(self.event.contribution_types,
@@ -225,8 +225,9 @@ class AbstractListGeneratorManagement(AbstractListGeneratorBase):
 
     def __init__(self, event):
         super(AbstractListGeneratorManagement, self).__init__(event)
-        self.default_list_config['items'] = ('submitted_contrib_type', 'accepted_contrib_type', 'submitted_for_tracks',
-                                             'reviewed_for_tracks', 'accepted_track', 'state')
+        self.default_list_config['items'] = ('submitted_contrib_type', 'accepted_contrib_type', 'state')
+        if event.tracks:
+            self.default_list_config['items'] += ('submitted_for_tracks', 'reviewed_for_tracks', 'accepted_track')
         self.extra_filters = OrderedDict([
             ('multiple_tracks', {'title': _('Proposed for multiple tracks'), 'type': 'bool'}),
             ('comments', {'title': _('Must have comments'), 'type': 'bool'})
@@ -245,6 +246,8 @@ class AbstractListGeneratorDisplay(AbstractListGeneratorBase):
         self.track = track
         self.default_list_config['items'] = ('accepted_contrib_type', 'state')
         items = {'submitted_contrib_type', 'submitter', 'accepted_contrib_type', 'state'}
+        if self.track.can_convene(session.user):
+            items.add('score')
         self.static_items = OrderedDict((key, value)
                                         for key, value in self.static_items.iteritems()
                                         if key in items)

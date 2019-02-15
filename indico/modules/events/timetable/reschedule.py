@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,26 +16,26 @@
 
 from __future__ import unicode_literals
 
-from datetime import timedelta, datetime
+from datetime import datetime, timedelta
 
 from flask import session
-
 from pytz import utc
+from werkzeug.exceptions import BadRequest
 from werkzeug.utils import cached_property
 
 from indico.core.db import db
-from indico.core.errors import UserValueError
+from indico.core.errors import NoReportError, UserValueError
 from indico.modules.events import EventLogRealm
 from indico.modules.events.logs.models.entries import EventLogKind
 from indico.modules.events.timetable.models.entries import TimetableEntry, TimetableEntryType
 from indico.modules.events.timetable.operations import fit_session_block_entry
 from indico.util.date_time import format_date, format_human_timedelta
 from indico.util.i18n import _
-from indico.util.struct.enum import TitledEnum
+from indico.util.struct.enum import RichEnum
 from indico.util.struct.iterables import materialize_iterable, window
 
 
-class RescheduleMode(unicode, TitledEnum):
+class RescheduleMode(unicode, RichEnum):
     __titles__ = {'none': 'Fit blocks', 'time': 'Start times', 'duration': 'Durations'}
     none = 'none'  # no action, just fit blocks..
     time = 'time'
@@ -43,7 +43,7 @@ class RescheduleMode(unicode, TitledEnum):
 
     @property
     def title(self):
-        return TitledEnum.title.fget(self)
+        return RichEnum.title.fget(self)
 
 
 class Rescheduler(object):
@@ -135,7 +135,9 @@ class Rescheduler(object):
             # if we have a session block we reschedule the entries inside that block
             for entry in self.session_block.timetable_entry.children:
                 # the block should only have entries on the same day
-                assert entry.start_dt.astimezone(self.event.tzinfo).date() == self.day
+                if entry.start_dt.astimezone(self.event.tzinfo).date() != self.day:
+                    raise NoReportError.wrap_exc(BadRequest(_('This action cannot be completed because the event dates'
+                                                              ' have changed. Please reload the page and try again.')))
                 yield entry
         elif self.session:
             # if we have a session we reschedule the blocks of that session on the day

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,7 +16,7 @@
 
 from __future__ import unicode_literals
 
-from datetime import datetime, timedelta, date, time
+from datetime import date, datetime, time, timedelta
 from functools import partial
 from io import BytesIO
 from itertools import chain, groupby, imap
@@ -26,35 +26,36 @@ from time import mktime
 
 import dateutil
 from dateutil.relativedelta import relativedelta
-from flask import jsonify, request, session, Response
+from flask import Response, flash, jsonify, redirect, request, session
 from pytz import utc
 from sqlalchemy.orm import joinedload, load_only, subqueryload, undefer, undefer_group
 from werkzeug.exceptions import BadRequest, NotFound
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy.colors import ColorTuple
+from indico.core.db.sqlalchemy.util.queries import get_n_matching
 from indico.modules.categories.controllers.base import RHDisplayCategoryBase
 from indico.modules.categories.legacy import XMLCategorySerializer
 from indico.modules.categories.models.categories import Category
-from indico.modules.categories.serialize import (serialize_category_atom, serialize_categories_ical,
-                                                 serialize_category_chain, serialize_category)
-from indico.modules.categories.util import get_category_stats, get_upcoming_events
-from indico.modules.categories.views import WPCategory, WPCategoryStatistics
+from indico.modules.categories.serialize import (serialize_categories_ical, serialize_category, serialize_category_atom,
+                                                 serialize_category_chain)
+from indico.modules.categories.util import get_category_stats, get_upcoming_events, serialize_event_for_json_ld
+from indico.modules.categories.views import WPCategory, WPCategoryCalendar, WPCategoryStatistics
 from indico.modules.events.models.events import Event
 from indico.modules.events.timetable.util import get_category_timetable
 from indico.modules.events.util import get_base_ical_parameters
 from indico.modules.news.util import get_recent_news
 from indico.modules.users import User
 from indico.modules.users.models.favorites import favorite_category_table
-from indico.util.date_time import format_date, now_utc, format_number
+from indico.util.date_time import format_date, format_number, now_utc
 from indico.util.decorators import classproperty
 from indico.util.fs import secure_filename
 from indico.util.i18n import _
 from indico.util.string import to_unicode
 from indico.web.flask.templating import get_template_module
 from indico.web.flask.util import send_file, url_for
+from indico.web.rh import RH
 from indico.web.util import jsonify_data
-from MaKaC.webinterface.rh.base import RH
 
 
 CALENDAR_COLOR_PALETTE = [
@@ -73,7 +74,7 @@ def _flat_map(func, list_):
 class RHCategoryIcon(RHDisplayCategoryBase):
     _category_query_options = undefer('icon'),
 
-    def _checkProtection(self):
+    def _check_access(self):
         # Category icons are always public
         pass
 
@@ -155,7 +156,7 @@ class RHCategoryInfo(RHDisplayCategoryBase):
     @classmethod
     def _category_query_options(cls):
         children_strategy = subqueryload('children')
-        children_strategy.load_only('id', 'parent_id', 'title', 'protection_mode')
+        children_strategy.load_only('id', 'parent_id', 'title', 'protection_mode', 'event_creation_restricted')
         children_strategy.subqueryload('acl_entries')
         children_strategy.undefer('deep_children_count')
         children_strategy.undefer('deep_events_count')
@@ -176,10 +177,13 @@ class RHCategoryInfo(RHDisplayCategoryBase):
 class RHReachableCategoriesInfo(RH):
     def _get_reachable_categories(self, id_, excluded_ids):
         cat = Category.query.filter_by(id=id_).options(joinedload('children').load_only('id')).one()
-        ids = {c.id for c in cat.children} | {c.id for c in cat.parent_chain_query}
+        ids = ({c.id for c in cat.children} | {c.id for c in cat.parent_chain_query}) - excluded_ids
+        if not ids:
+            return []
         return (Category.query
-                .filter(Category.id.in_(ids - excluded_ids))
-                .options(*RHCategoryInfo._category_query_options))
+                .filter(Category.id.in_(ids))
+                .options(*RHCategoryInfo._category_query_options)
+                .all())
 
     def _process(self):
         excluded_ids = set(request.json.get('exclude', set())) if request.json else set()
@@ -240,11 +244,12 @@ class RHDisplayCategoryEventsBase(RHDisplayCategoryBase):
     _category_query_options = (joinedload('children').load_only('id', 'title', 'protection_mode'),
                                undefer('attachment_count'), undefer('has_events'))
     _event_query_options = (joinedload('person_links'), joinedload('series'), undefer_group('series'),
-                            load_only('id', 'category_id', 'created_dt', 'end_dt', 'protection_mode', 'start_dt',
-                                      'title', 'type_', 'series_pos', 'series_count'))
+                            load_only('id', 'category_id', 'created_dt', 'start_dt', 'end_dt', 'timezone',
+                                      'protection_mode', 'title', 'type_', 'series_pos', 'series_count',
+                                      'own_address', 'own_venue_id', 'own_venue_name'))
 
-    def _checkParams(self):
-        RHDisplayCategoryBase._checkParams(self)
+    def _process_args(self):
+        RHDisplayCategoryBase._process_args(self)
         self.now = now_utc(exact=False).astimezone(self.category.display_tzinfo)
 
     def format_event_date(self, event):
@@ -292,11 +297,11 @@ class RHDisplayCategory(RHDisplayCategoryEventsBase):
         future_threshold = self.now + relativedelta(months=1, day=1, hour=0, minute=0)
         next_event_start_dt = (db.session.query(Event.start_dt)
                                .filter(Event.start_dt >= self.now, Event.category_id == self.category.id)
-                               .order_by(Event.start_dt.asc())
+                               .order_by(Event.start_dt.asc(), Event.id.asc())
                                .first() or (None,))[0]
         previous_event_start_dt = (db.session.query(Event.start_dt)
                                    .filter(Event.start_dt < self.now, Event.category_id == self.category.id)
-                                   .order_by(Event.start_dt.desc())
+                                   .order_by(Event.start_dt.desc(), Event.id.desc())
                                    .first() or (None,))[0]
         if next_event_start_dt is not None and next_event_start_dt > future_threshold:
             future_threshold = next_event_start_dt + relativedelta(months=1, day=1, hour=0, minute=0)
@@ -304,17 +309,22 @@ class RHDisplayCategory(RHDisplayCategoryEventsBase):
             past_threshold = previous_event_start_dt.replace(day=1, hour=0, minute=0)
         event_query = (Event.query.with_parent(self.category)
                        .options(*self._event_query_options)
-                       .order_by(Event.start_dt.desc()))
+                       .order_by(Event.start_dt.desc(), Event.id.desc()))
         past_event_query = event_query.filter(Event.start_dt < past_threshold)
         future_event_query = event_query.filter(Event.start_dt >= future_threshold)
         current_event_query = event_query.filter(Event.start_dt >= past_threshold,
                                                  Event.start_dt < future_threshold)
-        events = current_event_query.filter(Event.start_dt < future_threshold).all()
+        json_ld_events = events = current_event_query.filter(Event.start_dt < future_threshold).all()
         events_by_month = self.group_by_month(events)
 
         future_event_count = future_event_query.count()
         past_event_count = past_event_query.count()
 
+        if not session.user and future_event_count:
+            json_ld_events = json_ld_events + future_event_query.all()
+
+        show_future_events = bool(self.category.id in session.get('fetch_future_events_in', set()) or
+                                  (session.user and session.user.settings.get('show_future_events', False)))
         show_past_events = bool(self.category.id in session.get('fetch_past_events_in', set()) or
                                 (session.user and session.user.settings.get('show_past_events', False)))
 
@@ -325,6 +335,7 @@ class RHDisplayCategory(RHDisplayCategoryEventsBase):
                   'events_by_month': events_by_month,
                   'format_event_date': self.format_event_date,
                   'future_event_count': future_event_count,
+                  'show_future_events': show_future_events,
                   'future_threshold': future_threshold.strftime(threshold_format),
                   'happening_now': self.happening_now,
                   'is_recent': self.is_recent,
@@ -332,6 +343,7 @@ class RHDisplayCategory(RHDisplayCategoryEventsBase):
                   'past_event_count': past_event_count,
                   'show_past_events': show_past_events,
                   'past_threshold': past_threshold.strftime(threshold_format),
+                  'json_ld': map(serialize_event_for_json_ld, json_ld_events),
                   'atom_feed_url': url_for('.export_atom', self.category),
                   'atom_feed_title': _('Events of "{}"').format(self.category.title)}
         params.update(get_base_ical_parameters(session.user, 'category',
@@ -356,15 +368,15 @@ class RHEventList(RHDisplayCategoryEventsBase):
             return None
         return self.category.display_tzinfo.localize(dt)
 
-    def _checkParams(self):
-        RHDisplayCategoryEventsBase._checkParams(self)
+    def _process_args(self):
+        RHDisplayCategoryEventsBase._process_args(self)
         before = self._parse_year_month(request.args.get('before'))
         after = self._parse_year_month(request.args.get('after'))
         if before is None and after is None:
             raise BadRequest('"before" or "after" parameter must be specified')
         event_query = (Event.query.with_parent(self.category)
                        .options(*self._event_query_options)
-                       .order_by(Event.start_dt.desc()))
+                       .order_by(Event.start_dt.desc(), Event.id.desc()))
         if before:
             event_query = event_query.filter(Event.start_dt < before)
         if after:
@@ -379,22 +391,36 @@ class RHEventList(RHDisplayCategoryEventsBase):
         return jsonify_data(flash=False, html=html)
 
 
-class RHShowPastEventsInCategory(RHDisplayCategoryBase):
-    """Set whether the past events in a category are automatically displayed or not"""
+class RHShowEventsInCategoryBase(RHDisplayCategoryBase):
+    """Set whether the events in a category are automatically displayed or not"""
 
-    def _show_past_events(self, show_past_events):
-        category_ids = session.setdefault('fetch_past_events_in', set())
-        if show_past_events:
+    session_field = ''
+
+    def _show_events(self, show_events):
+        category_ids = session.setdefault(self.session_field, set())
+        if show_events:
             category_ids.add(self.category.id)
         else:
             category_ids.discard(self.category.id)
         session.modified = True
 
     def _process_DELETE(self):
-        self._show_past_events(False)
+        self._show_events(False)
 
     def _process_PUT(self):
-        self._show_past_events(True)
+        self._show_events(True)
+
+
+class RHShowFutureEventsInCategory(RHShowEventsInCategoryBase):
+    """Set whether the past events in a category are automatically displayed or not"""
+
+    session_field = 'fetch_future_events_in'
+
+
+class RHShowPastEventsInCategory(RHShowEventsInCategoryBase):
+    """Set whether the past events in a category are automatically displayed or not"""
+
+    session_field = 'fetch_past_events_in'
 
 
 class RHExportCategoryICAL(RHDisplayCategoryBase):
@@ -416,7 +442,7 @@ class RHExportCategoryAtom(RHDisplayCategoryBase):
 
 
 class RHXMLExportCategoryInfo(RH):
-    def _checkParams(self):
+    def _process_args(self):
         try:
             id_ = int(request.args['id'])
         except ValueError:
@@ -431,8 +457,8 @@ class RHXMLExportCategoryInfo(RH):
 class RHCategoryOverview(RHDisplayCategoryBase):
     """Display the events for a particular day, week or month"""
 
-    def _checkParams(self):
-        RHDisplayCategoryBase._checkParams(self)
+    def _process_args(self):
+        RHDisplayCategoryBase._process_args(self)
         self.detail = request.args.get('detail', 'event')
         if self.detail not in ('event', 'session', 'contribution'):
             raise BadRequest('Invalid detail argument')
@@ -607,8 +633,8 @@ class _EventProxy(object):
 class RHCategoryCalendarView(RHDisplayCategoryBase):
     def _process(self):
         if not request.is_xhr:
-            return WPCategory.render_template('display/calendar.html', self.category,
-                                              start_dt=request.args.get('start_dt'))
+            return WPCategoryCalendar.render_template('display/calendar.html', self.category,
+                                                      start_dt=request.args.get('start_dt'))
         tz = self.category.display_tzinfo
         start = tz.localize(dateutil.parser.parse(request.args['start'])).astimezone(utc)
         end = tz.localize(dateutil.parser.parse(request.args['end'])).astimezone(utc)
@@ -636,7 +662,7 @@ class RHCategoryCalendarView(RHDisplayCategoryBase):
             event_data = {'title': event.title,
                           'start': event.start_dt.astimezone(tz).replace(tzinfo=None).isoformat(),
                           'end': event.end_dt.astimezone(tz).replace(tzinfo=None).isoformat(),
-                          'url': url_for('event.conferenceDisplay', event)}
+                          'url': event.url}
             colors = CALENDAR_COLOR_PALETTE[category_id % len(CALENDAR_COLOR_PALETTE)]
             event_data.update({'textColor': '#' + colors.text, 'color': '#' + colors.background})
             data.append(event_data)
@@ -645,3 +671,26 @@ class RHCategoryCalendarView(RHDisplayCategoryBase):
     def _render_ongoing_events(self, ongoing_events):
         template = get_template_module('categories/display/_calendar_ongoing_events.html')
         return template.render_ongoing_events(ongoing_events, self.category.display_tzinfo)
+
+
+class RHCategoryUpcomingEvent(RHDisplayCategoryBase):
+    """Redirect to the upcoming event of a category."""
+
+    def _process(self):
+        event = self._get_upcoming_event()
+        if event:
+            return redirect(event.url)
+        else:
+            flash(_('There are no upcoming events for this category'))
+            return redirect(self.category.url)
+
+    def _get_upcoming_event(self):
+        query = (Event.query
+                 .filter(Event.is_visible_in(self.category),
+                         Event.start_dt > now_utc(),
+                         ~Event.is_deleted)
+                 .options(subqueryload('acl_entries'))
+                 .order_by(Event.start_dt, Event.id))
+        res = get_n_matching(query, 1, lambda event: event.can_access(session.user))
+        if res:
+            return res[0]

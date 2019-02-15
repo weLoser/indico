@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,23 +20,24 @@ from datetime import datetime, timedelta
 
 from flask import request
 from pytz import utc
-from wtforms.fields import StringField, TextAreaField, BooleanField, SelectField, IntegerField, HiddenField
-from wtforms.validators import DataRequired, ValidationError, InputRequired, NumberRange
-from wtforms_components import TimeField
+from wtforms.fields import BooleanField, HiddenField, IntegerField, SelectField, StringField, TextAreaField
+from wtforms.validators import DataRequired, InputRequired, NumberRange, ValidationError
 from wtforms.widgets.html5 import NumberInput
+from wtforms_components import TimeField
 
+from indico.modules.events.contributions import contribution_settings
 from indico.modules.events.contributions.forms import ContributionForm
 from indico.modules.events.sessions.forms import SessionBlockForm
 from indico.modules.events.timetable.models.entries import TimetableEntryType
 from indico.modules.events.timetable.util import find_next_start_dt
+from indico.util.i18n import _
 from indico.web.forms.base import FormDefaults, IndicoForm, generated_data
 from indico.web.forms.colors import get_colors
-from indico.web.forms.fields import (TimeDeltaField, IndicoPalettePickerField, IndicoLocationField,
-                                     IndicoSelectMultipleCheckboxBooleanField)
+from indico.web.forms.fields import (FileField, IndicoLocationField, IndicoPalettePickerField,
+                                     IndicoSelectMultipleCheckboxBooleanField, TimeDeltaField)
 from indico.web.forms.util import get_form_field_names
-from indico.web.forms.validators import MaxDuration, HiddenUnless
+from indico.web.forms.validators import HiddenUnless, MaxDuration
 from indico.web.forms.widgets import SwitchWidget
-from indico.util.i18n import _
 
 
 class EntryFormMixin(object):
@@ -110,13 +111,16 @@ class BreakEntryForm(EntryFormMixin, IndicoForm):
 
 class ContributionEntryForm(EntryFormMixin, ContributionForm):
     _entry_type = TimetableEntryType.CONTRIBUTION
-    _default_duration = timedelta(minutes=20)
     _display_fields = ('title', 'description', 'type', 'time', 'duration', 'person_link_data', 'location_data',
                        'keywords', 'references')
 
     def __init__(self, *args, **kwargs):
         kwargs['to_schedule'] = kwargs.get('to_schedule', True)
         super(ContributionEntryForm, self).__init__(*args, **kwargs)
+
+    @property
+    def _default_duration(self):
+        return contribution_settings.get(self.event, 'default_duration')
 
 
 class SessionBlockEntryForm(EntryFormMixin, SessionBlockForm):
@@ -126,7 +130,7 @@ class SessionBlockEntryForm(EntryFormMixin, SessionBlockForm):
 
     @staticmethod
     def _validate_duration(entry, field, start_dt):
-        if entry.children:
+        if entry.children and start_dt.data is not None:
             end_dt = start_dt.data + field.data
             if end_dt < max(x.end_dt for x in entry.children):
                 raise ValidationError(_("This duration is too short to fit the entries within."))
@@ -134,7 +138,7 @@ class SessionBlockEntryForm(EntryFormMixin, SessionBlockForm):
     def validate_duration(self, field):
         super(SessionBlockEntryForm, self).validate_duration(field)
         if self.session_block and self.start_dt.data:
-            self._validate_duration(self.session_block.timetable_entry, self.start_dt, field)
+            self._validate_duration(self.session_block.timetable_entry, field, self.start_dt)
 
 
 class BaseEntryForm(EntryFormMixin, IndicoForm):
@@ -149,7 +153,7 @@ class BaseEntryForm(EntryFormMixin, IndicoForm):
     def validate_duration(self, field):
         super(BaseEntryForm, self).validate_duration(field)
         if self.entry.type == TimetableEntryType.SESSION_BLOCK and self.entry.children:
-            SessionBlockEntryForm._validate_duration(self.entry, self.start_dt, field)
+            SessionBlockEntryForm._validate_duration(self.entry, field, self.start_dt)
 
 
 _DOCUMENT_SETTINGS_CHOICES = [('showCoverPage', _('Include cover page')),
@@ -170,7 +174,7 @@ _OTHER_CHOICES = [('showSpeakerTitle', _('Show speaker title')),
 
 
 class TimetablePDFExportForm(IndicoForm):
-    _pdf_options_fields = {'pagesize', 'fontsize', 'firstPageNumber'}
+    _pdf_options_fields = {'pagesize', 'firstPageNumber'}
 
     advanced = BooleanField(_("Advanced timetable"), widget=SwitchWidget(),
                             description=_("Advanced customization options"))
@@ -187,10 +191,6 @@ class TimetablePDFExportForm(IndicoForm):
     other = IndicoSelectMultipleCheckboxBooleanField(_('Miscellaneous'), choices=_OTHER_CHOICES)
     pagesize = SelectField(_('Page size'), choices=[('A0', 'A0'), ('A1', 'A1'), ('A2', 'A2'), ('A3', 'A3'),
                                                     ('A4', 'A4'), ('A5', 'A5'), ('Letter', 'Letter')], default='A4')
-    fontsize = SelectField(_('Font size'), choices=[('xxx-small', _('xxx-small')), ('xx-small', _('xx-small')),
-                                                    ('x-small', _('x-small')), ('smaller', _('smaller')),
-                                                    ('small', _('small')), ('normal', _('normal')),
-                                                    ('large', _('large')), ('larger', _('larger'))], default='normal')
     firstPageNumber = IntegerField(_('Number for the first page'), [NumberRange(min=1)], default=1,
                                    widget=NumberInput(step=1))
     submitted = HiddenField()
@@ -209,3 +209,7 @@ class TimetablePDFExportForm(IndicoForm):
         for fieldname in fields:
             data.update(getattr(self, fieldname).data)
         return data
+
+
+class ImportContributionsForm(IndicoForm):
+    source_file = FileField(_("Source File"), [DataRequired()], accepted_file_types='.csv')

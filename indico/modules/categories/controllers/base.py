@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,16 +17,14 @@
 from __future__ import unicode_literals
 
 from flask import request, session
-from werkzeug.exceptions import NotFound, Forbidden
+from werkzeug.exceptions import Forbidden, NotFound
 
 from indico.modules.categories.models.categories import Category
 from indico.util.i18n import _
-from MaKaC.webinterface.rh.base import RH
+from indico.web.rh import RH
 
 
 class RHCategoryBase(RH):
-    CSRF_ENABLED = True
-
     _category_query_options = ()
 
     @property
@@ -42,7 +40,7 @@ class RHCategoryBase(RH):
             category = Category.get_root()
         return category
 
-    def _checkParams(self):
+    def _process_args(self):
         category_id = request.view_args['category_id']
         self.category = self._get_category(category_id)
         if self.category is None:
@@ -52,7 +50,7 @@ class RHCategoryBase(RH):
 class RHDisplayCategoryBase(RHCategoryBase):
     """Base class for category display pages"""
 
-    def _checkProtection(self):
+    def _check_access(self):
         if not self.category.can_access(session.user):
             msg = [_("You are not authorized to access this category.")]
             if self.category.no_access_contact:
@@ -62,6 +60,8 @@ class RHDisplayCategoryBase(RHCategoryBase):
 
 
 class RHManageCategoryBase(RHCategoryBase):
-    def _checkProtection(self):
+    DENY_FRAMES = True
+
+    def _check_access(self):
         if not self.category.can_manage(session.user):
             raise Forbidden

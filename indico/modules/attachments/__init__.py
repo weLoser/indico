@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,17 +16,18 @@
 
 from __future__ import unicode_literals
 
-from flask import session, has_request_context, request
+from flask import session
 
 from indico.core import signals
 from indico.core.logger import Logger
-from indico.util.i18n import _
-from indico.web.flask.util import url_for
 from indico.modules.attachments.logging import connect_log_signals
 from indico.modules.attachments.models.attachments import Attachment
 from indico.modules.attachments.models.folders import AttachmentFolder
 from indico.modules.attachments.util import can_manage_attachments
+from indico.util.i18n import _
+from indico.web.flask.util import url_for
 from indico.web.menu import SideMenuItem
+
 
 logger = Logger.get('attachments')
 connect_log_signals()
@@ -65,15 +66,3 @@ def _extend_category_management_menu(sender, category, **kwargs):
 def _get_attachment_cloner(sender, **kwargs):
     from indico.modules.attachments.clone import AttachmentCloner
     return AttachmentCloner
-
-
-@signals.acl.can_access.connect_via(Attachment)
-@signals.acl.can_access.connect_via(AttachmentFolder)
-def _can_access(cls, obj, user, authorized, **kwargs):
-    """Grant full access to attachments/folders to certain IPs"""
-    from MaKaC.common import HelperMaKaCInfo
-    if not has_request_context() or authorized is not None:
-        return
-    full_access_ips = HelperMaKaCInfo.getMaKaCInfoInstance().getIPBasedACLMgr().get_full_access_acl()
-    if request.remote_addr in full_access_ips:
-        return True

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,8 +18,14 @@ from __future__ import unicode_literals
 
 from warnings import warn
 
-from flask import current_app
-from flask_multipass import Multipass
+from flask import current_app, request
+from flask_multipass import InvalidCredentials, Multipass, NoSuchUser
+from flask_multipass.providers.oauth import OAuthInvalidSessionState
+
+from indico.core.logger import Logger
+
+
+logger = Logger.get('auth')
 
 
 class IndicoMultipass(Multipass):
@@ -54,7 +60,7 @@ class IndicoMultipass(Multipass):
         """The keys to be synchronized
 
         This is the set of keys to be synced to user data.
-        The ``email`` can never be synchronised.
+        The ``email`` can never be synchronized.
         """
         provider = self.sync_provider
         if provider is None:
@@ -95,6 +101,15 @@ class IndicoMultipass(Multipass):
                 local_providers[0].settings['default'] = True
             else:
                 raise ValueError('There is no default auth provider')
+
+    def handle_auth_error(self, exc, redirect_to_login=False):
+        if isinstance(exc, (NoSuchUser, InvalidCredentials)):
+            logger.warning('Invalid credentials (ip=%s, provider=%s): %s',
+                           request.remote_addr, exc.provider.name if exc.provider else None, exc)
+        else:
+            fn = logger.debug if isinstance(exc, OAuthInvalidSessionState) else logger.error
+            fn('Authentication via %s failed: %s (%r)', exc.provider.name if exc.provider else None, exc, exc.details)
+        return super(IndicoMultipass, self).handle_auth_error(exc, redirect_to_login=redirect_to_login)
 
 
 multipass = IndicoMultipass()

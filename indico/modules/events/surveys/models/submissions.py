@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,18 +20,37 @@ from sqlalchemy.dialects.postgresql import JSON
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy import UTCDateTime
-from indico.util.date_time import now_utc
+from indico.core.db.sqlalchemy.util.queries import increment_and_get
 from indico.util.string import return_ascii
+
+
+def _get_next_friendly_id(context):
+    """Get the next friendly id for a survey submission."""
+    from indico.modules.events.surveys.models.surveys import Survey
+    survey_id = context.current_parameters['survey_id']
+    assert survey_id is not None
+    return increment_and_get(Survey._last_friendly_submission_id, Survey.id == survey_id)
 
 
 class SurveySubmission(db.Model):
     __tablename__ = 'submissions'
-    __table_args__ = {'schema': 'event_surveys'}
+    __table_args__ = (db.CheckConstraint('is_anonymous OR user_id IS NOT NULL', 'anonymous_or_user'),
+                      db.CheckConstraint('is_submitted = (submitted_dt IS NOT NULL)',
+                                         'dt_set_when_submitted'),
+                      db.CheckConstraint('(is_submitted AND is_anonymous) = (user_id IS NULL)',
+                                         'submitted_and_anonymous_no_user'),
+                      {'schema': 'event_surveys'})
 
     #: The ID of the submission
     id = db.Column(
         db.Integer,
         primary_key=True
+    )
+    #: The human-friendly ID of the submission
+    friendly_id = db.Column(
+        db.Integer,
+        nullable=False,
+        default=_get_next_friendly_id
     )
     #: The ID of the survey
     survey_id = db.Column(
@@ -50,8 +69,24 @@ class SurveySubmission(db.Model):
     #: The date/time when the survey was submitted
     submitted_dt = db.Column(
         UTCDateTime,
+        nullable=True,
+    )
+    #: Whether the survey submission is anonymous
+    is_anonymous = db.Column(
+        db.Boolean,
         nullable=False,
-        default=now_utc,
+        default=False
+    )
+    #: Whether the survey was submitted
+    is_submitted = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False
+    )
+    #: List of non-submitted answers
+    pending_answers = db.Column(
+        JSON,
+        default={}
     )
 
     #: The user who submitted the survey
@@ -80,10 +115,6 @@ class SurveySubmission(db.Model):
     @property
     def locator(self):
         return dict(self.survey.locator, submission_id=self.id)
-
-    @property
-    def is_anonymous(self):
-        return self.user is None
 
     @return_ascii
     def __repr__(self):

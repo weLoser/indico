@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,8 +19,9 @@ from datetime import datetime, timedelta
 import pytest
 import pytz
 
-from indico.core.settings import SettingsProxy
+from indico.core.settings import PrefixSettingsProxy, SettingsProxy
 from indico.core.settings.converters import DatetimeConverter, TimedeltaConverter
+from indico.modules.events.settings import EventSettingsProxy
 from indico.modules.users import User
 
 
@@ -150,8 +151,8 @@ def test_acls(dummy_user, create_user):
 
 
 def test_delete_propagate(mocker):
-    Setting = mocker.patch('indico.core.settings.core.Setting')
-    SettingPrincipal = mocker.patch('indico.core.settings.core.SettingPrincipal')
+    Setting = mocker.patch('indico.core.settings.proxy.Setting')
+    SettingPrincipal = mocker.patch('indico.core.settings.proxy.SettingPrincipal')
     proxy = SettingsProxy('foo', {'reg': None}, acls={'acl'})
     proxy.delete('reg', 'acl')
     Setting.delete.assert_called_once_with('foo', 'reg')
@@ -159,8 +160,8 @@ def test_delete_propagate(mocker):
 
 
 def test_set_multi_propagate(mocker):
-    Setting = mocker.patch('indico.core.settings.core.Setting')
-    SettingPrincipal = mocker.patch('indico.core.settings.core.SettingPrincipal')
+    Setting = mocker.patch('indico.core.settings.proxy.Setting')
+    SettingPrincipal = mocker.patch('indico.core.settings.proxy.SettingPrincipal')
     proxy = SettingsProxy('foo', {'reg': None}, acls={'acl'})
     proxy.set_multi({
         'reg': 'bar',
@@ -168,3 +169,37 @@ def test_set_multi_propagate(mocker):
     })
     Setting.set_multi.assert_called_once_with('foo', {'reg': 'bar'})
     SettingPrincipal.set_acl_multi.assert_called_with('foo', {'acl': {'u'}})
+
+
+def test_prefix_settings_invalid():
+    foo_proxy = SettingsProxy('foo', {'a': 1, 'b': 2})
+    bar_proxy = SettingsProxy('bar', {'x': 3, 'y': 4})
+    proxy = PrefixSettingsProxy({'foo': foo_proxy, 'bar': bar_proxy})
+    pytest.raises(ValueError, proxy.get, 'x')
+    pytest.raises(ValueError, proxy.get, 'x_y')
+    pytest.raises(ValueError, proxy.set, 'x', 'test')
+    pytest.raises(ValueError, proxy.set, 'x_y', 'test')
+
+
+@pytest.mark.parametrize('with_arg', (True, False))
+@pytest.mark.usefixtures('db')
+def test_prefix_settings(dummy_event, with_arg):
+    kw = {'arg': dummy_event} if with_arg else {'arg': None}
+    cls = EventSettingsProxy if with_arg else SettingsProxy
+    foo_proxy = cls('foo', {'a': 1, 'b': 2})
+    bar_proxy = cls('bar', {'x': None, 'y': 4})
+    proxy = PrefixSettingsProxy({'foo': foo_proxy, 'bar': bar_proxy}, has_arg=with_arg)
+    proxy.set('bar_x', 3, **kw)
+    assert proxy.get_all(**kw) == {'foo_a': 1, 'foo_b': 2, 'bar_x': 3, 'bar_y': 4}
+    assert proxy.get_all(no_defaults=True, **kw) == {'bar_x': 3}
+    assert proxy.get('foo_a', **kw) == 1
+    assert proxy.get('bar_y', 'test', **kw) == 'test'
+    proxy.set_multi({'foo_a': 11, 'bar_x': 33}, **kw)
+    assert proxy.get('foo_a', **kw) == 11
+    assert proxy.get('bar_x', **kw) == 33
+    proxy.delete('foo_a', 'bar_x', **kw)
+    assert proxy.get('foo_a', **kw) == 1
+    assert proxy.get('bar_x', **kw) is None
+    proxy.set_multi({'foo_a': 11, 'bar_x': 33}, **kw)
+    proxy.delete_all(**kw)
+    assert proxy.get_all(no_defaults=True, **kw) == {}

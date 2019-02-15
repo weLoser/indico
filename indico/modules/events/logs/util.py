@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,9 +17,10 @@
 from __future__ import unicode_literals
 
 import re
+from datetime import datetime
 from difflib import SequenceMatcher
-
 from enum import Enum
+
 from markupsafe import Markup
 
 from indico.core import signals
@@ -34,16 +35,13 @@ def get_log_renderers():
 def make_diff_log(changes, fields):
     """Create a value for log data containing change information.
 
-    :param: a dict mapping attributes to ``(old, new)`` tuples
-    :param: a dict mapping attributes to field metadata.  for simple
-            cases this may be a string with the human-friendly title,
-            for more advanced fields it should be a dict containing
-            ``title``, a ``type`` string and a ``convert`` callback
-            which will be invoked with a tuple containing the old and
-            new value
-    :param: a dict overriding type information for attributes. can be
-            a string or a function that takes a tuple with the old/new
-            value and returns a ``(type, changes)`` tuple
+    :param changes: a dict mapping attributes to ``(old, new)`` tuples
+    :param fields: a dict mapping attributes to field metadata.  for
+            simple cases this may be a string with the human-friendly
+            title, for more advanced fields it should be a dict
+            containing ``title``, a ``type`` string and a ``convert``
+            callback which will be invoked with a tuple containing the
+            old and new value
     """
     data = {'_diff': True}
     for key, field_data in fields.iteritems():
@@ -74,6 +72,9 @@ def make_diff_log(changes, fields):
             change = map(sorted, change)
         elif all(isinstance(x, bool) for x in change):
             type_ = 'bool'
+        elif all(isinstance(x, datetime) for x in change):
+            type_ = 'datetime'
+            change = [x.isoformat() for x in change]
         else:
             type_ = 'text'
             change = map(unicode, map(orig_string, change))
@@ -88,7 +89,11 @@ def render_changes(a, b, type_):
     :param b: new value
     :param type_: the type determining how the values should be compared
     """
-    if type_ in ('number', 'enum', 'bool'):
+    if type_ in ('number', 'enum', 'bool', 'datetime'):
+        if a in (None, ''):
+            a = '\N{EMPTY SET}'
+        if b in (None, ''):
+            b = '\N{EMPTY SET}'
         return '{} \N{RIGHTWARDS ARROW} {}'.format(a, b)
     elif type_ == 'string':
         return '{} \N{RIGHTWARDS ARROW} {}'.format(a or '\N{EMPTY SET}', b or '\N{EMPTY SET}')
@@ -157,3 +162,21 @@ def _diff_list(a, b):
         else:
             raise RuntimeError('unexpected opcode: ' + opcode)
     return Markup(', ').join(output)
+
+
+def serialize_log_entry(entry):
+    from indico.modules.users.util import get_color_for_username
+    return {
+        'id': entry.id,
+        'type': entry.type,
+        'realm': entry.realm.name,
+        'kind': entry.kind.name,
+        'module': entry.module,
+        'description': entry.summary,
+        'time': entry.logged_dt.astimezone(entry.event.tzinfo).isoformat(),
+        'payload': entry.data,
+        'user': {
+            'fullName': entry.user.full_name if entry.user else None,
+            'avatarColor': get_color_for_username(entry.user.full_name) if entry.user else None
+        }
+    }

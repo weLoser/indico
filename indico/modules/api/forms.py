@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -37,8 +37,6 @@ security_mode_titles = {
 
 
 class AdminSettingsForm(IndicoForm):
-    require_https = BooleanField(_('Require HTTPS'), widget=SwitchWidget(),
-                                 description=_("Require HTTPS for all authenticated API requests."))
     allow_persistent = BooleanField(_('Persistent signatures'), widget=SwitchWidget(),
                                     description=_("Allow users to enable persistent signatures (without timestamp)."))
     security_mode = IndicoEnumSelectField(_('Security mode'), enum=APIMode, titles=security_mode_titles,

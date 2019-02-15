@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,33 +16,35 @@
 
 from __future__ import unicode_literals
 
-from flask import session, request
-from wtforms.fields import StringField, TextAreaField, SelectField, HiddenField
+from flask import request
+from wtforms.fields import BooleanField, HiddenField, SelectField, StringField, TextAreaField
 from wtforms.validators import DataRequired
 
 from indico.modules.users.models.users import UserTitle
 from indico.util.i18n import _
 from indico.util.placeholders import render_placeholder_info
 from indico.web.forms.base import IndicoForm
-from indico.web.forms.fields import IndicoStaticTextField, HiddenFieldList, IndicoEnumSelectField
-from indico.web.forms.widgets import CKEditorWidget
+from indico.web.forms.fields import HiddenFieldList, IndicoEmailRecipientsField, IndicoEnumSelectField
+from indico.web.forms.widgets import CKEditorWidget, SwitchWidget
 
 
 class EmailEventPersonsForm(IndicoForm):
     from_address = SelectField(_('From'), [DataRequired()])
     subject = StringField(_('Subject'), [DataRequired()])
     body = TextAreaField(_('Email body'), [DataRequired()], widget=CKEditorWidget(simple=True))
-    recipients = IndicoStaticTextField(_('Recipients'))
+    recipients = IndicoEmailRecipientsField(_('Recipients'))
+    copy_for_sender = BooleanField(_('Send copy to me'), widget=SwitchWidget(),
+                                   description=_('Send copy of each email to my mailbox'))
     person_id = HiddenFieldList()
     user_id = HiddenFieldList()
+    role_id = HiddenFieldList()
     submitted = HiddenField()
 
     def __init__(self, *args, **kwargs):
         register_link = kwargs.pop('register_link')
+        event = kwargs.pop('event')
         super(EmailEventPersonsForm, self).__init__(*args, **kwargs)
-        from_addresses = ['{} <{}>'.format(session.user.full_name, email)
-                          for email in sorted(session.user.all_emails, key=lambda x: x != session.user.email)]
-        self.from_address.choices = zip(from_addresses, from_addresses)
+        self.from_address.choices = event.get_allowed_sender_emails().items()
         self.body.description = render_placeholder_info('event-persons-email', event=None, person=None,
                                                         register_link=register_link)
 

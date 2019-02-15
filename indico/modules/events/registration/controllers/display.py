@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,55 +19,52 @@ from __future__ import unicode_literals
 from operator import attrgetter
 from uuid import UUID
 
-from flask import request, session, redirect, flash, jsonify
-from sqlalchemy.orm import subqueryload, contains_eager
+from flask import flash, jsonify, redirect, request, session
+from sqlalchemy.orm import contains_eager, subqueryload
 from werkzeug.exceptions import Forbidden, NotFound
 
-from indico.core.db import db
 from indico.modules.auth.util import redirect_to_login
+from indico.modules.events.controllers.base import RHDisplayEventBase
 from indico.modules.events.models.events import EventType
+from indico.modules.events.payment import payment_event_settings
 from indico.modules.events.registration import registration_settings
 from indico.modules.events.registration.controllers import RegistrationEditMixin, RegistrationFormMixin
 from indico.modules.events.registration.models.forms import RegistrationForm
-from indico.modules.events.registration.models.invitations import RegistrationInvitation, InvitationState
+from indico.modules.events.registration.models.invitations import InvitationState, RegistrationInvitation
 from indico.modules.events.registration.models.items import PersonalDataType
 from indico.modules.events.registration.models.registrations import Registration, RegistrationState
-from indico.modules.events.registration.util import (get_event_section_data, make_registration_form,
-                                                     create_registration, check_registration_email, get_title_uuid)
+from indico.modules.events.registration.util import (check_registration_email, create_registration, generate_ticket,
+                                                     get_event_regforms, get_event_section_data, get_title_uuid,
+                                                     make_registration_form)
 from indico.modules.events.registration.views import (WPDisplayRegistrationFormConference,
-                                                      WPDisplayRegistrationFormMeeting,
-                                                      WPDisplayRegistrationFormLecture,
+                                                      WPDisplayRegistrationFormSimpleEvent,
                                                       WPDisplayRegistrationParticipantList)
-from indico.modules.events.payment import event_settings as payment_event_settings
+from indico.util.fs import secure_filename
 from indico.util.i18n import _
-from indico.web.flask.util import url_for
-from MaKaC.webinterface.rh.conferenceDisplay import RHConferenceBaseDisplay
+from indico.web.flask.util import send_file, url_for
 
 
-class RHRegistrationFormDisplayBase(RHConferenceBaseDisplay):
-    CSRF_ENABLED = True
-
+class RHRegistrationFormDisplayBase(RHDisplayEventBase):
     @property
     def view_class(self):
-        mapping = {
-            EventType.conference: WPDisplayRegistrationFormConference,
-            EventType.meeting: WPDisplayRegistrationFormMeeting,
-            EventType.lecture: WPDisplayRegistrationFormLecture
-        }
-        return mapping[self.event_new.type_]
+        return (WPDisplayRegistrationFormConference
+                if self.event.type_ == EventType.conference
+                else WPDisplayRegistrationFormSimpleEvent)
 
 
 class RHRegistrationFormBase(RegistrationFormMixin, RHRegistrationFormDisplayBase):
-    def _checkParams(self, params):
-        RHRegistrationFormDisplayBase._checkParams(self, params)
-        RegistrationFormMixin._checkParams(self)
+    def _process_args(self):
+        RHRegistrationFormDisplayBase._process_args(self)
+        RegistrationFormMixin._process_args(self)
 
 
 class RHRegistrationFormRegistrationBase(RHRegistrationFormBase):
     """Base for RHs handling individual registrations"""
 
-    def _checkParams(self, params):
-        RHRegistrationFormBase._checkParams(self, params)
+    REGISTRATION_REQUIRED = True
+
+    def _process_args(self):
+        RHRegistrationFormBase._process_args(self)
         self.token = request.args.get('token')
         if self.token:
             self.registration = self.regform.get_registration(uuid=self.token)
@@ -75,25 +72,23 @@ class RHRegistrationFormRegistrationBase(RHRegistrationFormBase):
                 raise NotFound
         else:
             self.registration = self.regform.get_registration(user=session.user) if session.user else None
+        if self.REGISTRATION_REQUIRED and not self.registration:
+            raise Forbidden
 
 
 class RHRegistrationFormList(RHRegistrationFormDisplayBase):
     """List of all registration forms in the event"""
 
     def _process(self):
-        regforms = self.event_new.registration_forms.filter(~RegistrationForm.is_deleted)
-        if session.user:
-            criteria = db.or_(
-                RegistrationForm.is_scheduled,
-                RegistrationForm.registrations.any((Registration.user == session.user) & Registration.is_active),
-            )
-        else:
-            criteria = RegistrationForm.is_scheduled
-        regforms = regforms.filter(criteria).order_by(db.func.lower(RegistrationForm.title)).all()
-        if len(regforms) == 1:
-            return redirect(url_for('.display_regform', regforms[0]))
-        return self.view_class.render_template('display/regform_list.html', self._conf, event=self.event_new,
-                                               regforms=regforms)
+        all_regforms = get_event_regforms(self.event, session.user)
+        scheduled_and_registered_regforms = [regform[0] for regform in all_regforms
+                                             if regform[0].is_scheduled or regform[1]]
+        user_registrations = [regform[0].id for regform in all_regforms if regform[1]]
+        if len(scheduled_and_registered_regforms) == 1:
+            return redirect(url_for('.display_regform', scheduled_and_registered_regforms[0]))
+        return self.view_class.render_template('display/regform_list.html', self.event,
+                                               regforms=scheduled_and_registered_regforms,
+                                               user_registrations=user_registrations)
 
 
 class RHParticipantList(RHRegistrationFormDisplayBase):
@@ -119,10 +114,10 @@ class RHParticipantList(RHRegistrationFormDisplayBase):
                     used.add(reg_data_hash)
                     yield reg_data
 
-        column_names = registration_settings.get(self.event_new, 'participant_list_columns')
+        column_names = registration_settings.get(self.event, 'participant_list_columns')
         headers = [PersonalDataType[column_name].get_title() for column_name in column_names]
 
-        query = (Registration.query.with_parent(self.event_new)
+        query = (Registration.query.with_parent(self.event)
                  .filter(Registration.state.in_([RegistrationState.complete, RegistrationState.unpaid]),
                          RegistrationForm.publish_registrations_enabled,
                          ~RegistrationForm.is_deleted,
@@ -131,11 +126,10 @@ class RHParticipantList(RHRegistrationFormDisplayBase):
                  .options(subqueryload('data').joinedload('field_data'),
                           contains_eager('registration_form')))
         registrations = sorted(_deduplicate_reg_data(_process_registration(reg, column_names) for reg in query),
-                               key=lambda x: x['columns'])
-        table = {'headers': headers,
-                 'rows': registrations,
-                 'show_checkin': any(registration['checked_in'] for registration in registrations)}
-        return table
+                               key=lambda reg: tuple(x['text'].lower() for x in reg['columns']))
+        return {'headers': headers,
+                'rows': registrations,
+                'show_checkin': any(registration['checked_in'] for registration in registrations)}
 
     def _participant_list_table(self, regform):
         def _process_registration(reg, column_ids, active_fields):
@@ -144,7 +138,8 @@ class RHParticipantList(RHRegistrationFormDisplayBase):
             def _content(column_id):
                 if column_id in data_by_field:
                     return data_by_field[column_id].get_friendly_data(for_humans=True)
-                elif column_id in active_fields and active_fields[column_id].personal_data_type is not None:
+                elif (column_id in active_fields and active_fields[column_id].personal_data_type is not None and
+                        active_fields[column_id].personal_data_type.column is not None):
                     # some legacy registrations have no data in the firstname/lastname/email field
                     # so we need to get it from the registration object itself
                     return getattr(reg, active_fields[column_id].personal_data_type.column)
@@ -152,32 +147,40 @@ class RHParticipantList(RHRegistrationFormDisplayBase):
                     # no data available for the field
                     return ''
 
-            columns = [{'text': _content(column_id)} for column_id in column_ids]
+            def _sort_key_date(column_id):
+                data = data_by_field.get(column_id)
+                if data and data.field_data.field.input_type == 'date':
+                    return data.data
+                else:
+                    return None
+
+            columns = [{'text': _content(column_id), 'sort_key': _sort_key_date(column_id)} for column_id in column_ids]
             return {'checked_in': self._is_checkin_visible(reg), 'columns': columns}
 
         active_fields = {field.id: field for field in regform.active_fields}
         column_ids = [column_id
-                      for column_id in registration_settings.get_participant_list_columns(self.event_new, regform)
+                      for column_id in registration_settings.get_participant_list_columns(self.event, regform)
                       if column_id in active_fields]
         headers = [active_fields[column_id].title.title() for column_id in column_ids]
         active_registrations = sorted(regform.active_registrations, key=attrgetter('last_name', 'first_name', 'id'))
         registrations = [_process_registration(reg, column_ids, active_fields) for reg in active_registrations]
-        table = {'headers': headers, 'rows': registrations, 'title': regform.title}
-        table['show_checkin'] = any(registration['checked_in'] for registration in registrations)
-        return table
+        return {'headers': headers,
+                'rows': registrations,
+                'title': regform.title,
+                'show_checkin': any(registration['checked_in'] for registration in registrations)}
 
     def _process(self):
-        regforms = (self.event_new.registration_forms
+        regforms = (RegistrationForm.query.with_parent(self.event)
                     .filter(RegistrationForm.publish_registrations_enabled,
                             ~RegistrationForm.is_deleted)
                     .options(subqueryload('registrations').subqueryload('data').joinedload('field_data'))
                     .all())
-        if registration_settings.get(self.event_new, 'merge_registration_forms'):
+        if registration_settings.get(self.event, 'merge_registration_forms'):
             tables = [self._merged_participant_list_table()]
         else:
             tables = []
             regforms_dict = {regform.id: regform for regform in regforms if regform.publish_registrations_enabled}
-            for form_id in registration_settings.get_participant_list_form_ids(self.event_new):
+            for form_id in registration_settings.get_participant_list_form_ids(self.event):
                 try:
                     regform = regforms_dict.pop(form_id)
                 except KeyError:
@@ -188,14 +191,14 @@ class RHParticipantList(RHRegistrationFormDisplayBase):
             # There might be forms that have not been sorted by the user yet
             tables += map(self._participant_list_table, regforms_dict.viewvalues())
 
-        published = (RegistrationForm.query.with_parent(self.event_new)
+        published = (RegistrationForm.query.with_parent(self.event)
                      .filter(RegistrationForm.publish_registrations_enabled)
                      .has_rows())
         num_participants = sum(len(table['rows']) for table in tables)
 
         return self.view_class.render_template(
             'display/participant_list.html',
-            self._conf,
+            self.event,
             regforms=regforms,
             tables=tables,
             published=published,
@@ -206,7 +209,7 @@ class RHParticipantList(RHRegistrationFormDisplayBase):
 class InvitationMixin:
     """Mixin for RHs that accept an invitation token"""
 
-    def _checkParams(self):
+    def _process_args(self):
         self.invitation = None
         try:
             token = request.args['invitation']
@@ -240,27 +243,32 @@ class RHRegistrationFormCheckEmail(RHRegistrationFormBase):
 class RHRegistrationForm(InvitationMixin, RHRegistrationFormRegistrationBase):
     """Display a registration form and registrations, and process submissions"""
 
+    REGISTRATION_REQUIRED = False
+
     normalize_url_spec = {
         'locators': {
             lambda self: self.regform
         }
     }
 
-    def _checkProtection(self):
-        RHRegistrationFormRegistrationBase._checkProtection(self)
+    def _check_access(self):
+        RHRegistrationFormRegistrationBase._check_access(self)
         if self.regform.require_login and not session.user and request.method != 'GET':
             raise Forbidden(response=redirect_to_login(reason=_('You are trying to register with a form '
                                                                 'that requires you to be logged in')))
 
-    def _checkParams(self, params):
-        RHRegistrationFormRegistrationBase._checkParams(self, params)
-        InvitationMixin._checkParams(self)
+    def _process_args(self):
+        RHRegistrationFormRegistrationBase._process_args(self)
+        InvitationMixin._process_args(self)
         if self.invitation and self.invitation.state == InvitationState.accepted and self.invitation.registration:
             return redirect(url_for('.display_regform', self.invitation.registration.locator.registrant))
 
+    def _can_register(self):
+        return not self.regform.limit_reached and (self.regform.is_active or self.invitation)
+
     def _process(self):
         form = make_registration_form(self.regform)()
-        if form.validate_on_submit():
+        if self._can_register() and form.validate_on_submit():
             registration = create_registration(self.regform, form.data, self.invitation)
             return redirect(url_for('.display_regform', registration.locator.registrant))
         elif form.is_submitted():
@@ -272,12 +280,11 @@ class RHRegistrationForm(InvitationMixin, RHRegistrationFormRegistrationBase):
         if self.invitation:
             user_data.update((attr, getattr(self.invitation, attr)) for attr in ('first_name', 'last_name', 'email'))
         user_data['title'] = get_title_uuid(self.regform, user_data['title'])
-        return self.view_class.render_template('display/regform_display.html', self._conf, event=self.event_new,
+        return self.view_class.render_template('display/regform_display.html', self.event,
                                                regform=self.regform,
                                                sections=get_event_section_data(self.regform),
-                                               payment_conditions=payment_event_settings.get(self.event_new,
-                                                                                             'conditions'),
-                                               payment_enabled=self.event_new.has_feature('payment'),
+                                               payment_conditions=payment_event_settings.get(self.event, 'conditions'),
+                                               payment_enabled=self.event.has_feature('payment'),
                                                user_data=user_data,
                                                invitation=self.invitation,
                                                registration=self.registration,
@@ -290,9 +297,10 @@ class RHRegistrationDisplayEdit(RegistrationEditMixin, RHRegistrationFormRegistr
 
     template_file = 'display/registration_modify.html'
     management = False
+    REGISTRATION_REQUIRED = False
 
-    def _checkParams(self, params):
-        RHRegistrationFormRegistrationBase._checkParams(self, params)
+    def _process_args(self):
+        RHRegistrationFormRegistrationBase._process_args(self)
         if self.registration is None:
             if session.user:
                 flash(_("We could not find a registration for you.  If have already registered, please use the "
@@ -311,12 +319,32 @@ class RHRegistrationDisplayEdit(RegistrationEditMixin, RHRegistrationFormRegistr
 class RHRegistrationFormDeclineInvitation(InvitationMixin, RHRegistrationFormBase):
     """Decline an invitation to register"""
 
-    def _checkParams(self, params):
-        RHRegistrationFormBase._checkParams(self, params)
-        InvitationMixin._checkParams(self)
+    def _process_args(self):
+        RHRegistrationFormBase._process_args(self)
+        InvitationMixin._process_args(self)
 
     def _process(self):
         if self.invitation.state == InvitationState.pending:
             self.invitation.state = InvitationState.declined
             flash(_("You declined the invitation to register."))
-        return redirect(self.event_new.url)
+        return redirect(self.event.url)
+
+
+class RHTicketDownload(RHRegistrationFormRegistrationBase):
+    """Generate ticket for a given registration"""
+
+    def _check_access(self):
+        RHRegistrationFormRegistrationBase._check_access(self)
+        if self.registration.state != RegistrationState.complete:
+            raise Forbidden
+        if not self.regform.tickets_enabled:
+            raise Forbidden
+        if (not self.regform.ticket_on_event_page and not self.regform.ticket_on_summary_page
+                and not self.regform.event.can_manage(session.user, 'registration')):
+            raise Forbidden
+        if self.registration.is_ticket_blocked:
+            raise Forbidden
+
+    def _process(self):
+        filename = secure_filename('{}-Ticket.pdf'.format(self.event.title), 'ticket.pdf')
+        return send_file(filename, generate_ticket(self.registration), 'application/pdf')

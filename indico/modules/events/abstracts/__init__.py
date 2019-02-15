@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,11 +20,11 @@ from flask import render_template, session
 
 from indico.core import signals
 from indico.core.logger import Logger
-from indico.core.roles import ManagementRole
+from indico.core.permissions import ManagementPermission
 from indico.modules.events.abstracts.clone import AbstractSettingsCloner
-from indico.modules.events.abstracts.notifications import StateCondition, TrackCondition, ContributionTypeCondition
+from indico.modules.events.abstracts.notifications import ContributionTypeCondition, StateCondition, TrackCondition
 from indico.modules.events.features.base import EventFeature
-from indico.modules.events.models.events import EventType, Event
+from indico.modules.events.models.events import Event, EventType
 from indico.modules.events.timetable.models.breaks import Break
 from indico.util.i18n import _
 from indico.util.placeholders import Placeholder
@@ -49,7 +49,7 @@ def _clear_boa_cache(sender, obj=None, **kwargs):
     if isinstance(obj, Break):
         # breaks do not show up in the BoA
         return
-    event = (obj or sender).event_new
+    event = (obj or sender).event
     clear_boa_cache(event)
 
 
@@ -104,12 +104,12 @@ class AbstractsFeature(EventFeature):
         return event.type_ == EventType.conference
 
 
-@signals.acl.get_management_roles.connect_via(Event)
-def _get_management_roles(sender, **kwargs):
-    return AbstractReviewerRole
+@signals.acl.get_management_permissions.connect_via(Event)
+def _get_management_permissions(sender, **kwargs):
+    return AbstractReviewerPermission
 
 
-class AbstractReviewerRole(ManagementRole):
+class AbstractReviewerPermission(ManagementPermission):
     name = 'abstract_reviewer'
     friendly_name = _('Reviewer')
     description = _('Grants abstract reviewing rights on an event.')
@@ -139,14 +139,13 @@ def _extend_event_menu(sender, **kwargs):
     yield MenuEntryData(title=_("Call for Abstracts"), name='call_for_abstracts',
                         endpoint='abstracts.call_for_abstracts', position=2,
                         visible=lambda event: event.has_feature('abstracts'))
-    yield MenuEntryData(title=_("Reviewing Area"), name='user_tracks', endpoint='abstracts.display_reviewable_tracks',
-                        position=0, parent='call_for_abstracts',
+    yield MenuEntryData(title=_("Reviewing Area"), name='abstract_reviewing_area',
+                        endpoint='abstracts.display_reviewable_tracks', position=0, parent='call_for_abstracts',
                         visible=_reviewing_area_visible)
 
 
 @template_hook('conference-home-info')
 def _inject_cfa_announcement(event, **kwargs):
-    event = event.as_event
     if (event.has_feature('abstracts') and
             (event.cfa.is_open or (session.user and event.cfa.can_submit_abstracts(session.user)))):
         return render_template('events/abstracts/display/conference_home.html', event=event)

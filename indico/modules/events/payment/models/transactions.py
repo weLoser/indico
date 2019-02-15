@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -232,27 +232,24 @@ class PaymentTransaction(db.Model):
         previous_transaction = registration.transaction
         new_transaction = PaymentTransaction(amount=amount, currency=currency,
                                              provider=provider, data=data)
-        registration.transaction = new_transaction
-        double_payment = False
         try:
             next_status = TransactionStatusTransition.next(previous_transaction, action, provider)
         except InvalidTransactionStatus as e:
-            Logger.get('payment').exception("{}\nData received: {}".format(e, data))
-            return None, None
+            Logger.get('payment').exception("%s (data received: %r)", e, data)
+            return None
         except InvalidManualTransactionAction as e:
-            Logger.get('payment').exception("Invalid manual action code '{}' on initial status\n"
-                                            "Data received: {}".format(e, data))
-            return None, None
+            Logger.get('payment').exception("Invalid manual action code '%s' on initial status (data received: %r)",
+                                            e, data)
+            return None
         except InvalidTransactionAction as e:
-            Logger.get('payment').exception("Invalid action code '{}' on initial status\n"
-                                            "Data received: {}".format(e, data))
-            return None, None
+            Logger.get('payment').exception("Invalid action code '%s' on initial status (data received: %r)", e, data)
+            return None
         except IgnoredTransactionAction as e:
-            Logger.get('payment').warning("{}\nData received: {}".format(e, data))
-            return None, None
+            Logger.get('payment').warning("%s (data received: %r)", e, data)
+            return None
         except DoublePaymentTransaction:
             next_status = TransactionStatus.successful
-            double_payment = True
-            Logger.get('payment').warning("Received successful payment for an already paid registration")
+            Logger.get('payment').info("Received successful payment for an already paid registration")
+        registration.transaction = new_transaction
         new_transaction.status = next_status
-        return new_transaction, double_payment
+        return new_transaction

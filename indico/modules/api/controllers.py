@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,27 +16,26 @@
 
 from __future__ import unicode_literals
 
-from flask import flash, redirect, session, request
-from werkzeug.exceptions import Forbidden, BadRequest
+from flask import flash, redirect, request, session
+from werkzeug.exceptions import BadRequest, Forbidden
 
 from indico.core.db import db
-from indico.modules.api import APIMode
-from indico.modules.api import settings as api_settings
+from indico.modules.admin import RHAdminBase
+from indico.modules.api import APIMode, api_settings
 from indico.modules.api.forms import AdminSettingsForm
 from indico.modules.api.models.keys import APIKey
 from indico.modules.api.views import WPAPIAdmin, WPAPIUserProfile
 from indico.modules.categories.models.categories import Category
-from indico.modules.events.models.events import Event
 from indico.modules.events.contributions.models.contributions import Contribution
+from indico.modules.events.models.events import Event
 from indico.modules.events.sessions.models.sessions import Session
 from indico.modules.users.controllers import RHUserBase
 from indico.util.i18n import _
-from indico.web.flask.util import url_for, redirect_or_jsonify
+from indico.web.flask.util import redirect_or_jsonify, url_for
 from indico.web.forms.base import FormDefaults
 from indico.web.http_api.util import generate_public_auth_request
+from indico.web.rh import RH
 from indico.web.util import jsonify_data
-from MaKaC.webinterface.rh.base import RH
-from MaKaC.webinterface.rh.admins import RHAdminBase
 
 
 class RHAPIAdminSettings(RHAdminBase):
@@ -60,7 +59,13 @@ class RHAPIAdminKeys(RHAdminBase):
         return WPAPIAdmin.render_template('admin_keys.html', keys=keys)
 
 
-class RHAPIUserProfile(RHUserBase):
+class RHUserAPIBase(RHUserBase):
+    """Base class for user API management"""
+
+    allow_system_user = True
+
+
+class RHAPIUserProfile(RHUserAPIBase):
     """API key details (user)"""
 
     def _process(self):
@@ -75,10 +80,8 @@ class RHAPIUserProfile(RHUserBase):
                                                 can_modify=(not key or not key.is_blocked or session.user.is_admin))
 
 
-class RHAPICreateKey(RHUserBase):
+class RHAPICreateKey(RHUserAPIBase):
     """API key creation"""
-
-    CSRF_ENABLED = True
 
     def _process(self):
         quiet = request.form.get('quiet') == '1'
@@ -110,10 +113,8 @@ class RHAPICreateKey(RHUserBase):
                                    is_persistent_allowed=key.is_persistent_allowed)
 
 
-class RHAPIDeleteKey(RHUserBase):
+class RHAPIDeleteKey(RHUserAPIBase):
     """API key deletion"""
-
-    CSRF_ENABLED = True
 
     def _process(self):
         key = self.user.api_key
@@ -122,10 +123,8 @@ class RHAPIDeleteKey(RHUserBase):
         return redirect(url_for('api.user_profile'))
 
 
-class RHAPITogglePersistent(RHUserBase):
+class RHAPITogglePersistent(RHUserAPIBase):
     """API key - persistent signatures on/off"""
-
-    CSRF_ENABLED = True
 
     def _process(self):
         quiet = request.form.get('quiet') == '1'
@@ -139,14 +138,12 @@ class RHAPITogglePersistent(RHUserBase):
         return redirect_or_jsonify(url_for('api.user_profile'), flash=not quiet, enabled=key.is_persistent_allowed)
 
 
-class RHAPIBlockKey(RHUserBase):
+class RHAPIBlockKey(RHUserAPIBase):
     """API key blocking/unblocking"""
 
-    CSRF_ENABLED = True
-
-    def _checkProtection(self):
-        RHUserBase._checkProtection(self)
-        if self._doProcess and not session.user.is_admin:
+    def _check_access(self):
+        RHUserAPIBase._check_access(self)
+        if not session.user.is_admin:
             raise Forbidden
 
     def _process(self):
@@ -160,9 +157,7 @@ class RHAPIBlockKey(RHUserBase):
 
 
 class RHAPIBuildURLs(RH):
-    CSRF_ENABLED = True
-
-    def _checkParams(self):
+    def _process_args(self):
         data = request.json
         self.object = None
         if 'categId' in data:
@@ -182,10 +177,10 @@ class RHAPIBuildURLs(RH):
         api_key = session.user.api_key if session.user else None
         url_format = '/export/event/{0}/{1}/{2}.ics'
         if isinstance(self.object, Contribution):
-            event = self.object.event_new
+            event = self.object.event
             urls = generate_public_auth_request(api_key, url_format.format(event.id, 'contribution', self.object.id))
         elif isinstance(self.object, Session):
-            event = self.object.event_new
+            event = self.object.event
             urls = generate_public_auth_request(api_key, url_format.format(event.id, 'session', self.object.id))
         elif isinstance(self.object, Category):
             urls = generate_public_auth_request(api_key, '/export/categ/{0}.ics'.format(self.object.id),

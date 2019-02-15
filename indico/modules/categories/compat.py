@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,12 +18,12 @@ from __future__ import unicode_literals
 
 import re
 
-from flask import abort, request, redirect
+from flask import abort, redirect, request
 from werkzeug.exceptions import NotFound
 
 from indico.modules.categories import LegacyCategoryMapping
 from indico.web.flask.util import url_for
-from MaKaC.webinterface.rh.base import RHSimple
+from indico.web.rh import RHSimple
 
 
 @RHSimple.wrap_function

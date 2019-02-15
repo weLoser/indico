@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,23 +16,22 @@
 
 from __future__ import unicode_literals
 
-from flask import request, redirect, flash, session, render_template
+from flask import flash, redirect, render_template, request, session
 from werkzeug.exceptions import BadRequest, NotFound
 
 from indico.core import signals
 from indico.core.db.sqlalchemy.principals import PrincipalType
 from indico.core.logger import Logger
-from indico.core.roles import check_roles, ManagementRole, get_available_roles
+from indico.core.permissions import ManagementPermission, check_permissions, get_available_permissions
 from indico.modules.events.cloning import get_event_cloners
-from indico.modules.events.logs import EventLogRealm, EventLogKind
+from indico.modules.events.logs import EventLogKind, EventLogRealm
 from indico.modules.events.models.events import Event
 from indico.modules.events.models.legacy_mapping import LegacyEventMapping
 from indico.util.i18n import _, ngettext, orig_string
 from indico.util.string import is_legacy_id
-from indico.web.flask.templating import template_hook, get_template_module
+from indico.web.flask.templating import template_hook
 from indico.web.flask.util import url_for
-from indico.web.forms.base import FormDefaults
-from indico.web.menu import SideMenuItem
+from indico.web.menu import SideMenuItem, TopMenuItem, TopMenuSection
 
 
 __all__ = ('Event', 'logger', 'event_management_object_url_prefixes', 'event_object_url_prefixes')
@@ -59,25 +58,21 @@ event_management_object_url_prefixes = {
 }
 
 
-@signals.event.deleted.connect
-def _event_deleted(event, **kwargs):
-    event.as_event.is_deleted = True
-    logger.info('Event %s deleted. ZODB OID: %r', event.id, event._p_oid)
-
-
 @signals.users.merged.connect
 def _merge_users(target, source, **kwargs):
     from indico.modules.events.models.persons import EventPerson
     from indico.modules.events.models.principals import EventPrincipal
     EventPerson.merge_users(target, source)
-    EventPrincipal.merge_users(target, source, 'event_new')
+    EventPrincipal.merge_users(target, source, 'event')
+    target.event_roles |= source.event_roles
+    source.event_roles.clear()
 
 
 @signals.users.registered.connect
 @signals.users.email_added.connect
 def _convert_email_principals(user, **kwargs):
     from indico.modules.events.models.principals import EventPrincipal
-    events = EventPrincipal.replace_email_with_user(user, 'event_new')
+    events = EventPrincipal.replace_email_with_user(user, 'event')
     if events:
         num = len(events)
         flash(ngettext("You have been granted manager/submission privileges for an event.",
@@ -96,12 +91,13 @@ def _log_acl_changes(sender, obj, principal, entry, is_new, old_data, quiet, **k
     if quiet:
         return
 
-    available_roles = get_available_roles(Event)
+    user = session.user if session else None  # allow acl changes outside request context
+    available_permissions = get_available_permissions(Event)
 
-    def _format_roles(roles):
-        roles = set(roles)
-        return ', '.join(sorted(orig_string(role.friendly_name) for role in available_roles.itervalues()
-                                if role.name in roles))
+    def _format_permissions(permissions):
+        permissions = set(permissions)
+        return ', '.join(sorted(orig_string(p.friendly_name) for p in available_permissions.itervalues()
+                                if p.name in permissions))
 
     data = {}
     if principal.principal_type == PrincipalType.user:
@@ -114,33 +110,32 @@ def _log_acl_changes(sender, obj, principal, entry, is_new, old_data, quiet, **k
         data['Group'] = '{} ({})'.format(principal.name, principal.provider_title)
     elif principal.principal_type == PrincipalType.network:
         data['IP Network'] = principal.name
+    elif principal.principal_type == PrincipalType.event_role:
+        data['Event Role'] = principal.name
     if entry is None:
         data['Read Access'] = old_data['read_access']
         data['Manager'] = old_data['full_access']
-        data['Roles'] = _format_roles(old_data['roles'])
-        obj.log(EventLogRealm.management, EventLogKind.negative, 'Protection', 'ACL entry removed', session.user,
-                data=data)
+        data['Permissions'] = _format_permissions(old_data['permissions'])
+        obj.log(EventLogRealm.management, EventLogKind.negative, 'Protection', 'ACL entry removed', user, data=data)
     elif is_new:
         data['Read Access'] = entry.read_access
         data['Manager'] = entry.full_access
-        if entry.roles:
-            data['Roles'] = _format_roles(entry.roles)
-        obj.log(EventLogRealm.management, EventLogKind.positive, 'Protection', 'ACL entry added', session.user,
-                data=data)
+        if entry.permissions:
+            data['Permissions'] = _format_permissions(entry.permissions)
+        obj.log(EventLogRealm.management, EventLogKind.positive, 'Protection', 'ACL entry added', user, data=data)
     elif entry.current_data != old_data:
         data['Read Access'] = entry.read_access
         data['Manager'] = entry.full_access
-        current_roles = set(entry.roles)
-        added_roles = current_roles - old_data['roles']
-        removed_roles = old_data['roles'] - current_roles
-        if added_roles:
-            data['Roles (added)'] = _format_roles(added_roles)
-        if removed_roles:
-            data['Roles (removed)'] = _format_roles(removed_roles)
-        if current_roles:
-            data['Roles'] = _format_roles(current_roles)
-        obj.log(EventLogRealm.management, EventLogKind.change, 'Protection', 'ACL entry changed', session.user,
-                data=data)
+        current_permissions = set(entry.permissions)
+        added_permissions = current_permissions - old_data['permissions']
+        removed_permissions = old_data['permissions'] - current_permissions
+        if added_permissions:
+            data['Permissions (added)'] = _format_permissions(added_permissions)
+        if removed_permissions:
+            data['Permissions (removed)'] = _format_permissions(removed_permissions)
+        if current_permissions:
+            data['Permissions'] = _format_permissions(current_permissions)
+        obj.log(EventLogRealm.management, EventLogKind.change, 'Protection', 'ACL entry changed', user, data=data)
 
 
 @signals.app_created.connect
@@ -154,13 +149,7 @@ def _handle_legacy_ids(app, **kwargs):
 
     # Endpoints which need to deal with non-standard event "ids" because they might be shorturls.
     # Those endpoints handle legacy event ids on their own so we ignore them here.
-    # confModifTools-*Background is called via /event/default/... when editing a global
-    # badge/poster template...
-    _non_standard_id_endpoints = {'event.shorturl', 'event.conferenceDisplay', 'conferenceDisplay-overview',
-                                  'event_mgmt.confModifTools-badgeGetBackground',
-                                  'event_mgmt.confModifTools-badgeSaveBackground',
-                                  'event_mgmt.confModifTools-posterGetBackground',
-                                  'event_mgmt.confModifTools-posterSaveBackground'}
+    _non_standard_id_endpoints = {'events.shorturl', 'events.display', 'events.display_overview'}
 
     @app.before_request
     def _redirect_legacy_id():
@@ -189,25 +178,51 @@ def _handle_legacy_ids(app, **kwargs):
 
 
 @signals.app_created.connect
-def _check_roles(app, **kwargs):
-    check_roles(Event)
+def _check_permissions(app, **kwargs):
+    check_permissions(Event)
 
 
-@signals.acl.get_management_roles.connect_via(Event)
-def _get_management_roles(sender, **kwargs):
-    return SubmitterRole
+@signals.acl.get_management_permissions.connect_via(Event)
+def _get_management_permissions(sender, **kwargs):
+    return SubmitterPermission
 
 
-class SubmitterRole(ManagementRole):
+class SubmitterPermission(ManagementPermission):
     name = 'submit'
     friendly_name = _('Submission')
-    description = _('Grants access to materials and minutes.')
+    description = _('Grants management rights for event-wide materials and minutes.')
+    user_selectable = True
 
 
 @signals.menu.items.connect_via('admin-sidemenu')
 def _sidemenu_items(sender, **kwargs):
-    yield SideMenuItem('reference_types', _('External ID Types'), url_for('events.reference_types'),
-                       section='customization')
+    if session.user.is_admin:
+        yield SideMenuItem('reference_types', _('External ID Types'), url_for('events.reference_types'),
+                           section='customization')
+
+
+@signals.menu.sections.connect_via('top-menu')
+def _topmenu_sections(sender, **kwargs):
+    yield TopMenuSection('create-event', _('Create event'), 90)
+
+
+@signals.menu.items.connect_via('top-menu')
+def _topmenu_items(sender, **kwargs):
+    yield TopMenuItem('create-lecture', _('Create lecture'), 'lecture', 30, section='create-event')
+    yield TopMenuItem('create-meeting', _('Create meeting'), 'meeting', 20, section='create-event')
+    yield TopMenuItem('create-conference', _('Create conference'), 'conference', 10, section='create-event')
+
+
+@signals.event.sidemenu.connect
+def _extend_event_menu(sender, **kwargs):
+    from indico.modules.events.layout.util import MenuEntryData, get_menu_entry_by_name
+
+    def _my_conference_visible(event):
+        return session.user and (get_menu_entry_by_name('my_contributions', event).is_visible or
+                                 get_menu_entry_by_name('my_sessions', event).is_visible)
+
+    yield MenuEntryData(_("Overview"), 'overview', 'events.display_overview', position=0, static_site=True)
+    yield MenuEntryData(_("My Conference"), 'my_conference', position=7, visible=_my_conference_visible)
 
 
 @signals.app_created.connect
@@ -228,28 +243,12 @@ def _get_cloners(sender, **kwargs):
 @signals.event.cloned.connect
 def _event_cloned(old_event, new_event, **kwargs):
     new_event.cloned_from = old_event
-
-
-@template_hook('event-references-list')
-def _inject_event_references(event, **kwargs):
-    return render_template('events/management/reference_list.html', event=event, references=event.references, **kwargs)
-
-
-@template_hook('event-location-field')
-def _render_location_field(event, **kwargs):
-    from indico.modules.events.forms import EventLocationForm
-    location_data = event.location_data if event else {'inheriting': False}
-    form = EventLocationForm(obj=FormDefaults(location_data=location_data))
-    tpl = get_template_module('forms/_form.html')
-    return tpl.form_row(form.location_data, skip_label=True)
-
-
-@template_hook('event-keywords-field')
-def _render_keywords_field(event, **kwargs):
-    from indico.modules.events.forms import EventKeywordsForm
-    form = EventKeywordsForm(obj=FormDefaults(keywords=event.keywords))
-    tpl = get_template_module('forms/_form.html')
-    return tpl.form_row(form.keywords, skip_label=True)
+    new_event.keywords = old_event.keywords
+    new_event.organizer_info = old_event.organizer_info
+    new_event.additional_info = old_event.additional_info
+    new_event.contact_title = old_event.contact_title
+    new_event.contact_emails = old_event.contact_emails
+    new_event.contact_phones = old_event.contact_phones
 
 
 @template_hook('event-ical-export')
@@ -258,9 +257,3 @@ def _render_event_ical_export(event, **kwargs):
     return render_template('events/display/event_ical_export.html', item=event,
                            ics_url=url_for('events.export_event_ical', event),
                            **get_base_ical_parameters(session.user, 'events', '/export/event/{0}.ics'.format(event.id)))
-
-
-@template_hook('contribution-fields')
-def _render_contribution_fields(event, **kwargs):
-    return render_template('events/management/contribution_field_list.html', event=event,
-                           fields=event.contribution_fields)

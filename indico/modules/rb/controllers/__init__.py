@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,23 +17,27 @@
 from __future__ import unicode_literals
 
 from flask import session
-from werkzeug.exceptions import NotFound, Forbidden
+from werkzeug.exceptions import Forbidden, NotFound
 
-from indico.core.config import Config
+from indico.core.config import config
 from indico.modules.rb.util import rb_check_user_access
 from indico.util.i18n import _
-from MaKaC.webinterface.rh.base import RHProtected
+from indico.web.rh import RHProtected
 
 
 class RHRoomBookingProtected(RHProtected):
-    def _checkSessionUser(self):
-        if not Config.getInstance().getIsRoomBookingActive():
+    def _check_access(self):
+        if not config.ENABLE_ROOMBOOKING:
             raise NotFound(_('The room booking module is not enabled.'))
-        RHProtected._checkSessionUser(self)
+        RHProtected._check_access(self)
         if not rb_check_user_access(session.user):
-            raise Forbidden(_('Your are not authorized to access the room booking system.'))
+            raise Forbidden(_('You are not authorized to access the room booking system.'))
 
 
 class RHRoomBookingBase(RHRoomBookingProtected):
     """Base class for room booking RHs"""
-    pass
+
+    # legacy code might still show unsanitized content from the DB
+    # so we need to keep the sanitizer running until everything in
+    # roombooking has been moved to Jinja templates
+    CHECK_HTML = True

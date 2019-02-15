@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,24 +14,24 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
 
 import cPickle
 import uuid
 from datetime import datetime, timedelta
 
-from flask import request, flash
+from flask import flash, request
 from flask.sessions import SessionInterface, SessionMixin
 from markupsafe import Markup
 from werkzeug.datastructures import CallbackDict
 from werkzeug.utils import cached_property
 
-from indico.core.config import Config
+from indico.core.config import config
+from indico.legacy.common.cache import GenericCache
 from indico.modules.users import User
+from indico.util.date_time import get_display_tz
 from indico.util.decorators import cached_writable_property
 from indico.util.i18n import _, set_best_lang
-from MaKaC.common.cache import GenericCache
-from MaKaC.common.timezoneUtils import DisplayTZ
 
 
 class BaseSession(CallbackDict, SessionMixin):
@@ -69,11 +69,15 @@ class IndicoSession(BaseSession):
             if not request.is_xhr and request.blueprint != 'assets':
                 self.clear()
                 if merged_into_user:
-                    msg = _(u'Your profile has been merged into <strong>{}</strong>. '
-                            u'Please log in using that profile.')
+                    msg = _('Your profile has been merged into <strong>{}</strong>. Please log in using that profile.')
                     flash(Markup(msg).format(merged_into_user.full_name), 'warning')
                 else:
-                    flash(_(u'Your profile has been deleted.'), 'error')
+                    flash(_('Your profile has been deleted.'), 'error')
+        elif user and user.is_blocked:
+            user = None
+            if not request.is_xhr and request.blueprint != 'assets':
+                self.clear()
+                flash(_('Your Indico profile has been blocked.'), 'error')
         return user
 
     @user.setter
@@ -85,17 +89,8 @@ class IndicoSession(BaseSession):
         self._refresh_sid = True
 
     @property
-    def avatar(self):
-        return self.user.as_avatar if self.user else None
-
-    @property
     def lang(self):
-        if '_lang' in self:
-            # explicit language set in the session
-            return self['_lang']
-        else:
-            # guess language based on accept-languages or use default
-            return set_best_lang(check_session=False)
+        return self.get('_lang') or set_best_lang(check_session=False)
 
     @lang.setter
     def lang(self, lang):
@@ -120,7 +115,7 @@ class IndicoSession(BaseSession):
             return self['_timezone']
         if '_user_id' not in self:
             return 'LOCAL'
-        return Config.getInstance().getDefaultTimezone()
+        return config.DEFAULT_TIMEZONE
 
     @timezone.setter
     def timezone(self, tz):
@@ -133,7 +128,7 @@ class IndicoSession(BaseSession):
         This should only be used in places where no other timezone
         such as from an event or category is available.
         """
-        return DisplayTZ().getDisplayTZ(as_timezone=True)
+        return get_display_tz(as_timezone=True)
 
 
 class IndicoSessionInterface(SessionInterface):
@@ -196,7 +191,7 @@ class IndicoSessionInterface(SessionInterface):
             # If the session has not been modified we only store if it needs to be refreshed
             return
 
-        if app.config['INDICO_SESSION_PERMANENT']:
+        if config.SESSION_LIFETIME > 0:
             # Setting session.permanent marks the session as modified so we only set it when we
             # are saving the session anyway!
             session.permanent = True

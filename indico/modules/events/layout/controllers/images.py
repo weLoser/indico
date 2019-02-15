@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,20 +19,20 @@ from __future__ import unicode_literals
 import shutil
 from io import BytesIO
 
-from flask import flash, request, session, render_template
+from flask import flash, render_template, request, session
 from PIL import Image
 
 from indico.core import signals
 from indico.core.db import db
+from indico.modules.events.controllers.base import RHDisplayEventBase
 from indico.modules.events.layout import logger
 from indico.modules.events.layout.forms import AddImagesForm
 from indico.modules.events.layout.models.images import ImageFile
 from indico.modules.events.layout.views import WPImages
+from indico.modules.events.management.controllers import RHManageEventBase
 from indico.util.fs import secure_filename
 from indico.util.i18n import _, ngettext
 from indico.web.util import jsonify_data
-from MaKaC.webinterface.rh.conferenceModif import RHConferenceModifBase
-from MaKaC.webinterface.rh.conferenceDisplay import RHConferenceBaseDisplay
 
 
 def _render_image_list(event):
@@ -40,21 +40,21 @@ def _render_image_list(event):
     return render_template('events/layout/image_list.html', images=images)
 
 
-class RHManageImagesBase(RHConferenceModifBase):
+class RHManageImagesBase(RHManageEventBase):
     EVENT_FEATURE = 'images'
-    CSRF_ENABLED = True
 
 
 class RHImages(RHManageImagesBase):
     def _process(self):
         form = AddImagesForm()
-        images = ImageFile.query.with_parent(self.event_new).all()
-        return WPImages.render_template('images.html', self._conf, images=images, event=self.event_new, form=form)
+        images = ImageFile.query.with_parent(self.event).all()
+        return WPImages.render_template('images.html', self.event, images=images, form=form)
 
 
 class RHImageUpload(RHManageImagesBase):
     def _process(self):
         files = request.files.getlist('image')
+        num = 0
         for f in files:
             filename = secure_filename(f.filename, 'image')
             data = BytesIO()
@@ -66,23 +66,29 @@ class RHImageUpload(RHManageImagesBase):
                 # Invalid image data
                 continue
             data.seek(0)
-            if image_type not in {'jpeg', 'gif', 'png'}:
+            # XXX: mpo is basically JPEG and JPEGs from some cameras are (wrongfully) detected as mpo
+            if image_type == 'mpo':
+                image_type = 'jpeg'
+            elif image_type not in {'jpeg', 'gif', 'png'}:
+                flash(_("The image '{name}' has an invalid type ({type}); only JPG, GIF and PNG are allowed.")
+                      .format(name=f.filename, type=image_type), 'error')
                 continue
             content_type = 'image/' + image_type
-            image = ImageFile(event_new=self.event_new, filename=filename, content_type=content_type)
+            image = ImageFile(event=self.event, filename=filename, content_type=content_type)
             image.save(data)
+            num += 1
             db.session.flush()
             logger.info('Image %s uploaded by %s', image, session.user)
             signals.event_management.image_created.send(image, user=session.user)
-        flash(ngettext("The image has been uploaded", "{count} images have been uploaded", len(files))
+        flash(ngettext("The image has been uploaded", "{count} images have been uploaded", num)
               .format(count=len(files)), 'success')
-        return jsonify_data(image_list=_render_image_list(self.event_new))
+        return jsonify_data(image_list=_render_image_list(self.event))
 
 
 class RHImageDelete(RHManageImagesBase):
-    def _checkParams(self, params):
-        RHManageImagesBase._checkParams(self, params)
-        self.image = (ImageFile.query.with_parent(self.event_new)
+    def _process_args(self):
+        RHManageImagesBase._process_args(self)
+        self.image = (ImageFile.query.with_parent(self.event)
                       .filter_by(id=request.view_args['image_id'])
                       .first_or_404())
 
@@ -90,10 +96,10 @@ class RHImageDelete(RHManageImagesBase):
         signals.event_management.image_deleted.send(self.image, user=session.user)
         db.session.delete(self.image)
         flash(_("The image '{}' has been deleted").format(self.image.filename), 'success')
-        return jsonify_data(image_list=_render_image_list(self.event_new))
+        return jsonify_data(image_list=_render_image_list(self.event))
 
 
-class RHImageDisplay(RHConferenceBaseDisplay):
+class RHImageDisplay(RHDisplayEventBase):
     EVENT_FEATURE = 'images'
     normalize_url_spec = {
         'locators': {
@@ -101,8 +107,8 @@ class RHImageDisplay(RHConferenceBaseDisplay):
         }
     }
 
-    def _checkParams(self, params):
-        RHConferenceBaseDisplay._checkParams(self, params)
+    def _process_args(self):
+        RHDisplayEventBase._process_args(self)
         image_id = request.view_args['image_id']
         self.image = ImageFile.get_one(image_id)
 

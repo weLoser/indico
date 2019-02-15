@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,66 +18,26 @@ from __future__ import unicode_literals
 
 from flask import render_template, session
 
-from indico.modules.events.abstracts.util import get_visible_reviewed_for_tracks
-from MaKaC.common.TemplateExec import render
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.conferences import WPConferenceDefaultDisplayBase, WPConferenceModifBase
+from indico.modules.events.abstracts.util import filter_field_values, get_visible_reviewed_for_tracks
+from indico.modules.events.contributions.models.fields import ContributionFieldVisibility
+from indico.modules.events.management.views import WPEventManagement
+from indico.modules.events.views import WPConferenceDisplayBase
+from indico.util.mathjax import MathjaxMixin
 
 
-class _MathjaxMixin:
-    def _getHeadContent(self):
-        return (render('js/mathjax.config.js.tpl') +
-                b'\n'.join(b'<script src="{0}" type="text/javascript"></script>'.format(url)
-                           for url in self._asset_env['mathjax_js'].urls()))
-
-
-class WPManageAbstracts(_MathjaxMixin, WPJinjaMixin, WPConferenceModifBase):
+class WPManageAbstracts(MathjaxMixin, WPEventManagement):
     template_prefix = 'events/abstracts/'
     sidemenu_option = 'abstracts'
-
-    def getJSFiles(self):
-        return (WPConferenceModifBase.getJSFiles(self) +
-                self._asset_env['markdown_js'].urls() +
-                self._asset_env['selectize_js'].urls() +
-                self._asset_env['modules_reviews_js'].urls() +
-                self._asset_env['modules_abstracts_js'].urls())
-
-    def getCSSFiles(self):
-        return (WPConferenceModifBase.getCSSFiles(self) +
-                self._asset_env['markdown_sass'].urls() +
-                self._asset_env['selectize_css'].urls() +
-                self._asset_env['reviewing_sass'].urls() +
-                self._asset_env['abstracts_sass'].urls() +
-                self._asset_env['contributions_sass'].urls())
+    bundles = ('module_events.abstracts.js', 'module_events.abstracts.css', 'markdown.js')
 
     def _getHeadContent(self):
-        return WPConferenceModifBase._getHeadContent(self) + _MathjaxMixin._getHeadContent(self)
+        return WPEventManagement._getHeadContent(self) + MathjaxMixin._getHeadContent(self)
 
 
-class WPDisplayAbstractsBase(_MathjaxMixin, WPJinjaMixin, WPConferenceDefaultDisplayBase):
+class WPDisplayAbstractsBase(WPConferenceDisplayBase):
     template_prefix = 'events/abstracts/'
-
-    def getJSFiles(self):
-        return (WPConferenceDefaultDisplayBase.getJSFiles(self) +
-                self._asset_env['markdown_js'].urls() +
-                self._asset_env['selectize_js'].urls() +
-                self._asset_env['modules_reviews_js'].urls() +
-                self._asset_env['modules_abstracts_js'].urls())
-
-    def getCSSFiles(self):
-        return (WPConferenceDefaultDisplayBase.getCSSFiles(self) +
-                self._asset_env['markdown_sass'].urls() +
-                self._asset_env['selectize_css'].urls() +
-                self._asset_env['abstracts_sass'].urls() +
-                self._asset_env['reviewing_sass'].urls() +
-                self._asset_env['event_display_sass'].urls() +
-                self._asset_env['contributions_sass'].urls())
-
-    def _getBody(self, params):
-        return WPJinjaMixin._getPageContent(self, params).encode('utf-8')
-
-    def _getHeadContent(self):
-        return WPConferenceDefaultDisplayBase._getHeadContent(self) + _MathjaxMixin._getHeadContent(self)
+    bundles = ('module_events.abstracts.js', 'module_events.abstracts.css',
+                                                 'markdown.js')
 
 
 class WPDisplayAbstracts(WPDisplayAbstractsBase):
@@ -85,22 +45,12 @@ class WPDisplayAbstracts(WPDisplayAbstractsBase):
 
 
 class WPDisplayCallForAbstracts(WPDisplayAbstracts):
-    def getJSFiles(self):
-        return (WPDisplayAbstractsBase.getJSFiles(self) +
-                self._asset_env['modules_event_display_js'].urls())
+    pass
 
 
 class WPDisplayAbstractsReviewing(WPDisplayAbstracts):
-    menu_entry_name = 'user_tracks'
-
-    def getJSFiles(self):
-        return (WPDisplayAbstracts.getJSFiles(self) +
-                self._asset_env['modules_event_management_js'].urls())
-
-    def getCSSFiles(self):
-        return (WPDisplayAbstracts.getCSSFiles(self) +
-                self._asset_env['event_display_sass'].urls() +
-                self._asset_env['tracks_sass'].urls())
+    menu_entry_name = 'abstract_reviewing_area'
+    bundles = ('module_events.management.js',)
 
 
 def render_abstract_page(abstract, view_class=None, management=False):
@@ -112,15 +62,21 @@ def render_abstract_page(abstract, view_class=None, management=False):
     if len(reviewed_for_tracks) == 1:
         review_form = build_review_form(abstract, reviewed_for_tracks[0])
     judgment_form = AbstractJudgmentForm(abstract=abstract, formdata=None)
-    review_track_list_form = AbstractReviewedForTracksForm(event=abstract.event_new, obj=abstract, formdata=None)
+    review_track_list_form = AbstractReviewedForTracksForm(event=abstract.event, obj=abstract, formdata=None)
+    track_session_map = {track.id: track.default_session_id for track in abstract.event.tracks}
+    can_manage = abstract.event.can_manage(session.user)
+    field_values = filter_field_values(abstract.field_values, can_manage, abstract.user_owns(session.user))
     params = {'abstract': abstract,
               'comment_form': comment_form,
               'review_form': review_form,
               'review_track_list_form': review_track_list_form,
               'judgment_form': judgment_form,
               'visible_tracks': get_visible_reviewed_for_tracks(abstract, session.user),
-              'management': management}
+              'management': management,
+              'track_session_map': track_session_map,
+              'field_values': field_values}
+
     if view_class:
-        return view_class.render_template('abstract.html', abstract.event_new.as_legacy, **params)
+        return view_class.render_template('abstract.html', abstract.event, **params)
     else:
-        return render_template('events/abstracts/abstract.html', no_javascript=True, **params)
+        return render_template('events/abstracts/abstract.html', no_javascript=True, standalone=True, **params)

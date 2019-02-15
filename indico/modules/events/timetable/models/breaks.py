@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -63,11 +63,15 @@ class Break(DescriptionMixin, ColorMixin, LocationMixin, db.Model):
         if parent:
             return parent.object.can_access(user)
         else:
-            return self.timetable_entry.event_new.can_access(user)
+            return self.event.can_access(user)
+
+    @property
+    def event(self):
+        return self.timetable_entry.event if self.timetable_entry else None
 
     @property
     def location_parent(self):
-        return (self.timetable_entry.event_new
+        return (self.event
                 if self.timetable_entry.parent_id is None
                 else self.timetable_entry.parent.session_block)
 
@@ -85,7 +89,7 @@ class Break(DescriptionMixin, ColorMixin, LocationMixin, db.Model):
 
     @locator_property
     def locator(self):
-        return dict(self.timetable_entry.event_new.locator, break_id=self.id)
+        return dict(self.event.locator, break_id=self.id)
 
 
 Break.register_location_events()

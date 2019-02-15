@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,25 +17,26 @@
 from __future__ import unicode_literals
 
 from indico.modules.events.timetable.controllers.display import (RHTimetable, RHTimetableEntryInfo,
-                                                                 RHTimetableExportPDF, RHTimetableExportDefaultPDF)
-from indico.modules.events.timetable.controllers.legacy import (RHLegacyTimetableAddContribution,
-                                                                RHLegacyTimetableAddBreak,
+                                                                 RHTimetableExportDefaultPDF, RHTimetableExportPDF)
+from indico.modules.events.timetable.controllers.legacy import (RHLegacyTimetableAddBreak,
+                                                                RHLegacyTimetableAddContribution,
                                                                 RHLegacyTimetableAddSession,
                                                                 RHLegacyTimetableAddSessionBlock,
+                                                                RHLegacyTimetableBreakREST,
                                                                 RHLegacyTimetableDeleteEntry,
-                                                                RHLegacyTimetableGetUnscheduledContributions,
-                                                                RHLegacyTimetableScheduleContribution,
-                                                                RHLegacyTimetableReschedule,
-                                                                RHLegacyTimetableFitBlock, RHLegacyTimetableEditEntry,
-                                                                RHLegacyTimetableEditEntryTime,
-                                                                RHLegacyTimetableMoveEntry,
+                                                                RHLegacyTimetableEditEntry,
                                                                 RHLegacyTimetableEditEntryDateTime,
+                                                                RHLegacyTimetableEditEntryTime,
+                                                                RHLegacyTimetableEditSession, RHLegacyTimetableFitBlock,
+                                                                RHLegacyTimetableGetUnscheduledContributions,
+                                                                RHLegacyTimetableMoveEntry, RHLegacyTimetableReschedule,
+                                                                RHLegacyTimetableScheduleContribution,
                                                                 RHLegacyTimetableShiftEntries,
-                                                                RHLegacyTimetableSwapEntries,
-                                                                RHLegacyTimetableEditSession,
-                                                                RHLegacyTimetableBreakREST)
-from indico.modules.events.timetable.controllers.manage import (RHManageTimetable, RHManageSessionTimetable,
-                                                                RHTimetableREST, RHManageTimetableEntryInfo)
+                                                                RHLegacyTimetableSwapEntries)
+from indico.modules.events.timetable.controllers.manage import (RHCloneContribution, RHManageSessionTimetable,
+                                                                RHManageTimetable, RHManageTimetableEntryInfo,
+                                                                RHTimetableREST)
+from indico.web.flask.util import make_compat_redirect_func
 from indico.web.flask.wrappers import IndicoBlueprint
 
 
@@ -75,9 +76,15 @@ with _bp.add_prefixed_rules('/manage/timetable/session/<int:session_id>', '/mana
     _bp.add_url_rule('/add-contribution', 'add_contribution', RHLegacyTimetableAddContribution, methods=('GET', 'POST'))
     _bp.add_url_rule('/add-session-block', 'add_session_block', RHLegacyTimetableAddSessionBlock,
                      methods=('GET', 'POST'))
+    _bp.add_url_rule('/clone-contribution', 'clone_contribution', RHCloneContribution, methods=('POST',))
 
 # Display
 _bp.add_url_rule('/timetable/', 'timetable', RHTimetable)
 _bp.add_url_rule('/timetable/pdf', 'export_pdf', RHTimetableExportPDF, methods=('GET', 'POST'))
 _bp.add_url_rule('/timetable/timetable.pdf', 'export_default_pdf', RHTimetableExportDefaultPDF)
 _bp.add_url_rule('/timetable/entry/<int:entry_id>/info', 'entry_info', RHTimetableEntryInfo)
+
+
+# Legacy URLs
+_compat_bp = IndicoBlueprint('compat_timetable', __name__)
+_compat_bp.add_url_rule('/conferenceTimeTable.py', 'timetable_modpython', make_compat_redirect_func(_bp, 'timetable'))

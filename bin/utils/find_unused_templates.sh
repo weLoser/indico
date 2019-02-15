@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -25,4 +25,4 @@ fi
 echo 'Searching for potentially unused templates.'
 echo 'This will take a long time. Why not get some cookies in the meantime?'
 echo
-find indico/MaKaC/webinterface/tpls/ -maxdepth 1 -name '*.tpl' -exec sh -c 'TPL=$(basename {} .tpl); ag -c --nofilename --silent --ignore indico/translations/ --ignore ext_modules/ $TPL > /dev/null || echo "UNUSED: $TPL"' \;
+find indico/legacy/webinterface/tpls/ -maxdepth 1 -name '*.tpl' -exec sh -c 'TPL=$(basename {} .tpl); ag -c --nofilename --silent --ignore indico/translations/ --ignore ext_modules/ $TPL > /dev/null || echo "UNUSED: $TPL"' \;

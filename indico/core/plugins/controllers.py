@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,22 +16,22 @@
 
 from __future__ import unicode_literals
 
-from collections import defaultdict, OrderedDict
+from collections import OrderedDict, defaultdict
 from operator import attrgetter
 
-from flask import request, flash
+from flask import flash, request
 from werkzeug.exceptions import NotFound
 
-from indico.core.plugins import plugin_engine, PluginCategory
+from indico.core.plugins import PluginCategory, plugin_engine
 from indico.core.plugins.views import WPPlugins
-from indico.web.forms.base import FormDefaults
-from indico.web.flask.util import url_for, redirect_or_jsonify
+from indico.modules.admin import RHAdminBase
 from indico.util.i18n import _
-from MaKaC.webinterface.rh.admins import RHAdminBase
+from indico.web.flask.util import redirect_or_jsonify, url_for
+from indico.web.forms.base import FormDefaults
 
 
 class RHPluginsBase(RHAdminBase):
-    CSRF_ENABLED = True
+    pass
 
 
 class RHPlugins(RHPluginsBase):
@@ -58,7 +58,7 @@ class RHPlugins(RHPluginsBase):
 class RHPluginDetails(RHPluginsBase):
     back_button_endpoint = 'plugins.index'
 
-    def _checkParams(self):
+    def _process_args(self):
         self.plugin = plugin_engine.get_plugin(request.view_args['plugin'])
         if not self.plugin or not self.plugin.configurable:
             raise NotFound

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,7 +17,8 @@
 from __future__ import unicode_literals
 
 from collections import defaultdict
-from flask import session, request
+
+from flask import request, session
 from sqlalchemy.orm import joinedload
 from wtforms.ext.sqlalchemy.fields import QuerySelectField
 
@@ -25,8 +26,7 @@ from indico.core.db import db
 from indico.core.db.sqlalchemy.util.session import no_autoflush
 from indico.modules.events.abstracts.models.abstracts import Abstract
 from indico.modules.events.abstracts.models.persons import AbstractPersonLink
-from indico.modules.events.abstracts.models.review_questions import AbstractReviewQuestion
-from indico.modules.events.abstracts.notifications import StateCondition, TrackCondition, ContributionTypeCondition
+from indico.modules.events.abstracts.notifications import ContributionTypeCondition, StateCondition, TrackCondition
 from indico.modules.events.contributions.models.persons import AuthorType
 from indico.modules.events.fields import PersonLinkListFieldBase
 from indico.modules.events.tracks.models.tracks import Track
@@ -35,7 +35,7 @@ from indico.modules.users.models.users import User
 from indico.util.decorators import classproperty
 from indico.util.i18n import _
 from indico.web.flask.util import url_for
-from indico.web.forms.fields import MultipleItemsField, JSONField
+from indico.web.forms.fields import JSONField
 from indico.web.forms.widgets import JinjaWidget, SelectizeWidget
 
 
@@ -90,43 +90,13 @@ class EmailRuleListField(JSONField):
         super(EmailRuleListField, self).pre_validate(form)
         if not all(self.data):
             raise ValueError(_('Rules may not be empty'))
+        if any('*' in crit for rule in self.data for crit in rule.itervalues()):
+            # '*' (any) rules should never be included in the JSON, and having
+            # such an entry would result in the rule never passing.
+            raise ValueError('Unexpected "*" criterion')
 
     def _value(self):
         return super(EmailRuleListField, self)._value() if self.data else '[]'
-
-
-class AbstractReviewQuestionsField(MultipleItemsField):
-    def __init__(self, *args, **kwargs):
-        self.fields = [{'id': 'text', 'caption': _("Question"), 'type': 'text', 'required': True},
-                       {'id': 'no_score', 'caption': _("Exclude from score"), 'type': 'checkbox'}]
-        super(AbstractReviewQuestionsField, self).__init__(*args, uuid_field='id', uuid_field_opaque=True,
-                                                           sortable=True, **kwargs)
-
-    def process_formdata(self, valuelist):
-        super(AbstractReviewQuestionsField, self).process_formdata(valuelist)
-        if valuelist:
-            existing = {x.id: x for x in self.object_data or ()}
-            data = []
-            for pos, entry in enumerate(self.data, 1):
-                question = existing.pop(int(entry['id'])) if entry.get('id') is not None else AbstractReviewQuestion()
-                question.text = entry['text']
-                question.position = pos
-                question.no_score = entry['no_score']
-                data.append(question)
-            for question in existing.itervalues():
-                if question.ratings:
-                    # keep it around and soft-delete if it has been used; otherwise we just skip it
-                    # which will delete it once it's gone from the relationship (when populating the
-                    # Event from the form's data)
-                    question.is_deleted = True
-                    data.append(question)
-            self.data = data
-
-    def _value(self):
-        if not self.data:
-            return []
-        else:
-            return [{'id': q.id, 'text': q.text, 'no_score': q.no_score} for q in self.data]
 
 
 class AbstractPersonLinkListField(PersonLinkListFieldBase):
@@ -147,6 +117,7 @@ class AbstractPersonLinkListField(PersonLinkListFieldBase):
         self.default_is_submitter = False
         self.default_is_speaker = False
         self.require_primary_author = True
+        self.sort_by_last_name = True
         super(AbstractPersonLinkListField, self).__init__(*args, **kwargs)
 
     def _convert_data(self, data):

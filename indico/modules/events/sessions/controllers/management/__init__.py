@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,18 +19,12 @@ from __future__ import unicode_literals
 from flask import request, session
 from werkzeug.exceptions import Forbidden
 
+from indico.modules.events.management.controllers import RHManageEventBase
 from indico.modules.events.sessions.models.sessions import Session
-from MaKaC.webinterface.rh.conferenceModif import RHConferenceModifBase
-from MaKaC.webinterface.rh.base import RH
 
 
-class RHManageSessionsBase(RHConferenceModifBase):
+class RHManageSessionsBase(RHManageEventBase):
     """Base RH for all session management RHs"""
-
-    CSRF_ENABLED = True
-
-    def _process(self):
-        return RH._process(self)
 
 
 class RHManageSessionBase(RHManageSessionsBase):
@@ -42,11 +36,11 @@ class RHManageSessionBase(RHManageSessionsBase):
         }
     }
 
-    def _checkParams(self, params):
-        RHManageSessionsBase._checkParams(self, params)
+    def _process_args(self):
+        RHManageSessionsBase._process_args(self)
         self.session = Session.get_one(request.view_args['session_id'], is_deleted=False)
 
-    def _checkProtection(self):
+    def _check_access(self):
         if not self.session.can_manage(session.user):
             raise Forbidden
 
@@ -54,7 +48,7 @@ class RHManageSessionBase(RHManageSessionsBase):
 class RHManageSessionsActionsBase(RHManageSessionsBase):
     """Base class for classes performing actions on sessions"""
 
-    def _checkParams(self, params):
-        RHManageSessionsBase._checkParams(self, params)
+    def _process_args(self):
+        RHManageSessionsBase._process_args(self)
         session_ids = set(map(int, request.form.getlist('session_id')))
-        self.sessions = Session.query.with_parent(self.event_new).filter(Session.id.in_(session_ids)).all()
+        self.sessions = Session.query.with_parent(self.event).filter(Session.id.in_(session_ids)).all()

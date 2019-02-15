@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,7 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from datetime import datetime, date
+from datetime import date, datetime
 
 import pytest
 
@@ -49,12 +49,12 @@ def test_created_by_user(dummy_blocking, dummy_user, create_user):
 
 
 @pytest.mark.parametrize(('is_admin', 'is_creator', 'expected'), bool_matrix('..', expect=any))
-def test_can_be_modified_deleted(dummy_blocking, create_user, is_admin, is_creator, expected):
+def test_can_edit_delete(dummy_blocking, create_user, is_admin, is_creator, expected):
     user = create_user(123, rb_admin=is_admin)
     if is_creator:
         dummy_blocking.created_by_user = user
-    assert dummy_blocking.can_be_modified(user) == expected
-    assert dummy_blocking.can_be_deleted(user) == expected
+    assert dummy_blocking.can_edit(user) == expected
+    assert dummy_blocking.can_delete(user) == expected
 
 
 @pytest.mark.parametrize(
@@ -103,6 +103,6 @@ def test_can_be_overridden_acl(dummy_blocking, dummy_user, create_user, dummy_gr
 
 
 def test_can_be_no_user(dummy_blocking):
-    assert not dummy_blocking.can_be_modified(None)
-    assert not dummy_blocking.can_be_deleted(None)
+    assert not dummy_blocking.can_edit(None)
+    assert not dummy_blocking.can_delete(None)
     assert not dummy_blocking.can_be_overridden(None)

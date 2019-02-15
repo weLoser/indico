@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,31 +14,30 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from datetime import datetime, time, timedelta, date
 from collections import defaultdict
+from datetime import date, datetime, time, timedelta
 
 import dateutil
-import transaction
-from flask import request, session, jsonify, flash
+from flask import flash, jsonify, redirect, request, session
 from werkzeug.datastructures import MultiDict
-from werkzeug.exceptions import Forbidden
+from werkzeug.exceptions import Forbidden, NotFound
 
 from indico.core.db import db
-from indico.core.errors import IndicoError, NoReportError, NotFoundError
+from indico.core.errors import IndicoError, NoReportError
+from indico.modules.rb import rb_settings
 from indico.modules.rb.controllers import RHRoomBookingBase
-from indico.modules.rb.forms.reservations import (BookingSearchForm, NewBookingCriteriaForm, NewBookingPeriodForm,
-                                                  NewBookingConfirmForm, NewBookingSimpleForm, ModifyBookingForm)
+from indico.modules.rb.forms.reservations import (BookingSearchForm, ModifyBookingForm, NewBookingConfirmForm,
+                                                  NewBookingCriteriaForm, NewBookingPeriodForm, NewBookingSimpleForm)
 from indico.modules.rb.models.locations import Location
-from indico.modules.rb.models.reservations import Reservation, RepeatMapping, RepeatFrequency
 from indico.modules.rb.models.reservation_occurrences import ReservationOccurrence
+from indico.modules.rb.models.reservations import RepeatMapping, Reservation
 from indico.modules.rb.models.rooms import Room
 from indico.modules.rb.util import get_default_booking_interval, rb_is_admin
-from indico.modules.rb.views.user.reservations import (WPRoomBookingSearchBookings, WPRoomBookingSearchBookingsResults,
-                                                       WPRoomBookingCalendar, WPRoomBookingNewBookingSelectRoom,
+from indico.modules.rb.views.user.reservations import (WPRoomBookingBookingDetails, WPRoomBookingCalendar,
+                                                       WPRoomBookingModifyBooking, WPRoomBookingNewBookingConfirm,
                                                        WPRoomBookingNewBookingSelectPeriod,
-                                                       WPRoomBookingNewBookingConfirm,
-                                                       WPRoomBookingNewBookingSimple, WPRoomBookingModifyBooking,
-                                                       WPRoomBookingBookingDetails)
+                                                       WPRoomBookingNewBookingSelectRoom, WPRoomBookingNewBookingSimple,
+                                                       WPRoomBookingSearchBookings, WPRoomBookingSearchBookingsResults)
 from indico.util.date_time import get_datetime_from_request, round_up_to_minutes
 from indico.util.i18n import _
 from indico.util.string import natural_sort_key
@@ -48,11 +47,8 @@ from indico.web.forms.base import FormDefaults
 
 class RHRoomBookingBookingMixin:
     """Mixin that retrieves the booking or fails if there is none."""
-    def _checkParams(self):
-        resv_id = request.view_args['resvID']
-        self._reservation = Reservation.get(resv_id)
-        if not self._reservation:
-            raise NoReportError('No booking with id: {}'.format(resv_id))
+    def _process_args(self):
+        self._reservation = Reservation.get_one(request.view_args['resvID'])
 
 
 class RHRoomBookingBookingDetails(RHRoomBookingBookingMixin, RHRoomBookingBase):
@@ -69,100 +65,91 @@ class _SuccessUrlDetailsMixin:
 
 
 class RHRoomBookingAcceptBooking(_SuccessUrlDetailsMixin, RHRoomBookingBookingMixin, RHRoomBookingBase):
-    CSRF_ENABLED = True
-
-    def _checkProtection(self):
-        RHRoomBookingBase._checkProtection(self)
-        if not self._reservation.can_be_accepted(session.user):
-            raise IndicoError("You are not authorized to perform this action")
+    def _check_access(self):
+        RHRoomBookingBase._check_access(self)
+        if not self._reservation.can_accept(session.user):
+            raise Forbidden("You are not authorized to perform this action")
 
     def _process(self):
         if self._reservation.find_overlapping().filter(Reservation.is_accepted).count():
-            raise IndicoError("This reservation couldn't be accepted due to conflicts with other reservations")
+            raise IndicoError(_(u"This reservation couldn't be accepted due to conflicts with other reservations"))
         if self._reservation.is_pending:
             self._reservation.accept(session.user)
             flash(_(u'Booking accepted'), 'success')
-        self._redirect(self._get_success_url())
+        return redirect(self._get_success_url())
 
 
 class RHRoomBookingCancelBooking(_SuccessUrlDetailsMixin, RHRoomBookingBookingMixin, RHRoomBookingBase):
-    CSRF_ENABLED = True
-
-    def _checkProtection(self):
-        RHRoomBookingBase._checkProtection(self)
-        if not self._reservation.can_be_cancelled(session.user):
-            raise IndicoError("You are not authorized to perform this action")
+    def _check_access(self):
+        RHRoomBookingBase._check_access(self)
+        if not self._reservation.can_cancel(session.user):
+            raise Forbidden("You are not authorized to perform this action")
 
     def _process(self):
         if not self._reservation.is_cancelled and not self._reservation.is_rejected:
             self._reservation.cancel(session.user)
             flash(_(u'Booking cancelled'), 'success')
-        self._redirect(self._get_success_url())
+        return redirect(self._get_success_url())
 
 
 class RHRoomBookingRejectBooking(_SuccessUrlDetailsMixin, RHRoomBookingBookingMixin, RHRoomBookingBase):
-    CSRF_ENABLED = True
-
-    def _checkParams(self):
-        RHRoomBookingBookingMixin._checkParams(self)
+    def _process_args(self):
+        RHRoomBookingBookingMixin._process_args(self)
         self._reason = request.form.get('reason', u'')
 
-    def _checkProtection(self):
-        RHRoomBookingBase._checkProtection(self)
-        if not self._reservation.can_be_rejected(session.user):
-            raise IndicoError("You are not authorized to perform this action")
+    def _check_access(self):
+        RHRoomBookingBase._check_access(self)
+        if not self._reservation.can_reject(session.user):
+            raise Forbidden("You are not authorized to perform this action")
 
     def _process(self):
         if not self._reservation.is_cancelled and not self._reservation.is_rejected:
             self._reservation.reject(session.user, self._reason)
             flash(_(u'Booking rejected'), 'success')
-        self._redirect(self._get_success_url())
+        return redirect(self._get_success_url())
 
 
 class RHRoomBookingCancelBookingOccurrence(_SuccessUrlDetailsMixin, RHRoomBookingBookingMixin, RHRoomBookingBase):
-    CSRF_ENABLED = True
-
-    def _checkParams(self):
-        RHRoomBookingBookingMixin._checkParams(self)
+    def _process_args(self):
+        RHRoomBookingBookingMixin._process_args(self)
         occ_date = dateutil.parser.parse(request.view_args['date'], yearfirst=True).date()
         self._occurrence = self._reservation.occurrences.filter(ReservationOccurrence.date == occ_date).one()
 
-    def _checkProtection(self):
-        RHRoomBookingBase._checkProtection(self)
-        if not self._reservation.can_be_cancelled(session.user):
-            raise IndicoError("You are not authorized to perform this action")
+    def _check_access(self):
+        RHRoomBookingBase._check_access(self)
+        if not self._reservation.can_cancel(session.user):
+            raise Forbidden("You are not authorized to perform this action")
 
     def _process(self):
         if self._occurrence.is_valid:
             self._occurrence.cancel(session.user)
             flash(_(u'Booking occurrence cancelled'), 'success')
-        self._redirect(self._get_success_url())
+        return redirect(self._get_success_url())
 
 
 class RHRoomBookingRejectBookingOccurrence(_SuccessUrlDetailsMixin, RHRoomBookingBookingMixin, RHRoomBookingBase):
-    CSRF_ENABLED = True
-
-    def _checkParams(self):
-        RHRoomBookingBookingMixin._checkParams(self)
+    def _process_args(self):
+        RHRoomBookingBookingMixin._process_args(self)
         occ_date = dateutil.parser.parse(request.view_args['date'], yearfirst=True).date()
         self._reason = request.form.get('reason', u'')
         self._occurrence = self._reservation.occurrences.filter(ReservationOccurrence.date == occ_date).one()
 
-    def _checkProtection(self):
-        RHRoomBookingBase._checkProtection(self)
-        if not self._reservation.can_be_rejected(session.user):
-            raise IndicoError("You are not authorized to perform this action")
+    def _check_access(self):
+        RHRoomBookingBase._check_access(self)
+        if not self._reservation.can_reject(session.user):
+            raise Forbidden("You are not authorized to perform this action")
 
     def _process(self):
         if self._occurrence.is_valid:
             self._occurrence.reject(session.user, self._reason)
             flash(_(u'Booking occurrence rejected'), 'success')
-        self._redirect(self._get_success_url())
+        return redirect(self._get_success_url())
 
 
 class RHRoomBookingSearchBookings(RHRoomBookingBase):
     menu_item = 'search_bookings'
     show_blockings = True
+    CSRF_ENABLED = False
 
     def _get_form_data(self):
         return request.form
@@ -170,7 +157,7 @@ class RHRoomBookingSearchBookings(RHRoomBookingBase):
     def _filter_displayed_rooms(self, rooms, occurrences):
         return rooms
 
-    def _checkParams(self):
+    def _process_args(self):
         self._rooms = sorted(Room.find_all(is_active=True), key=lambda r: natural_sort_key(r.full_name))
         self._form_data = self._get_form_data()
         self._form = BookingSearchForm(self._form_data, csrf_enabled=False)
@@ -264,7 +251,6 @@ class RHRoomBookingNewBookingBase(RHRoomBookingBase):
         # Step 3
         # If we come from a successful step 2 we take default values from that step once again
         if step == 2:
-            defaults.used_equipment = []  # wtforms bug; avoid `foo in None` check
             form = form_class(formdata=MultiDict(), obj=defaults)
         else:
             form = form_class(obj=defaults)
@@ -272,9 +258,9 @@ class RHRoomBookingNewBookingBase(RHRoomBookingBase):
         if not room.notification_for_assistance:
             del form.needs_assistance
 
-        can_book = room.can_be_booked(session.user)
-        can_prebook = room.can_be_prebooked(session.user)
-        if room.is_auto_confirm or (not can_prebook or (can_book and room.can_be_booked(session.user, True))):
+        can_book = room.can_book(session.user)
+        can_prebook = room.can_prebook(session.user)
+        if room.is_auto_confirm or (not can_prebook or (can_book and room.can_book(session.user, allow_admin=False))):
             # The user has actually the permission to book (not just because he's an admin)
             # Or he simply can't even prebook the room
             del form.submit_prebook
@@ -282,7 +268,6 @@ class RHRoomBookingNewBookingBase(RHRoomBookingBase):
             # User can only prebook
             del form.submit_book
 
-        form.used_equipment.query = room.find_available_vc_equipment()
         return form
 
     def _get_all_conflicts(self, room, form, reservation_id=None):
@@ -355,17 +340,23 @@ class RHRoomBookingNewBookingBase(RHRoomBookingBase):
         try:
             booking = self._create_booking(form, room)
         except NoReportError as e:
-            transaction.abort()
+            db.session.rollback()
             return jsonify(success=False, msg=unicode(e))
         flash(_(u'Pre-Booking created') if booking.is_pending else _(u'Booking created'), 'success')
         return jsonify(success=True, url=self._get_success_url(booking))
 
+    def _validate_room_booking_limit(self, form, booking_limit_days):
+        day_start_dt = datetime.combine(form.start_dt.data.date(), time())
+        day_end_dt = datetime.combine(form.end_dt.data.date(), time(23, 59))
+        selected_period_days = (day_end_dt - day_start_dt).days
+        return selected_period_days <= booking_limit_days
+
 
 class RHRoomBookingNewBookingSimple(RHRoomBookingNewBookingBase):
-    def _checkParams(self):
+    def _process_args(self):
         self._room = Room.get(int(request.view_args['roomID']))
         if self._room is None:
-            raise NotFoundError('This room does not exist')
+            raise NotFound(u'This room does not exist')
 
     def _make_form(self):
         start_date = None
@@ -376,6 +367,10 @@ class RHRoomBookingNewBookingSimple(RHRoomBookingNewBookingBase):
                 start_date = datetime.strptime(request.args['start_date'], '%Y-%m-%d').date()
             except ValueError:
                 pass
+            else:
+                if not self._room.check_advance_days(start_date, user=session.user, quiet=True):
+                    start_date = date.today()
+                    flash(_(u"This room cannot be booked at the desired date, using today's date instead."), 'warning')
 
         self.past_date = start_date is not None and start_date < date.today()
         if start_date is None or start_date <= date.today():
@@ -391,9 +386,7 @@ class RHRoomBookingNewBookingSimple(RHRoomBookingNewBookingBase):
             self.date_changed = False
         defaults = FormDefaults(room_id=self._room.id,
                                 start_dt=start_dt,
-                                end_dt=end_dt,
-                                booked_for_user=session.user)
-
+                                end_dt=end_dt)
         return self._make_confirm_form(self._room, defaults=defaults, form_class=NewBookingSimpleForm)
 
     def _get_view(self, **kwargs):
@@ -418,9 +411,14 @@ class RHRoomBookingNewBookingSimple(RHRoomBookingNewBookingBase):
             only_conflicts = candidate_days <= conflicting_days
 
         if form.validate_on_submit() and not form.submit_check.data:
+            booking_limit_days = room.booking_limit_days or rb_settings.get('booking_limit')
+            if not self._validate_room_booking_limit(form, booking_limit_days):
+                msg = (_(u'Bookings for the room "{}" may not be longer than {} days')
+                       .format(room.name, booking_limit_days))
+                return jsonify(success=False, url=url_for('rooms.room_book', room), msg=msg)
             return self._create_booking_response(form, room)
 
-        can_override = room.can_be_overridden(session.user)
+        can_override = room.can_override(session.user)
         return self._get_view(form=form,
                               room=room,
                               rooms=rooms,
@@ -439,8 +437,8 @@ class RHRoomBookingNewBookingSimple(RHRoomBookingNewBookingBase):
 
 
 class RHRoomBookingCloneBooking(RHRoomBookingBookingMixin, RHRoomBookingNewBookingSimple):
-    def _checkParams(self):
-        RHRoomBookingBookingMixin._checkParams(self)
+    def _process_args(self):
+        RHRoomBookingBookingMixin._process_args(self)
 
         # use 'room' if passed through GET
         room_id = request.args.get('room', None)
@@ -452,7 +450,7 @@ class RHRoomBookingCloneBooking(RHRoomBookingBookingMixin, RHRoomBookingNewBooki
             self._room = Room.get(int(room_id))
 
         if self._room is None:
-            raise NotFoundError('This room does not exist')
+            raise NotFound(u'This room does not exist')
 
     def _get_view(self, **kwargs):
         return RHRoomBookingNewBookingSimple._get_view(self, clone_booking=self._reservation, **kwargs)
@@ -497,7 +495,7 @@ class RHRoomBookingCloneBooking(RHRoomBookingBookingMixin, RHRoomBookingNewBooki
 
 
 class RHRoomBookingNewBooking(RHRoomBookingNewBookingBase):
-    def _checkParams(self):
+    def _process_args(self):
         try:
             self._step = int(request.form.get('step', 1))
         except ValueError:
@@ -553,10 +551,15 @@ class RHRoomBookingNewBooking(RHRoomBookingNewBookingBase):
             flexible_days = form.flexible_dates_range.data
             day_start_dt = datetime.combine(form.start_dt.data.date(), time())
             day_end_dt = datetime.combine(form.end_dt.data.date(), time(23, 59))
-
             selected_rooms = [r for r in self._rooms if r.id in form.room_ids.data]
+            selected_period_days = (day_end_dt - day_start_dt).days
+            for room in selected_rooms:
+                booking_limit_days = room.booking_limit_days or rb_settings.get('booking_limit')
+                if selected_period_days > booking_limit_days:
+                    flash(_(u'Bookings for the room "{}" may not be longer than {} days')
+                          .format(room.name, booking_limit_days), 'error')
+                    return redirect(url_for('rooms.book'))
             occurrences, candidates = self._get_all_occurrences(form.room_ids.data, form, flexible_days)
-
             period_form_defaults = FormDefaults(repeat_interval=form.repeat_interval.data,
                                                 repeat_frequency=form.repeat_frequency.data)
             period_form = self._make_select_period_form(period_form_defaults)
@@ -581,24 +584,20 @@ class RHRoomBookingNewBooking(RHRoomBookingNewBookingBase):
             # Doing so would be very hard anyway as we don't keep all data necessary to show step 2
             # when it's not a step 1 form submission.
             if not form.validate():
-                raise IndicoError('<br>'.join(form.error_list))
+                raise IndicoError(u'<br>'.join(form.error_list))
             room = Room.get(form.room_id.data)
             if not room:
-                raise IndicoError('Invalid room')
+                raise IndicoError(u'Invalid room')
             # Show step 3 page
-            confirm_form_defaults = FormDefaults(form.data,
-                                                 booked_for_user=session.user,
-                                                 booked_for_name=session.user.full_name,
-                                                 contact_email=session.user.email,
-                                                 contact_phone=session.user.phone)
+            confirm_form_defaults = FormDefaults(form.data)
             return self._show_confirm(room, form, self._step, confirm_form_defaults)
 
     def _process_confirm(self):
         # The form needs the room to create the equipment list, so we need to get it "manually"...
         room = Room.get(int(request.form['room_id']))
         form = self._make_confirm_form(room)
-        if not room.can_be_booked(session.user) and not room.can_be_prebooked(session.user):
-            raise IndicoError('You cannot book this room')
+        if not room.can_book(session.user) and not room.can_prebook(session.user):
+            raise Forbidden('You cannot book this room')
         if form.validate_on_submit():
             return self._create_booking_response(form, room)
         # There was an error in the form
@@ -612,12 +611,13 @@ class RHRoomBookingNewBooking(RHRoomBookingNewBookingBase):
         elif self._step == 3:
             return self._process_confirm()
         else:
-            self._redirect(url_for('rooms.book'))
+            return redirect(url_for('rooms.book'))
 
 
 class RHRoomBookingModifyBooking(RHRoomBookingBookingMixin, RHRoomBookingNewBookingBase):
-    def _checkProtection(self):
-        if not self._reservation.can_be_modified(session.user):
+    def _check_access(self):
+        RHRoomBookingNewBookingBase._check_access(self)
+        if not self._reservation.can_edit(session.user):
             raise Forbidden
 
     def _get_view(self, **kwargs):
@@ -630,7 +630,6 @@ class RHRoomBookingModifyBooking(RHRoomBookingBookingMixin, RHRoomBookingNewBook
         room = self._reservation.room
         form = ModifyBookingForm(obj=self._reservation,
                                  old_start_dt=self._reservation.start_dt, old_end_dt=self._reservation.end_dt)
-        form.used_equipment.query = room.find_available_vc_equipment()
 
         if not room.notification_for_assistance and not self._reservation.needs_assistance:
             del form.needs_assistance
@@ -647,10 +646,16 @@ class RHRoomBookingModifyBooking(RHRoomBookingBookingMixin, RHRoomBookingNewBook
 
         if form.validate_on_submit() and not form.submit_check.data:
             try:
+                booking_limit_days = room.booking_limit_days or rb_settings.get('booking_limit')
+                if not self._validate_room_booking_limit(form, booking_limit_days):
+                    msg = (_(u'Bookings for the room "{}" may not be longer than {} days')
+                           .format(room.name, booking_limit_days))
+                    return jsonify(success=False, url=url_for('rooms.roomBooking-modifyBookingForm', self._reservation),
+                                   msg=msg)
                 self._reservation.modify(form.data, session.user)
                 flash(_(u'Booking updated'), 'success')
             except NoReportError as e:
-                transaction.abort()
+                db.session.rollback()
                 return jsonify(success=False, msg=unicode(e))
             return jsonify(success=True, url=self._get_success_url())
 
@@ -662,13 +667,13 @@ class RHRoomBookingModifyBooking(RHRoomBookingBookingMixin, RHRoomBookingNewBook
                               start_dt=form.start_dt.data, end_dt=form.end_dt.data, only_conflicts=False,
                               repeat_frequency=form.repeat_frequency.data, repeat_interval=form.repeat_interval.data,
                               reservation=self._reservation,
-                              can_override=room.can_be_overridden(session.user)).display()
+                              can_override=room.can_override(session.user)).display()
 
 
 class RHRoomBookingCalendar(RHRoomBookingBase):
     MAX_DAYS = 365 * 2
 
-    def _checkParams(self):
+    def _process_args(self):
         today = datetime.now().date()
         self.start_dt = get_datetime_from_request('start_', default=datetime.combine(today, time(0, 0)))
         self.end_dt = get_datetime_from_request('end_', default=datetime.combine(self.start_dt.date(), time(23, 59)))

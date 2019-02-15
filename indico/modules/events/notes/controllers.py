@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,29 +17,28 @@
 from __future__ import unicode_literals
 
 from flask import redirect, render_template, session
-from werkzeug.exceptions import NotFound, Forbidden
+from werkzeug.exceptions import Forbidden, NotFound
 
 from indico.core import signals
 from indico.core.db import db
 from indico.core.db.sqlalchemy.util.models import attrs_changed
-from indico.modules.events.logs import EventLogRealm, EventLogKind
+from indico.modules.events.logs import EventLogKind, EventLogRealm
 from indico.modules.events.notes import logger
 from indico.modules.events.notes.forms import NoteForm
 from indico.modules.events.notes.models.notes import EventNote, RenderMode
 from indico.modules.events.notes.util import can_edit_note, get_scheduled_notes
-from indico.modules.events.util import get_object_from_args
-from indico.web.flask.util import url_for
+from indico.modules.events.util import check_event_locked, get_object_from_args
+from indico.util.string import sanitize_html
 from indico.web.forms.base import FormDefaults
+from indico.web.rh import RHProtected
 from indico.web.util import jsonify_template
-from MaKaC.webinterface.rh.base import RHProtected
-from MaKaC.accessControl import AccessWrapper
 
 
 class RHNoteBase(RHProtected):
     """Base handler for notes attached to an object inside an event"""
 
-    def _checkParams(self):
-        self.object_type, self.event_new, self.object = get_object_from_args()
+    def _process_args(self):
+        self.object_type, self.event, self.object = get_object_from_args()
         if self.object is None:
             raise NotFound
 
@@ -47,12 +46,11 @@ class RHNoteBase(RHProtected):
 class RHManageNoteBase(RHNoteBase):
     """Base handler for managing notes attached to an object inside an event"""
 
-    CSRF_ENABLED = True
-
-    def _checkProtection(self):
-        RHNoteBase._checkProtection(self)
+    def _check_access(self):
+        RHNoteBase._check_access(self)
         if not can_edit_note(self.object, session.user):
             raise Forbidden
+        check_event_locked(self, self.event)
 
 
 class RHEditNote(RHManageNoteBase):
@@ -86,13 +84,13 @@ class RHEditNote(RHManageNoteBase):
             if is_new:
                 signals.event.notes.note_added.send(note)
                 logger.info('Note %s created by %s', note, session.user)
-                self.event_new.log(EventLogRealm.participants, EventLogKind.positive, 'Minutes', 'Added minutes',
-                                   session.user, data=note.link_event_log_data)
+                self.event.log(EventLogRealm.participants, EventLogKind.positive, 'Minutes', 'Added minutes',
+                               session.user, data=note.link_event_log_data)
             elif is_changed:
                 signals.event.notes.note_modified.send(note)
                 logger.info('Note %s modified by %s', note, session.user)
-                self.event_new.log(EventLogRealm.participants, EventLogKind.change, 'Minutes', 'Updated minutes',
-                                   session.user, data=note.link_event_log_data)
+                self.event.log(EventLogRealm.participants, EventLogKind.change, 'Minutes', 'Updated minutes',
+                               session.user, data=note.link_event_log_data)
             saved = is_new or is_changed
         return jsonify_template('events/notes/edit_note.html', form=form, object_type=self.object_type,
                                 object=self.object, saved=saved, **kwargs)
@@ -106,7 +104,7 @@ class RHCompileNotes(RHEditNote):
     """Handle note edits a note attached to an object inside an event"""
 
     def _process(self):
-        source = render_template('events/notes/compiled_notes.html', notes=get_scheduled_notes(self.event_new))
+        source = render_template('events/notes/compiled_notes.html', notes=get_scheduled_notes(self.event))
         form = self._make_form(source=source)
         return self._process_form(form, is_compilation=True)
 
@@ -120,16 +118,16 @@ class RHDeleteNote(RHManageNoteBase):
             note.delete(session.user)
             signals.event.notes.note_deleted.send(note)
             logger.info('Note %s deleted by %s', note, session.user)
-            self.event_new.log(EventLogRealm.participants, EventLogKind.negative, 'Minutes', 'Removed minutes',
-                               session.user, data=note.link_event_log_data)
-        return redirect(url_for('event.conferenceDisplay', self.event_new))
+            self.event.log(EventLogRealm.participants, EventLogKind.negative, 'Minutes', 'Removed minutes',
+                           session.user, data=note.link_event_log_data)
+        return redirect(self.event.url)
 
 
 class RHViewNote(RHNoteBase):
     """Handles display of a note attached to an object inside an event"""
 
-    def _checkProtection(self):
-        RHNoteBase._checkProtection(self)
+    def _check_access(self):
+        RHNoteBase._check_access(self)
         if not self.object.can_access(session.user):
             raise Forbidden
 
@@ -137,4 +135,4 @@ class RHViewNote(RHNoteBase):
         note = EventNote.get_for_linked_object(self.object, preload_event=False)
         if not note:
             raise NotFound
-        return note.html
+        return sanitize_html(note.html)

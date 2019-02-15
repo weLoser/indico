@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,13 +18,10 @@
 Module containing the Indico exception class hierarchy
 """
 
-import traceback
-
-from werkzeug.exceptions import Forbidden, NotFound, BadRequest
+from werkzeug.exceptions import BadRequest, Forbidden, HTTPException, NotFound
 
 from indico.util.i18n import _
 from indico.util.string import to_unicode
-from indico.util.translations import ensure_str
 
 
 def get_error_description(exception):
@@ -48,65 +45,40 @@ def get_error_description(exception):
 
 
 class IndicoError(Exception):
+    """A generic error that results in a HTTP 500 error.
 
-    code = -32000  # json-rpc server specific errors starting code
+    This error is not logged, so it should only be used rarely and in
+    cases where none of the default HTTP errors from werkzeug make
+    sense and the error is not exceptional enough to be logged to
+    the log file and/or Sentry.
 
-    def __init__(self, message='', area='', explanation='', http_status_code=None):
-        self.message = message
-        self._area = area
-        self._explanation = explanation
-        if http_status_code is not None:
-            self.http_status_code = http_status_code
-
-    @ensure_str
-    def __str__(self):
-        if self._area:
-            return '{} - {}'.format(self._area, self.message)
-        else:
-            return self.message
-
-    def __unicode__(self):
-        return str(self).decode('utf-8')
-
-    def getMessage(self):
-        return self.message
-
-    def getArea(self):
-        return self._area
-
-    def getExplanation(self):
-        """
-        Some extra information, like actions that can be taken
-        """
-        return self._explanation
-
-    def toDict(self):
-        return {
-            'code': self.code,
-            'type': 'noReport' if isinstance(self, NoReportError) else 'unknown',
-            'message': self.getMessage(),
-            'data': self.__dict__,
-            'requestInfo': {},
-            'inner': traceback.format_exc()
-        }
-
-
-class FormValuesError(IndicoError):
-    pass
+    Users can send an error report when encountering this error.
+    """
 
 
 class NoReportError(IndicoError):
-    pass
+    """A generic error that cannot be reported by users.
 
+    This behaves exactly like :exc:`IndicoError` except that users
+    cannot sent an error report.
 
-class NotFoundError(IndicoError):
-    pass
+    Its `wrap_exc` method can be wrapped to raise any other HTTP error
+    from werkzeug without allowing the user to report it::
+
+        raise NoReportError.wrap_exc(Forbidden('You shall not pass.'))
+    """
+
+    @classmethod
+    def wrap_exc(cls, exc):
+        assert isinstance(exc, HTTPException)
+        exc._disallow_report = True
+        return exc
 
 
 class UserValueError(NoReportError):
     """Error to indicate that the user entered invalid data.
 
     This behaves basically like NoReportError but it comes with
-    a 400 status code so AJAX error handling properly goes into
-    the error callback instead of the success callback.
+    a 400 status code instead of the usual 500 code.
     """
+    http_status_code = 400

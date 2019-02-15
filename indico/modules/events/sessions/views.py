@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,34 +16,20 @@
 
 from __future__ import unicode_literals
 
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.conferences import WPConferenceModifBase, WPConferenceDefaultDisplayBase
+from indico.modules.events.management.views import WPEventManagement
+from indico.modules.events.views import WPConferenceDisplayBase
 
 
-class WPManageSessions(WPJinjaMixin, WPConferenceModifBase):
+class WPManageSessions(WPEventManagement):
     template_prefix = 'events/sessions/'
     sidemenu_option = 'sessions'
-
-    def getJSFiles(self):
-        return WPConferenceModifBase.getJSFiles(self) + self._asset_env['modules_sessions_js'].urls()
-
-    def getCSSFiles(self):
-        return WPConferenceModifBase.getCSSFiles(self) + self._asset_env['sessions_sass'].urls()
+    bundles = ('module_events.sessions.js',)
 
 
-class WPDisplaySession(WPJinjaMixin, WPConferenceDefaultDisplayBase):
+class WPDisplaySession(WPConferenceDisplayBase):
     template_prefix = 'events/sessions/'
     menu_entry_name = 'timetable'
-
-    def _getBody(self, params):
-        return WPJinjaMixin._getPageContent(self, params)
-
-    def getJSFiles(self):
-        return WPConferenceDefaultDisplayBase.getJSFiles(self) + self._asset_env['modules_timetable_js'].urls()
-
-    def getCSSFiles(self):
-        return (WPConferenceDefaultDisplayBase.getCSSFiles(self) + self._asset_env['sessions_sass'].urls() +
-                self._asset_env['event_display_sass'].urls() + self._asset_env['timetable_sass'].urls())
+    bundles = ('module_events.sessions.js',)
 
 
 class WPDisplayMySessionsConference(WPDisplaySession):

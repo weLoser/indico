@@ -3,22 +3,22 @@
 {% from 'events/timetable/display/indico/_break.html' import render_break %}
 
 {% if entries %}
-    <ul class="dayList">
-        {% set previous_date = none %}
+    <ul class="day-list">
         {% for item in entries -%}
             {% set date = item.start_dt.astimezone(tz_object).date() %}
+            {% set date_changed = loop.changed(date) %}
 
-            {% if previous_date and previous_date != date -%}
+            {% if date_changed and not loop.first -%}
                     </ul>
                 </li>
             {%- endif -%}
 
-            {%- if not previous_date or date != previous_date -%}
+            {%- if date_changed -%}
                 {% set anchor -%}
                     day-{{ item.start_dt.date().isoformat() }}
                 {%- endset %}
                 <li id="{{ anchor }}">
-                    {% if total_days > 1 %}
+                    {% if multiple_days %}
                         <div class="day-header" style="width: 100%;">
                             <div class="day-title" data-anchor="{{ anchor }}">
                                 {{ item.start_dt | format_date(format='EEEE, d MMMM', timezone=timezone) }}
@@ -53,8 +53,6 @@
                 {{ render_break(item.object, event, nested=false, timezone=timezone, show_notes=theme_settings.show_notes,
                                 parent=event, show_location=show_siblings_location) }}
             {%- endif %}
-
-            {% set previous_date = date %}
         {%- endfor %}
 
         {% if entries -%}

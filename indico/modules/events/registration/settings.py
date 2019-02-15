@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,8 +16,29 @@
 
 from __future__ import unicode_literals
 
+from indico.core.settings.converters import EnumConverter
+from indico.modules.designer import PageOrientation, PageSize
 from indico.modules.events.registration.models.items import PersonalDataType
 from indico.modules.events.settings import EventSettingsProxy
+
+
+DEFAULT_BADGE_SETTINGS = {
+    'top_margin': 1.6,
+    'bottom_margin': 1.1,
+    'left_margin': 1.6,
+    'right_margin': 1.4,
+    'margin_columns': 1.0,
+    'margin_rows': 0.0,
+    'page_size': PageSize.A4,
+    'page_orientation': PageOrientation.portrait,
+    'dashed_border': True,
+    'page_layout': None
+}
+
+BADGE_SETTING_CONVERTERS = {
+    'page_orientation': EnumConverter(PageOrientation),
+    'page_size': EnumConverter(PageSize)
+}
 
 
 class RegistrationSettingsProxy(EventSettingsProxy):
@@ -60,3 +81,6 @@ class RegistrationSettingsProxy(EventSettingsProxy):
 
     def set_participant_list_form_ids(self, event, form_ids):
         self.set(event, 'participant_list_forms', form_ids)
+
+
+event_badge_settings = EventSettingsProxy('badge', DEFAULT_BADGE_SETTINGS, converters=BADGE_SETTING_CONVERTERS)

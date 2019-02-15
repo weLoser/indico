@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -15,6 +15,8 @@
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
 from __future__ import unicode_literals
+
+from flask import session
 
 from indico.core import signals
 from indico.core.db import db
@@ -37,8 +39,7 @@ class APIMode(int, IndicoEnum):
     ALL_SIGNED = 4  # all requests require an api key and a signature
 
 
-settings = SettingsProxy('api', {
-    'require_https': False,
+api_settings = SettingsProxy('api', {
     'allow_persistent': False,
     'security_mode': APIMode.KEY.value,
     'cache_ttl': 600,
@@ -68,7 +69,8 @@ def _merge_users(target, source, **kwargs):
 
 @signals.menu.items.connect_via('admin-sidemenu')
 def _extend_admin_menu(sender, **kwargs):
-    return SideMenuItem('api', _("API"), url_for('api.admin_settings'), section='integration')
+    if session.user.is_admin:
+        return SideMenuItem('api', _("API"), url_for('api.admin_settings'), section='integration')
 
 
 @signals.menu.items.connect_via('user-profile-sidemenu')

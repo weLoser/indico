@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,20 +16,22 @@
 
 from __future__ import unicode_literals
 
-from flask import request, flash, redirect, session
-from werkzeug.exceptions import NotFound, BadRequest, Forbidden
+from flask import flash, redirect, request, session
+from werkzeug.exceptions import BadRequest, Forbidden, NotFound
 
+from indico.core.db import db
+from indico.modules.events.management.controllers import RHManageEventBase
 from indico.modules.events.requests import get_request_definitions
+from indico.modules.events.requests.exceptions import RequestModuleError
 from indico.modules.events.requests.models.requests import Request, RequestState
 from indico.modules.events.requests.util import is_request_manager
 from indico.modules.events.requests.views import WPRequestsEventManagement
 from indico.util.i18n import _
 from indico.web.flask.util import url_for
-from MaKaC.webinterface.rh.conferenceModif import RHConferenceModifBase
 
 
 class EventOrRequestManagerMixin:
-    def _checkProtection(self):
+    def _check_access(self):
         self.protection_overridden = False
         if hasattr(self, 'definition'):
             # check if user can manage *that* request
@@ -37,45 +39,41 @@ class EventOrRequestManagerMixin:
         else:
             # check if user can manage any request
             can_manage_request = session.user and is_request_manager(session.user)
-        can_manage_event = self.event_new.can_manage(session.user)
+        can_manage_event = self.event.can_manage(session.user)
         self.protection_overridden = can_manage_request and not can_manage_event
         if not can_manage_request and not can_manage_event:
-            RHConferenceModifBase._checkProtection(self)
+            RHManageEventBase._check_access(self)
 
 
-class RHRequestsEventRequests(EventOrRequestManagerMixin, RHConferenceModifBase):
+class RHRequestsEventRequests(EventOrRequestManagerMixin, RHManageEventBase):
     """Overview of existing requests (event)"""
-
-    CSRF_ENABLED = True
 
     def _process(self):
         definitions = get_request_definitions()
         if not definitions:
             raise NotFound
-        requests = Request.find_latest_for_event(self.event_new)
+        requests = Request.find_latest_for_event(self.event)
         if self.protection_overridden:
             definitions = {name: def_ for name, def_ in definitions.iteritems() if def_.can_be_managed(session.user)}
             requests = {name: req for name, req in requests.iteritems()
                         if req.definition and req.definition.can_be_managed(session.user)}
-        return WPRequestsEventManagement.render_template('event_requests.html', self._conf, event=self.event_new,
+        return WPRequestsEventManagement.render_template('events/requests/event_requests.html', self.event,
                                                          definitions=definitions, requests=requests)
 
 
-class RHRequestsEventRequestBase(RHConferenceModifBase):
+class RHRequestsEventRequestBase(RHManageEventBase):
     """Base class for pages handling a specific request type"""
-
-    CSRF_ENABLED = True
 
     #: if a request must be present in the database
     _require_request = True
 
-    def _checkParams(self, params):
-        RHConferenceModifBase._checkParams(self, params)
+    def _process_args(self):
+        RHManageEventBase._process_args(self)
         try:
             self.definition = get_request_definitions()[request.view_args['type']]
         except KeyError:
             raise NotFound
-        self.request = Request.find_latest_for_event(self.event_new, self.definition.name)
+        self.request = Request.find_latest_for_event(self.event, self.definition.name)
         if self._require_request and not self.request:
             raise NotFound
 
@@ -85,7 +83,7 @@ class RHRequestsEventRequestDetailsBase(EventOrRequestManagerMixin, RHRequestsEv
 
     def _process(self):
         self.is_manager = self.definition.can_be_managed(session.user)
-        self.form = self.definition.create_form(self.event_new, self.request)
+        self.form = self.definition.create_form(self.event, self.request)
         self.manager_form = None
         if self.request and self.is_manager:
             self.manager_form = self.definition.create_manager_form(self.request)
@@ -100,11 +98,10 @@ class RHRequestsEventRequestDetailsBase(EventOrRequestManagerMixin, RHRequestsEv
         if rv:
             return rv
 
-        form_html = self.definition.render_form(event=self.event_new, definition=self.definition, req=self.request,
-                                                form=self.form, manager_form=self.manager_form,
-                                                is_manager=self.is_manager,
-                                                protection_overridden=self.protection_overridden)
-        return WPRequestsEventManagement.render_string(form_html, self._conf)
+        return self.definition.render_form(event=self.event, definition=self.definition, req=self.request,
+                                           form=self.form, manager_form=self.manager_form,
+                                           is_manager=self.is_manager,
+                                           protection_overridden=self.protection_overridden)
 
     def process_form(self):
         raise NotImplementedError
@@ -120,29 +117,37 @@ class RHRequestsEventRequestDetails(RHRequestsEventRequestDetailsBase):
         if not form.validate_on_submit():
             return
         if not self.request or not self.request.can_be_modified:
-            req = Request(event_new=self.event_new, definition=self.definition, created_by_user=session.user)
+            req = Request(event=self.event, definition=self.definition, created_by_user=session.user)
             new = True
         else:
             req = self.request
             new = False
-        self.definition.send(req, form.data)
-        if new:
-            flash_msg = _("Your request ({0}) has been sent. "
-                          "You will be notified by e-mail once it has been accepted or rejected.")
+
+        try:
+            with db.session.no_autoflush:
+                self.definition.send(req, form.data)
+        except RequestModuleError:
+            self.commit = False
+            flash_msg = _('There was a problem sending your request ({0}). Please contact support.')
+            flash(flash_msg.format(self.definition.title), 'error')
         else:
-            flash_msg = _("Your request ({0}) has been modified.")
-        flash(flash_msg.format(self.definition.title), 'success')
+            if new:
+                flash_msg = (_("Your request ({0}) has been accepted.") if req.state == RequestState.accepted
+                             else _("Your request ({0}) has been sent."))
+            else:
+                flash_msg = _("Your request ({0}) has been modified.")
+            flash(flash_msg.format(self.definition.title), 'success')
         if self.is_manager:
-            return redirect(url_for('.event_requests_details', self.event_new, type=self.definition.name))
+            return redirect(url_for('.event_requests_details', self.event, type=self.definition.name))
         else:
-            return redirect(url_for('.event_requests', self.event_new))
+            return redirect(url_for('.event_requests', self.event))
 
 
 class RHRequestsEventRequestProcess(RHRequestsEventRequestDetailsBase):
     """Accept/Reject a request"""
 
-    def _checkProtection(self):
-        self._checkSessionUser()
+    def _check_access(self):
+        self._require_user()
         if not self.definition.can_be_managed(session.user):
             raise Forbidden
 
@@ -179,14 +184,21 @@ class RHRequestsEventRequestProcess(RHRequestsEventRequestDetailsBase):
 class RHRequestsEventRequestWithdraw(EventOrRequestManagerMixin, RHRequestsEventRequestBase):
     """Withdraw a request"""
 
-    def _checkProtection(self):
-        EventOrRequestManagerMixin._checkProtection(self)
+    def _check_access(self):
+        EventOrRequestManagerMixin._check_access(self)
         if self.protection_overridden:
             raise Forbidden
 
     def _process(self):
         if self.request.state not in {RequestState.pending, RequestState.accepted}:
             raise BadRequest
-        self.definition.withdraw(self.request)
-        flash(_('You have withdrawn your request ({0})').format(self.definition.title))
-        return redirect(url_for('.event_requests', self.event_new))
+        try:
+            with db.session.no_autoflush:
+                self.definition.withdraw(self.request)
+        except RequestModuleError:
+            self.commit = False
+            flash_msg = _('There was a problem withdrawing your request ({0}). Please contact support.')
+            flash(flash_msg.format(self.definition.title), 'error')
+        else:
+            flash(_('You have withdrawn your request ({0})').format(self.definition.title))
+        return redirect(url_for('.event_requests', self.event))

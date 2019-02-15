@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,22 +18,7 @@ from __future__ import unicode_literals
 
 from functools import wraps
 
-from flask_sqlalchemy import connection_stack
-
 from indico.core.db import db
-
-
-def update_session_options(db, session_options=None):
-    """Replaces the Flask-SQLAlchemy session a new one using the given options.
-
-    This can be used when you want a session that does not use the ZopeTransaction extension.
-    """
-    if session_options is None:
-        session_options = {}
-    session_options.setdefault(
-        'scopefunc', connection_stack.__ident_func__
-    )
-    db.session = db.create_scoped_session(session_options)
 
 
 def no_autoflush(fn):

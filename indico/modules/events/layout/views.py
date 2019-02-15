@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,47 +16,33 @@
 
 from __future__ import unicode_literals
 
-from MaKaC.webinterface.pages.base import WPJinjaMixin
-from MaKaC.webinterface.pages.conferences import WPConferenceModifBase, WPConferenceDefaultDisplayBase
+from indico.modules.events.management.views import WPEventManagement
+from indico.modules.events.views import WPConferenceDisplayBase
 
 
-class WPLayoutEdit(WPJinjaMixin, WPConferenceModifBase):
+class WPLayoutEdit(WPEventManagement):
     template_prefix = 'events/layout/'
     sidemenu_option = 'layout'
 
-    def getCSSFiles(self):
-        return WPConferenceModifBase.getCSSFiles(self) + self._asset_env['event_management_sass'].urls()
 
-
-class WPMenuEdit(WPJinjaMixin, WPConferenceModifBase):
+class WPMenuEdit(WPEventManagement):
     template_prefix = 'events/layout/'
     sidemenu_option = 'menu'
-
-    def getCSSFiles(self):
-        return WPConferenceModifBase.getCSSFiles(self) + self._asset_env['event_management_sass'].urls()
-
-    def getJSFiles(self):
-        return WPConferenceModifBase.getJSFiles(self) + self._asset_env['modules_event_layout_js'].urls()
+    bundles = ('module_events.layout.js',)
 
 
-class WPPage(WPJinjaMixin, WPConferenceDefaultDisplayBase):
-    template_prefix = 'events/layout/'
-
-    def __init__(self, rh, conference, **kwargs):
-        WPConferenceDefaultDisplayBase.__init__(self, rh, conference, **kwargs)
-        self.page = kwargs['page']
-
-    def _getBody(self, params):
-        return WPJinjaMixin._getPageContent(self, params)
-
-    @property
-    def sidemenu_option(self):
-        return self.page.menu_entry.id
-
-
-class WPImages(WPJinjaMixin, WPConferenceModifBase):
+class WPImages(WPEventManagement):
     template_prefix = 'events/layout/'
     sidemenu_option = 'images'
 
-    def getCSSFiles(self):
-        return WPConferenceModifBase.getCSSFiles(self) + self._asset_env['event_management_sass'].urls()
+
+class WPPage(WPConferenceDisplayBase):
+    template_prefix = 'events/layout/'
+
+    def __init__(self, rh, conference, **kwargs):
+        self.page = kwargs['page']
+        WPConferenceDisplayBase.__init__(self, rh, conference, **kwargs)
+
+    @property
+    def sidemenu_entry(self):
+        return self.page.menu_entry

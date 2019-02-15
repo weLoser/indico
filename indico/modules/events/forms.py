@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,18 +21,18 @@ from datetime import time, timedelta
 from flask import session
 from wtforms.fields import StringField, TextAreaField
 from wtforms.fields.html5 import URLField
-from wtforms.validators import DataRequired, ValidationError
+from wtforms.validators import DataRequired, InputRequired, ValidationError
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy.protection import ProtectionMode
 from indico.modules.categories.fields import CategoryField
-from indico.modules.events.fields import ReferencesField, EventPersonLinkListField, IndicoThemeSelectField
+from indico.modules.events.fields import EventPersonLinkListField, IndicoThemeSelectField
 from indico.modules.events.models.events import EventType
-from indico.modules.events.models.references import ReferenceType, EventReference
+from indico.modules.events.models.references import ReferenceType
 from indico.util.i18n import _
 from indico.web.forms.base import IndicoForm
-from indico.web.forms.fields import (IndicoLocationField, IndicoDateTimeField, IndicoTimezoneSelectField,
-                                     IndicoEnumRadioField, OccurrencesField, IndicoTagListField)
+from indico.web.forms.fields import (IndicoDateTimeField, IndicoEnumRadioField, IndicoLocationField,
+                                     IndicoTimezoneSelectField, JSONField, OccurrencesField)
 from indico.web.forms.validators import LinkedDateTime
 from indico.web.forms.widgets import CKEditorWidget
 
@@ -60,36 +60,13 @@ class ReferenceTypeForm(IndicoForm):
             raise ValidationError(_("The URL template must contain the placeholder '{value}'."))
 
 
-class EventReferencesForm(IndicoForm):
-    references = ReferencesField(_('External IDs'), reference_class=EventReference,
-                                 description=_("Manage external resources for this event"))
-
-
-class EventLocationForm(IndicoForm):
-    location_data = IndicoLocationField(_('Location'), allow_location_inheritance=False)
-
-
-class EventKeywordsForm(IndicoForm):
-    keywords = IndicoTagListField(_('Keywords'))
-
-
-class EventPersonLinkForm(IndicoForm):
-    person_link_data = EventPersonLinkListField(_('Chairpersons'))
-
-    def __init__(self, *args, **kwargs):
-        self.event = kwargs.pop('event')
-        self.event_type = kwargs.pop('event_type')
-        super(EventPersonLinkForm, self).__init__(*args, **kwargs)
-        if self.event_type == 'lecture':
-            self.person_link_data.label.text = _('Speakers')
-
-
 class EventCreationFormBase(IndicoForm):
     category = CategoryField(_('Category'), [DataRequired()], allow_subcats=False, require_event_creation_rights=True)
     title = StringField(_('Event title'), [DataRequired()])
     timezone = IndicoTimezoneSelectField(_('Timezone'), [DataRequired()])
-    location_data = IndicoLocationField(_('Location'), allow_location_inheritance=False)
+    location_data = IndicoLocationField(_('Location'), allow_location_inheritance=False, edit_address=False)
     protection_mode = IndicoEnumRadioField(_('Protection mode'), enum=ProtectionMode)
+    create_booking = JSONField()
 
     def validate_category(self, field):
         if not field.data.can_create_events(session.user):
@@ -97,15 +74,15 @@ class EventCreationFormBase(IndicoForm):
 
 
 class EventCreationForm(EventCreationFormBase):
-    _field_order = ('category', 'title', 'start_dt', 'end_dt', 'timezone', 'location_data', 'protection_mode')
+    _field_order = ('title', 'start_dt', 'end_dt', 'timezone', 'location_data', 'protection_mode')
     _advanced_field_order = ()
-    start_dt = IndicoDateTimeField(_("Start"), [DataRequired()], default_time=time(8), allow_clear=False)
-    end_dt = IndicoDateTimeField(_("End"), [DataRequired(), LinkedDateTime('start_dt', not_equal=True)],
+    start_dt = IndicoDateTimeField(_("Start"), [InputRequired()], default_time=time(8), allow_clear=False)
+    end_dt = IndicoDateTimeField(_("End"), [InputRequired(), LinkedDateTime('start_dt', not_equal=True)],
                                  default_time=time(18), allow_clear=False)
 
 
 class LectureCreationForm(EventCreationFormBase):
-    _field_order = ('category', 'title', 'occurrences', 'timezone', 'location_data', 'person_link_data',
+    _field_order = ('title', 'occurrences', 'timezone', 'location_data', 'person_link_data',
                     'protection_mode')
     _advanced_field_order = ('description', 'theme')
     occurrences = OccurrencesField(_("Dates"), [DataRequired()], default_time=time(8),

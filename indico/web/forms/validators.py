@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,9 +20,9 @@ import re
 from datetime import timedelta
 from types import NoneType
 
-from wtforms.validators import StopValidation, ValidationError, EqualTo, Regexp, Length
+from wtforms.validators import EqualTo, Length, Regexp, StopValidation, ValidationError
 
-from indico.util.date_time import as_utc, format_datetime, format_time, now_utc, format_human_timedelta
+from indico.util.date_time import as_utc, format_datetime, format_human_timedelta, format_time, now_utc
 from indico.util.i18n import _, ngettext
 from indico.util.string import is_valid_mail
 

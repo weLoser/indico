@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,25 +16,26 @@
 
 from __future__ import unicode_literals
 
-from collections import defaultdict, OrderedDict
-from itertools import count, chain
+from collections import OrderedDict, defaultdict
+from itertools import chain, count
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import joinedload, load_only
 from werkzeug.urls import url_parse
 
+import indico
 from indico.core import signals
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db import db
+from indico.core.plugins import url_for_plugin
+from indico.legacy.common.cache import GenericCache
 from indico.modules.events.layout import layout_settings
 from indico.modules.events.layout.models.menu import MenuEntry, MenuEntryType, TransientMenuEntry
 from indico.util.caching import memoize_request
-from indico.util.signals import named_objects_from_signal
+from indico.util.signals import named_objects_from_signal, values_from_signal
 from indico.util.string import crc32, return_ascii
 from indico.web.flask.util import url_for
 
-import MaKaC
-from MaKaC.common.cache import GenericCache
 
 _cache = GenericCache('updated-menus')
 
@@ -105,7 +106,7 @@ class MenuEntryData(object):
     """
     plugin = None
 
-    def __init__(self, title, name, endpoint, position=-1, is_enabled=True, visible=None, parent=None,
+    def __init__(self, title, name, endpoint=None, position=-1, is_enabled=True, visible=None, parent=None,
                  static_site=False):
         self.title = title
         self._name = name
@@ -151,7 +152,7 @@ def _get_menu_cache_data(event):
     from indico.core.plugins import plugin_engine
     cache_key = unicode(event.id)
     plugin_hash = crc32(','.join(sorted(plugin_engine.get_active_plugins())))
-    cache_version = '{}:{}'.format(MaKaC.__version__, plugin_hash)
+    cache_version = '{}:{}'.format(indico.__version__, plugin_hash)
     return cache_key, cache_version
 
 
@@ -313,6 +314,24 @@ def is_menu_entry_enabled(entry_name, event):
     return get_menu_entry_by_name(entry_name, event).is_enabled
 
 
+def get_plugin_conference_themes():
+    data = values_from_signal(signals.plugin.get_conference_themes.send(), return_plugins=True)
+    return {':'.join((plugin.name, name)): (path, title) for plugin, (name, path, title) in data}
+
+
+def _build_css_url(theme):
+    if ':' in theme:
+        try:
+            path = get_plugin_conference_themes()[theme][0]
+        except KeyError:
+            return None
+        plugin = theme.split(':', 1)[0]
+        return url_for_plugin(plugin + '.static', filename=path)
+    else:
+        css_base = url_parse(config.CONFERENCE_CSS_TEMPLATES_BASE_URL).path
+        return '{}/{}'.format(css_base, theme)
+
+
 def get_css_url(event, force_theme=None, for_preview=False):
     """Builds the URL of a CSS resource.
 
@@ -324,9 +343,8 @@ def get_css_url(event, force_theme=None, for_preview=False):
     """
     from indico.modules.events.layout import layout_settings
 
-    css_base = url_parse(Config.getInstance().getCssConfTemplateBaseURL()).path
     if force_theme and force_theme != '_custom':
-        return '{}/{}'.format(css_base, force_theme)
+        return _build_css_url(force_theme)
     elif for_preview and force_theme is None:
         return None
     elif force_theme == '_custom' or layout_settings.get(event, 'use_custom_css'):
@@ -334,7 +352,7 @@ def get_css_url(event, force_theme=None, for_preview=False):
             return None
         return url_for('event_layout.css_display', event, slug=event.stylesheet_metadata['hash'])
     elif layout_settings.get(event, 'theme'):
-        return '{}/{}'.format(css_base, layout_settings.get(event, 'theme'))
+        return _build_css_url(layout_settings.get(event, 'theme'))
 
 
 def get_logo_data(event):

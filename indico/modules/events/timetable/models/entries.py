@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -25,16 +25,16 @@ from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm.base import NEVER_SET, NO_VALUE
 
 from indico.core.db import db
-from indico.core.db.sqlalchemy import UTCDateTime, PyIntEnum
+from indico.core.db.sqlalchemy import PyIntEnum, UTCDateTime
 from indico.core.db.sqlalchemy.util.models import populate_one_to_one_backrefs
 from indico.util.date_time import overlaps
+from indico.util.i18n import _
 from indico.util.locators import locator_property
 from indico.util.string import format_repr, return_ascii
-from indico.util.struct.enum import TitledIntEnum
-from indico.util.i18n import _
+from indico.util.struct.enum import RichIntEnum
 
 
-class TimetableEntryType(TitledIntEnum):
+class TimetableEntryType(RichIntEnum):
     __titles__ = [None, _("Session Block"), _("Contribution"), _("Break")]
     # entries are uppercase since `break` is a keyword...
     SESSION_BLOCK = 1
@@ -111,7 +111,7 @@ class TimetableEntry(db.Model):
         nullable=False
     )
 
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -245,25 +245,25 @@ class TimetableEntry(db.Model):
     @property
     def siblings(self):
         from indico.modules.events.timetable.util import get_top_level_entries, get_nested_entries
-        tzinfo = self.event_new.tzinfo
+        tzinfo = self.event.tzinfo
         day = self.start_dt.astimezone(tzinfo).date()
-        siblings = (get_nested_entries(self.event_new)[self.parent_id]
+        siblings = (get_nested_entries(self.event)[self.parent_id]
                     if self.parent_id else
-                    get_top_level_entries(self.event_new))
+                    get_top_level_entries(self.event))
         return [x for x in siblings if x.start_dt.astimezone(tzinfo).date() == day and x.id != self.id]
 
     @property
     def siblings_query(self):
-        tzinfo = self.event_new.tzinfo
+        tzinfo = self.event.tzinfo
         day = self.start_dt.astimezone(tzinfo).date()
         criteria = (TimetableEntry.id != self.id,
                     TimetableEntry.parent == self.parent,
                     db.cast(TimetableEntry.start_dt.astimezone(tzinfo), db.Date) == day)
-        return TimetableEntry.query.with_parent(self.event_new).filter(*criteria)
+        return TimetableEntry.query.with_parent(self.event).filter(*criteria)
 
     @locator_property
     def locator(self):
-        return dict(self.event_new.locator, entry_id=self.id)
+        return dict(self.event.locator, entry_id=self.id)
 
     @return_ascii
     def __repr__(self):
@@ -276,7 +276,7 @@ class TimetableEntry(db.Model):
         elif self.type == TimetableEntryType.SESSION_BLOCK:
             if self.object.can_access(user):
                 return True
-            return any(x.can_access(user) for x in self.object.contributions if not x.is_inheriting)
+            return any(x.can_access(user) for x in self.object.contributions)
 
     def extend_start_dt(self, start_dt):
         assert start_dt < self.start_dt
@@ -299,14 +299,14 @@ class TimetableEntry(db.Model):
         :param by_start: Extend parent by start datetime.
         :param by_end: Extend parent by end datetime.
         """
-        tzinfo = self.event_new.tzinfo
+        tzinfo = self.event.tzinfo
         if self.start_dt.astimezone(tzinfo).date() != self.end_dt.astimezone(tzinfo).date():
             return
         if self.parent is None:
-            if by_start and self.start_dt < self.event_new.start_dt:
-                self.event_new.start_dt = self.start_dt
-            if by_end and self.end_dt > self.event_new.end_dt:
-                self.event_new.end_dt = self.end_dt
+            if by_start and self.start_dt < self.event.start_dt:
+                self.event.start_dt = self.start_dt
+            if by_end and self.end_dt > self.event.end_dt:
+                self.event.end_dt = self.end_dt
         else:
             extended = False
             if by_start and self.start_dt < self.parent.start_dt:

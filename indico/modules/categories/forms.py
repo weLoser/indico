@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,20 +19,20 @@ from __future__ import unicode_literals
 from functools import partial
 
 from flask import request
-from wtforms.fields import BooleanField, SelectField, StringField, HiddenField, IntegerField
-from wtforms.validators import DataRequired, Optional, InputRequired, NumberRange, ValidationError
+from wtforms.fields import BooleanField, HiddenField, IntegerField, SelectField, StringField
+from wtforms.validators import DataRequired, InputRequired, NumberRange, Optional, ValidationError
 
-from indico.modules.categories.models.categories import EventMessageMode, Category
-from indico.modules.categories.util import get_visibility_options, get_image_data
+from indico.modules.categories.models.categories import Category, EventMessageMode
+from indico.modules.categories.util import get_image_data, get_visibility_options
 from indico.modules.events import Event
 from indico.modules.events.fields import IndicoThemeSelectField
 from indico.modules.events.models.events import EventType
 from indico.util.i18n import _
 from indico.web.forms.base import IndicoForm
-from indico.web.forms.fields import (AccessControlListField, PrincipalListField, IndicoProtectionField,
-                                     IndicoEnumSelectField, IndicoTimezoneSelectField, EmailListField,
-                                     EditableFileField, HiddenFieldList, MultipleItemsField, IndicoMarkdownField)
-from indico.web.forms.widgets import SwitchWidget, HiddenCheckbox
+from indico.web.forms.fields import (AccessControlListField, EditableFileField, EmailListField, HiddenFieldList,
+                                     IndicoEnumSelectField, IndicoMarkdownField, IndicoProtectionField,
+                                     IndicoTimezoneSelectField, MultipleItemsField, PrincipalListField)
+from indico.web.forms.widgets import HiddenCheckbox, SwitchWidget
 
 
 class CategorySettingsForm(IndicoForm):
@@ -49,10 +49,6 @@ class CategorySettingsForm(IndicoForm):
                                            description=_("Default timetable theme used for lecture events"))
     meeting_theme = IndicoThemeSelectField(_("Theme for Meetings"), [DataRequired()], event_type=EventType.meeting,
                                            description=_("Default timetable theme used for meeting events"))
-    visibility = SelectField(_("Event visibility"), [Optional()], coerce=lambda x: None if x == '' else int(x),
-                             description=_("""From which point in the category tree contents will be visible from """
-                                           """(number of categories upwards). Applies to "Today's events" and """
-                                           """Calendar. If the category is moved, this number will be preserved."""))
     suggestions_disabled = BooleanField(_('Disable Suggestions'), widget=SwitchWidget(),
                                         description=_("Enable this if you don't want Indico to suggest this category as"
                                                       " a possible addition to a user's favourites."))
@@ -69,18 +65,6 @@ class CategorySettingsForm(IndicoForm):
                                                                       "every time a new event is created inside the "
                                                                       "category or one of its subcategories. "
                                                                       "One email address per line."))
-
-    def __init__(self, *args, **kwargs):
-        super(CategorySettingsForm, self).__init__(*args, **kwargs)
-        category = kwargs.pop('category')
-        self.visibility.choices = get_visibility_options(category, allow_invisible=False)
-
-        # Check if category visibility would be affected by any of the parents
-        real_horizon = category.real_visibility_horizon
-        own_horizon = category.own_visibility_horizon
-        if real_horizon and real_horizon.is_descendant_of(own_horizon):
-            self.visibility.warning = _("This category's visibility is currently limited by that of '{}'.").format(
-                real_horizon.title)
 
 
 class CategoryIconForm(IndicoForm):
@@ -110,6 +94,10 @@ class CategoryProtectionForm(IndicoForm):
     own_no_access_contact = StringField(_('No access contact'),
                                         description=_('Contact information shown when someone lacks access to the '
                                                       'category'))
+    visibility = SelectField(_("Event visibility"), [Optional()], coerce=lambda x: None if x == '' else int(x),
+                             description=_("""From which point in the category tree contents will be visible from """
+                                           """(number of categories upwards). Applies to "Today's events" and """
+                                           """Calendar. If the category is moved, this number will be preserved."""))
     event_creation_restricted = BooleanField(_('Restricted event creation'), widget=SwitchWidget(),
                                              description=_('Whether the event creation should be restricted '
                                                            'to a list of specific persons'))
@@ -117,8 +105,18 @@ class CategoryProtectionForm(IndicoForm):
                                         description=_('Users allowed to create events in this category'))
 
     def __init__(self, *args, **kwargs):
-        self.protected_object = kwargs.pop('category')
+        self.protected_object = category = kwargs.pop('category')
         super(CategoryProtectionForm, self).__init__(*args, **kwargs)
+        self._init_visibility(category)
+
+    def _init_visibility(self, category):
+        self.visibility.choices = get_visibility_options(category, allow_invisible=False)
+        # Check if category visibility would be affected by any of the parents
+        real_horizon = category.real_visibility_horizon
+        own_horizon = category.own_visibility_horizon
+        if real_horizon and real_horizon.is_descendant_of(own_horizon):
+            self.visibility.warning = _("This category's visibility is currently limited by that of '{}'.").format(
+                real_horizon.title)
 
 
 class CreateCategoryForm(IndicoForm):

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,14 +14,14 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
+from enum import Enum
 from itertools import count
 
 import pytest
-from enum import Enum
 
-from indico.util.string import (seems_html, to_unicode, make_unique_token, slugify, text_to_repr, format_repr, snakify,
-                                camelize, camelize_keys, snakify_keys, crc32, normalize_phone_number, render_markdown,
-                                sanitize_email)
+from indico.util.string import (camelize, camelize_keys, crc32, format_repr, html_to_plaintext, make_unique_token,
+                                normalize_phone_number, render_markdown, sanitize_email, seems_html, slugify, snakify,
+                                snakify_keys, strip_tags, text_to_repr, to_unicode)
 
 
 def test_seems_html():
@@ -84,6 +84,15 @@ def test_slugify_args():
 ))
 def test_slugify_lower(input, lower, output):
     assert slugify(input, lower=lower) == output
+
+
+@pytest.mark.parametrize(('input', 'output'), (
+    (b'foo <strong>bar</strong>', b'foo bar'),
+    (u'foo <strong>bar</strong>', u'foo bar'),
+))
+def test_strip_tags(input, output):
+    assert strip_tags(input) == output
+    assert type(input) is type(output)
 
 
 @pytest.mark.parametrize(('input', 'html', 'max_length', 'output'), (
@@ -199,6 +208,16 @@ def test_sanitize_email(input, output):
 
 
 @pytest.mark.parametrize(('input', 'output'), (
+    ('Simple text', 'Simple text'),
+    ('<h1>Some html</h1>', 'Some html'),
+    ('foo &amp; bar <a href="test">xxx</a> 1<2 <test>', 'foo & bar xxx 1<2 '),
+    (u'<strong>m\xf6p</strong> test', u'm\xf6p test')
+))
+def test_html_to_plaintext(input, output):
+    assert html_to_plaintext(input) == output
+
+
+@pytest.mark.parametrize(('input', 'output'), (
     ('*coconut*', '<p><em>coconut</em></p>'),
     ('**swallow**', '<p><strong>swallow</strong></p>'),
     ('<span>Blabla **strong text**</span>', '<p>&lt;span&gt;Blabla <strong>strong text</strong>&lt;/span&gt;</p>'),
@@ -212,7 +231,7 @@ def test_sanitize_email(input, output):
     ("Escaping works just fine! $ *a* $", "<p>Escaping works just fine! $ *a* $</p>"),
     ('![Just a cat](http://myserver.example.com/cat.png)', '<p><img alt="Just a cat" '
      'src="http://myserver.example.com/cat.png"></p>'),
-    ("<https://indico.github.io>", '<p><a href="https://indico.github.io">https://indico.github.io</a></p>')
+    ("<https://getindico.io>", '<p><a href="https://getindico.io">https://getindico.io</a></p>')
 ))
 def test_markdown(input, output):
     assert render_markdown(input,  extensions=('tables',)) == output

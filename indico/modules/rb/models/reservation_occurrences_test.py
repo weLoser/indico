@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,16 +14,16 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from datetime import date, time, datetime
+from datetime import date, datetime, time
 from itertools import izip
 
 import pytest
 from dateutil.relativedelta import relativedelta
 
 from indico.core.errors import IndicoError
+from indico.modules.rb.models.reservation_occurrences import ReservationOccurrence, ReservationOccurrenceState
 from indico.modules.rb.models.reservations import RepeatFrequency
-from indico.modules.rb.models.reservation_occurrences import ReservationOccurrence
-from indico.testing.util import bool_matrix, extract_emails
+from indico.testing.util import extract_emails
 
 
 pytest_plugins = 'indico.modules.rb.testing.fixtures'
@@ -64,17 +64,6 @@ def overlapping_occurrences(create_occurrence):
     return db_occ, occ
 
 
-def assert_is_in_notification_window(occurrence, expected, expected_with_exclude):
-    assert occurrence.is_in_notification_window() == expected
-    assert occurrence.is_in_notification_window(exclude_first_day=True) == expected_with_exclude
-    assert ReservationOccurrence.find_first(
-        ReservationOccurrence.is_in_notification_window()) == (occurrence if expected else None)
-    assert ReservationOccurrence.find_first(
-        ReservationOccurrence.is_in_notification_window(exclude_first_day=True)) == (occurrence if
-                                                                                     expected_with_exclude
-                                                                                     else None)
-
-
 # ======================================================================================================================
 # Hybrid property tests
 # ======================================================================================================================
@@ -83,16 +72,6 @@ def assert_is_in_notification_window(occurrence, expected, expected_with_exclude
 def test_date(dummy_occurrence):
     assert dummy_occurrence.date == date.today()
     assert ReservationOccurrence.find_first(date=date.today()) == dummy_occurrence
-
-
-@pytest.mark.parametrize(('is_rejected', 'is_cancelled', 'expected'),
-                         bool_matrix('..', expect=lambda x: not any(x)))
-def test_is_valid(db, dummy_occurrence, is_rejected, is_cancelled, expected):
-    dummy_occurrence.is_rejected = is_rejected
-    dummy_occurrence.is_cancelled = is_cancelled
-    db.session.flush()
-    assert dummy_occurrence.is_valid == expected
-    assert ReservationOccurrence.find_first(is_valid=expected) == dummy_occurrence
 
 
 # ======================================================================================================================
@@ -174,7 +153,11 @@ def test_iter_start_time_daily(interval, days_elapsed, expected_length):
     (3, 14, 1),
     (3, 21, 2),
     (3, 63, 4),
-    (4, 0,  None),
+    (4, 0,  1),
+    (4, 27, 1),
+    (4, 28, 2),
+    (4, 83, 3),
+    (4, 84, 4),
 ))
 def test_iter_start_time_weekly(interval, days_elapsed, expected_length):
     assert days_elapsed >= 0
@@ -194,8 +177,7 @@ def test_iter_start_time_weekly(interval, days_elapsed, expected_length):
 @pytest.mark.parametrize(('interval', 'days_elapsed', 'expected_length'), (
     (0, 0,  None),
     (1, 0,  1),
-    (1, 40, 2),
-    (2, 0,  None),
+    (1, 40, 2)
 ))
 def test_iter_start_time_monthly(interval, days_elapsed, expected_length):
     assert days_elapsed >= 0
@@ -244,7 +226,7 @@ def test_find_overlapping_with_is_not_valid(db, overlapping_occurrences):
     db_occ, occ = overlapping_occurrences
     assert db_occ in ReservationOccurrence.find_overlapping_with(room=db_occ.reservation.room,
                                                                  occurrences=[occ]).all()
-    db_occ.is_cancelled = True
+    db_occ.state = ReservationOccurrenceState.cancelled
     db.session.flush()
     assert db_occ not in ReservationOccurrence.find_overlapping_with(room=db_occ.reservation.room,
                                                                      occurrences=[occ]).all()
@@ -258,11 +240,6 @@ def test_find_overlapping_with_skip_reservation(overlapping_occurrences):
                                                                      skip_reservation_id=db_occ.reservation.id).all()
 
 
-@pytest.mark.xfail
-def test_find_with_filters():
-    raise NotImplementedError
-
-
 # ======================================================================================================================
 # method tests
 # ======================================================================================================================
@@ -270,17 +247,17 @@ def test_find_with_filters():
 
 @pytest.mark.parametrize(('silent', 'reason'), (
     (True,  'cancelled'),
-    (True,  ''),
+    (True,  None),
     (False, 'cancelled'),
-    (False, ''),
+    (False, None),
 ))
-def test_cancel(smtp, create_reservation, dummy_avatar, silent, reason):
+def test_cancel(smtp, create_reservation, dummy_user, silent, reason):
     reservation = create_reservation(start_dt=date.today() + relativedelta(hour=8),
                                      end_dt=date.today() + relativedelta(days=1, hour=17),
                                      repeat_frequency=RepeatFrequency.DAY)
     assert reservation.occurrences.count() > 1
     occurrence = reservation.occurrences[0]
-    occurrence.cancel(user=dummy_avatar, reason=reason, silent=silent)
+    occurrence.cancel(user=dummy_user, reason=reason, silent=silent)
     assert occurrence.is_cancelled
     assert occurrence.rejection_reason == reason
     assert not occurrence.reservation.is_cancelled
@@ -289,7 +266,7 @@ def test_cancel(smtp, create_reservation, dummy_avatar, silent, reason):
         assert not smtp.outbox
     else:
         assert occurrence.reservation.edit_logs.count() == 1
-        assert occurrence.reservation.edit_logs[0].user_name == dummy_avatar.user.full_name
+        assert occurrence.reservation.edit_logs[0].user_name == dummy_user.full_name
         extract_emails(smtp, count=2, regex=True, subject=r'Booking cancelled on .+ \(SINGLE OCCURRENCE\)')
         if reason:
             assert len(occurrence.reservation.edit_logs[0].info) == 2
@@ -299,8 +276,8 @@ def test_cancel(smtp, create_reservation, dummy_avatar, silent, reason):
 
 
 @pytest.mark.parametrize('silent', (True, False))
-def test_cancel_single_occurrence(smtp, dummy_occurrence, dummy_avatar, silent):
-    dummy_occurrence.cancel(user=dummy_avatar, reason='cancelled', silent=silent)
+def test_cancel_single_occurrence(smtp, dummy_occurrence, dummy_user, silent):
+    dummy_occurrence.cancel(user=dummy_user, reason='cancelled', silent=silent)
     assert dummy_occurrence.is_cancelled
     assert dummy_occurrence.rejection_reason == 'cancelled'
     assert dummy_occurrence.reservation.is_cancelled
@@ -315,13 +292,13 @@ def test_cancel_single_occurrence(smtp, dummy_occurrence, dummy_avatar, silent):
 
 
 @pytest.mark.parametrize('silent', (True, False))
-def test_reject(smtp, create_reservation, dummy_avatar, silent):
+def test_reject(smtp, create_reservation, dummy_user, silent):
     reservation = create_reservation(start_dt=date.today() + relativedelta(hour=8),
                                      end_dt=date.today() + relativedelta(days=1, hour=17),
                                      repeat_frequency=RepeatFrequency.DAY)
     assert reservation.occurrences.count() > 1
     occurrence = reservation.occurrences[0]
-    occurrence.reject(user=dummy_avatar, reason='cancelled', silent=silent)
+    occurrence.reject(user=dummy_user, reason='cancelled', silent=silent)
     assert occurrence.is_rejected
     assert occurrence.rejection_reason == 'cancelled'
     assert not occurrence.reservation.is_rejected
@@ -330,15 +307,15 @@ def test_reject(smtp, create_reservation, dummy_avatar, silent):
         assert not smtp.outbox
     else:
         assert occurrence.reservation.edit_logs.count() == 1
-        assert occurrence.reservation.edit_logs[0].user_name == dummy_avatar.user.full_name
+        assert occurrence.reservation.edit_logs[0].user_name == dummy_user.full_name
         assert len(occurrence.reservation.edit_logs[0].info) == 2
         extract_emails(smtp, count=2, regex=True, subject=r'Booking rejected on .+ \(SINGLE OCCURRENCE\)')
     assert not smtp.outbox
 
 
 @pytest.mark.parametrize('silent', (True, False))
-def test_reject_single_occurrence(smtp, dummy_occurrence, dummy_avatar, silent):
-    dummy_occurrence.reject(user=dummy_avatar, reason='rejected', silent=silent)
+def test_reject_single_occurrence(smtp, dummy_occurrence, dummy_user, silent):
+    dummy_occurrence.reject(user=dummy_user, reason='rejected', silent=silent)
     assert dummy_occurrence.is_rejected
     assert dummy_occurrence.rejection_reason == 'rejected'
     assert dummy_occurrence.reservation.is_rejected
@@ -405,46 +382,22 @@ def test_overlaps_self(dummy_occurrence, skip_self):
     assert dummy_occurrence.overlaps(dummy_occurrence, skip_self=skip_self) == (not skip_self)
 
 
-@pytest.mark.parametrize(('notification_window', 'expected', 'expected_with_exclude'), (
-    (1, False, False),
-    (2, True,  False),
-    (3, True,  True),
-))
-def test_is_in_notification_window(db, create_occurrence, dummy_room,
-                                   notification_window, expected, expected_with_exclude):
-    occurrence = create_occurrence(start_dt=datetime.now() + relativedelta(days=2))
-    dummy_room.notification_before_days = notification_window
-    db.session.flush()
-    assert_is_in_notification_window(occurrence, expected, expected_with_exclude)
+@pytest.mark.parametrize('state', ReservationOccurrenceState)
+def test_can_reject(create_reservation, dummy_user, state):
+    reservation = create_reservation(start_dt=date.today() - relativedelta(days=1, hour=8),
+                                     end_dt=date.today() + relativedelta(days=1, hour=17),
+                                     repeat_frequency=RepeatFrequency.DAY)
+    reservation.room.update_principal(dummy_user, full_access=True)
+    occ = reservation.occurrences[0]
+    occ.state = state
+    assert occ.can_reject(dummy_user) == occ.is_valid
 
 
-@pytest.mark.parametrize(('notification_window', 'expected', 'expected_with_exclude'), (
-    (1, False, False),
-    (2, True,  False),
-    (3, True,  True),
-))
-def test_is_in_notification_window_from_settings(db, create_occurrence, dummy_room,
-                                                 notification_window, expected, expected_with_exclude):
-    from indico.modules.rb import settings as rb_settings
-    occurrence = create_occurrence(start_dt=datetime.now() + relativedelta(days=2))
-    dummy_room.notification_before_days = None
-    rb_settings.set('notification_before_days', notification_window)
-    assert_is_in_notification_window(occurrence, expected, expected_with_exclude)
-
-
-@pytest.mark.parametrize(('days_delta', 'expected', 'expected_with_exclude'), (
-    (0, True, True),
-    (1, True, False),
-    (2, False,  False),
-))
-def test_is_in_notification_window_from_settings_empty(db, create_occurrence, dummy_room,
-                                                       days_delta, expected, expected_with_exclude):
-    occurrence = create_occurrence(start_dt=datetime.now() + relativedelta(days=days_delta))
-    dummy_room.notification_before_days = None
-    db.session.flush()
-    assert_is_in_notification_window(occurrence, expected, expected_with_exclude)
-
-
-def test_is_in_notification_window_past(create_occurrence):
-    occurrence = create_occurrence(start_dt=datetime.now() + relativedelta(days=-1))
-    assert not occurrence.is_in_notification_window()
+def test_can_cancel(create_reservation, dummy_user, freeze_time):
+    reservation = create_reservation(start_dt=date.today() - relativedelta(days=1, hour=8),
+                                     end_dt=date.today() + relativedelta(days=1, hour=17),
+                                     repeat_frequency=RepeatFrequency.DAY)
+    freeze_time(datetime.combine(date.today(), time(18, 0)))
+    assert not reservation.occurrences[0].can_cancel(dummy_user)
+    assert not reservation.occurrences[1].can_cancel(dummy_user)
+    assert reservation.occurrences[-1].can_cancel(dummy_user)

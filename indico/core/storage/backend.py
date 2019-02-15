@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,14 +19,14 @@ from __future__ import unicode_literals
 import os
 import sys
 from contextlib import contextmanager
+from hashlib import md5
 from io import BytesIO
-from shutil import copyfileobj
 from tempfile import NamedTemporaryFile
 
 from werkzeug.security import safe_join
 
 from indico.core import signals
-from indico.core.config import Config
+from indico.core.config import config
 from indico.util.signals import named_objects_from_signal
 from indico.util.string import return_ascii
 from indico.web.flask.util import send_file
@@ -35,7 +35,7 @@ from indico.web.flask.util import send_file
 def get_storage(backend_name):
     """Returns an FS object for the given backend.
 
-    The backend must be defined in the StorageBackends dict in the
+    The backend must be defined in the STORAGE_BACKENDS dict in the
     indico config.  Once a backend has been used it is assumed to
     stay there forever or at least as long as it is referenced
     somewhere.
@@ -44,7 +44,7 @@ def get_storage(backend_name):
     ``fs:/some/folder/`` or ``foo:host=foo.host,token=secret``.
     """
     try:
-        definition = Config.getInstance().getStorageBackends()[backend_name]
+        definition = config.STORAGE_BACKENDS[backend_name]
     except KeyError:
         raise RuntimeError('Storage backend does not exist: {}'.format(backend_name))
     name, data = definition.split(':', 1)
@@ -61,6 +61,10 @@ def get_storage_backends():
 
 class StorageError(Exception):
     """Exception used when a storage operation fails for any reason"""
+
+
+class StorageReadOnlyError(StorageError):
+    """Exception used when trying to write to a read-only storage"""
 
 
 class Storage(object):
@@ -102,6 +106,20 @@ class Storage(object):
         """Ensures that fileobj is a file-like object and not a string"""
         return BytesIO(fileobj) if not hasattr(fileobj, 'read') else fileobj
 
+    def _copy_file(self, source, target, chunk_size=1024*1024):
+        """Copy a file, in chunks, from ``source`` to ``target``.
+
+        The return value will be the MD5 checksum of the file (hex).
+        """
+        checksum = md5()
+        while True:
+            chunk = source.read(chunk_size)
+            if not chunk:
+                break
+            target.write(chunk)
+            checksum.update(chunk)
+        return checksum.hexdigest().decode('ascii')
+
     def open(self, file_id):  # pragma: no cover
         """Opens a file in the storage for reading.
 
@@ -124,8 +142,8 @@ class Storage(object):
         :param file_id: The ID of the file within the storage backend.
         """
         with self.open(file_id) as fd:
-            with NamedTemporaryFile(suffix='indico.tmp', dir=Config.getInstance().getUploadedFilesTempDir()) as tmpfile:
-                copyfileobj(fd, tmpfile, 1024 * 1024)
+            with NamedTemporaryFile(suffix='indico.tmp', dir=config.TEMP_DIR) as tmpfile:
+                self._copy_file(fd, tmpfile)
                 tmpfile.flush()
                 yield tmpfile.name
 
@@ -153,7 +171,8 @@ class Storage(object):
                          not be used depending on the backend).
         :param fileobj: A file-like object containing the file data as
                         bytes or a bytestring.
-        :return: unicode -- A unique identifier for the file.
+        :return: (unicode, unicode) -- A tuple containing a unique
+                        identifier for the file and an MD5 checksum.
         """
         raise NotImplementedError
 
@@ -200,10 +219,10 @@ class ReadOnlyStorageMixin(object):
     """Mixin that makes write operations fail with an error"""
 
     def save(self, name, content_type, filename, fileobj):
-        raise StorageError('Cannot write to read-only storage')
+        raise StorageReadOnlyError('Cannot write to read-only storage')
 
     def delete(self, file_id):
-        raise StorageError('Cannot delete from read-only storage')
+        raise StorageReadOnlyError('Cannot delete from read-only storage')
 
 
 class FileSystemStorage(Storage):
@@ -239,8 +258,8 @@ class FileSystemStorage(Storage):
             if not os.path.isdir(basedir):
                 os.makedirs(basedir)
             with open(filepath, 'wb') as f:
-                copyfileobj(fileobj, f, 1024 * 1024)
-            return name
+                checksum = self._copy_file(fileobj, f)
+            return name, checksum
         except Exception as e:
             raise StorageError('Could not save "{}": {}'.format(name, e)), None, sys.exc_info()[2]
 

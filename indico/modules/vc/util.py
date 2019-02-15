@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -57,11 +57,11 @@ def find_event_vc_rooms(from_dt=None, to_dt=None, distinct=False):
                      that event)
     """
     from indico.modules.vc.models.vc_rooms import VCRoomEventAssociation
-    event_strategy = contains_eager('event_new')
+    event_strategy = contains_eager('event')
     event_strategy.joinedload('own_room').noload('owner')
     event_strategy.joinedload('own_venue')
     query = (VCRoomEventAssociation.query
-             .join(VCRoomEventAssociation.event_new)
+             .join(VCRoomEventAssociation.event)
              .options(event_strategy))
     if distinct:
         query = query.distinct(VCRoomEventAssociation.event_id, VCRoomEventAssociation.vc_room_id)

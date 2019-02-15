@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,42 +16,36 @@
 
 from __future__ import unicode_literals
 
-import transaction
 from flask import redirect, request, session
 from werkzeug.exceptions import NotFound
 
-from indico.core.config import Config
 from indico.core.db import db
+from indico.modules.events.management.controllers import RHManageEventBase
 from indico.modules.events.static.models.static import StaticSite, StaticSiteState
 from indico.modules.events.static.tasks import build_static_site
 from indico.modules.events.static.views import WPStaticSites
-from indico.web.flask.util import send_file, url_for
-
-from MaKaC.webinterface.rh.conferenceModif import RHConferenceModifBase
+from indico.web.flask.util import url_for
 
 
-class RHStaticSiteBase(RHConferenceModifBase):
+class RHStaticSiteBase(RHManageEventBase):
     pass
 
 
 class RHStaticSiteList(RHStaticSiteBase):
     def _process(self):
-        if not Config.getInstance().getOfflineStore():
-            raise NotFound()
-        static_sites = self.event_new.static_sites.order_by(StaticSite.requested_dt.desc()).all()
-        return WPStaticSites.render_template('static_sites.html', self._conf,
-                                             event=self.event_new, static_sites=static_sites)
+        static_sites = self.event.static_sites.order_by(StaticSite.requested_dt.desc()).all()
+        return WPStaticSites.render_template('static_sites.html', self.event, static_sites=static_sites)
 
 
 class RHStaticSiteBuild(RHStaticSiteBase):
-    CSRF_ENABLED = True
+    ALLOW_LOCKED = True
 
     def _process(self):
-        static_site = StaticSite(creator=session.user, event_new=self.event_new)
+        static_site = StaticSite(creator=session.user, event=self.event)
         db.session.add(static_site)
-        transaction.commit()
+        db.session.commit()
         build_static_site.delay(static_site)
-        return redirect(url_for('.list', self.event_new))
+        return redirect(url_for('.list', self.event))
 
 
 class RHStaticSiteDownload(RHStaticSiteBase):
@@ -61,12 +55,11 @@ class RHStaticSiteDownload(RHStaticSiteBase):
         }
     }
 
-    def _checkParams(self, params):
-        RHStaticSiteBase._checkParams(self, params)
+    def _process_args(self):
+        RHStaticSiteBase._process_args(self)
         self.static_site = StaticSite.get_one(request.view_args['id'])
 
     def _process(self):
         if self.static_site.state != StaticSiteState.success:
-            raise NotFound()
-        return send_file('static_site_{0.event_id}.zip'.format(self.static_site), self.static_site.path,
-                         'application/zip')
+            raise NotFound
+        return self.static_site.send()

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,14 +14,7 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-"""
-Event-related utils
-"""
-
-from functools import wraps
-
 from indico.core.db import db
-from indico.util.decorators import smart_decorator
 
 
 def uniqueId(obj):
@@ -29,14 +22,14 @@ def uniqueId(obj):
         return '{}.{}'.format(obj.event_id, obj.legacy_mapping.legacy_contribution_id if obj.legacy_mapping else obj.id)
     elif isinstance(obj, db.m.SubContribution):
         return '{}.{}.{}'.format(
-            obj.event_new.id,
+            obj.event.id,
             obj.legacy_mapping.legacy_contribution_id if obj.legacy_mapping else obj.contribution.id,
             obj.legacy_mapping.legacy_subcontribution_id if obj.legacy_mapping else obj.id
         )
     elif isinstance(obj, db.m.Session):
         return '{}.s{}'.format(obj.event_id, obj.legacy_mapping.legacy_session_id if obj.legacy_mapping else obj.id)
     elif isinstance(obj, db.m.SessionBlock):
-        return '{}.s{}.{}'.format(obj.event_new.id,
+        return '{}.s{}.{}'.format(obj.event.id,
                                   obj.legacy_mapping.legacy_session_id if obj.legacy_mapping else obj.session.id,
                                   obj.legacy_mapping.legacy_session_block_id if obj.legacy_mapping else obj.id)
     elif isinstance(obj, db.m.EventNote):
@@ -112,33 +105,3 @@ def truncate_path(full_path, chars=30, skip_first=True):
         truncated = True
 
     return first_node, path[::-1], last_node, truncated
-
-
-@smart_decorator
-def unify_event_args(fn, legacy=False):
-    """Decorator that unifies new/legacy event arguments.
-
-    Any argument of the decorated function that contains either a
-    :class:`Conference` or a :class:`.Event` will be converted
-    to the object type specified by the `legacy` argument.
-
-    :param legacy: If True, all arguments containing events will receive
-                   a :class:`Conference`. Otherwise, they will receive
-                   a :class:`.Event`.
-    """
-
-    if legacy:
-        def _convert(arg):
-            return arg.as_legacy if isinstance(arg, db.m.Event) else arg
-    else:
-        def _convert(arg):
-            from MaKaC.conference import Conference
-            return arg.as_event if isinstance(arg, Conference) else arg
-
-    @wraps(fn)
-    def wrapper(*args, **kwargs):
-        args = map(_convert, args)
-        kwargs = {k: _convert(v) for k, v in kwargs.iteritems()}
-        return fn(*args, **kwargs)
-
-    return wrapper

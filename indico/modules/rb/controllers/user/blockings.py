@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,29 +17,29 @@
 from collections import defaultdict
 from datetime import date
 
-from flask import flash, request, session, redirect
+from flask import flash, redirect, request, session
 from sqlalchemy.orm import joinedload
+from werkzeug.exceptions import Forbidden, NotFound
 
 from indico.core.db import db
-from indico.core.errors import IndicoError
-from indico.modules.rb.forms.blockings import CreateBlockingForm, BlockingForm
-from indico.modules.rb.notifications.blockings import notify_request
-from indico.util.i18n import _
-from indico.web.flask.util import url_for
-from indico.web.forms.base import FormDefaults
 from indico.modules.rb.controllers import RHRoomBookingBase
+from indico.modules.rb.forms.blockings import BlockingForm, CreateBlockingForm
 from indico.modules.rb.models.blocked_rooms import BlockedRoom
 from indico.modules.rb.models.blockings import Blocking
 from indico.modules.rb.models.rooms import Room
-from indico.modules.rb.views.user.blockings import (WPRoomBookingBlockingList, WPRoomBookingBlockingDetails,
-                                                    WPRoomBookingBlockingsForMyRooms, WPRoomBookingBlockingForm)
+from indico.modules.rb.notifications.blockings import notify_request
+from indico.modules.rb.views.user.blockings import (WPRoomBookingBlockingDetails, WPRoomBookingBlockingForm,
+                                                    WPRoomBookingBlockingList, WPRoomBookingBlockingsForMyRooms)
+from indico.util.i18n import _
+from indico.web.flask.util import url_for
+from indico.web.forms.base import FormDefaults
 
 
 class RHRoomBookingBlockingDetails(RHRoomBookingBase):
-    def _checkParams(self):
+    def _process_args(self):
         self._blocking = Blocking.get(request.view_args['blocking_id'])
         if not self._blocking:
-            raise IndicoError('A blocking with this ID does not exist.')
+            raise NotFound('A blocking with this ID does not exist.')
 
     def _process(self):
         return WPRoomBookingBlockingDetails(self, blocking=self._blocking).display()
@@ -69,14 +69,9 @@ class RHRoomBookingCreateModifyBlockingBase(RHRoomBookingBase):
 
 
 class RHRoomBookingCreateBlocking(RHRoomBookingCreateModifyBlockingBase):
-    def _checkParams(self):
+    def _process_args(self):
         self._form = CreateBlockingForm(start_date=date.today(), end_date=date.today())
         self._blocking = None
-
-    def _checkProtection(self):
-        RHRoomBookingCreateModifyBlockingBase._checkProtection(self)
-        if not self._doProcess:  # we are not logged in
-            return
 
     def _save(self):
         self._blocking = blocking = Blocking()
@@ -93,22 +88,20 @@ class RHRoomBookingCreateBlocking(RHRoomBookingCreateModifyBlockingBase):
 
 
 class RHRoomBookingModifyBlocking(RHRoomBookingCreateModifyBlockingBase):
-    def _checkParams(self):
+    def _process_args(self):
         self._blocking = Blocking.get(request.view_args['blocking_id'])
         if self._blocking is None:
-            raise IndicoError('A blocking with this ID does not exist.')
+            raise NotFound('A blocking with this ID does not exist.')
         defaults = FormDefaults(self._blocking, attrs={'reason'},
                                 principals=self._blocking.allowed,
                                 blocked_rooms=[br.room_id for br in self._blocking.blocked_rooms])
         self._form = BlockingForm(obj=defaults)
         self._form._blocking = self._blocking
 
-    def _checkProtection(self):
-        RHRoomBookingCreateModifyBlockingBase._checkProtection(self)
-        if not self._doProcess:  # we are not logged in
-            return
-        if not self._blocking.can_be_modified(session.user):
-            raise IndicoError(_("You are not authorized to modify this blocking."))
+    def _check_access(self):
+        RHRoomBookingCreateModifyBlockingBase._check_access(self)
+        if not self._blocking.can_edit(session.user):
+            raise Forbidden(_("You are not authorized to modify this blocking."))
 
     def _save(self):
         blocking = self._blocking
@@ -136,17 +129,15 @@ class RHRoomBookingModifyBlocking(RHRoomBookingCreateModifyBlockingBase):
 
 
 class RHRoomBookingDeleteBlocking(RHRoomBookingBase):
-    CSRF_ENABLED = True
-
-    def _checkParams(self):
+    def _process_args(self):
         self._block = Blocking.get(request.view_args['blocking_id'])
         if not self._block:
-            raise IndicoError('A blocking with this ID does not exist.')
+            raise NotFound('A blocking with this ID does not exist.')
 
-    def _checkProtection(self):
-        RHRoomBookingBase._checkProtection(self)
-        if not self._block.can_be_deleted(session.user):
-            raise IndicoError('You are not authorized to delete this blocking.')
+    def _check_access(self):
+        RHRoomBookingBase._check_access(self)
+        if not self._block.can_delete(session.user):
+            raise Forbidden('You are not authorized to delete this blocking.')
 
     def _process(self):
         db.session.delete(self._block)
@@ -155,7 +146,7 @@ class RHRoomBookingDeleteBlocking(RHRoomBookingBase):
 
 
 class RHRoomBookingBlockingList(RHRoomBookingBase):
-    def _checkParams(self):
+    def _process_args(self):
         self.only_mine = request.args.get('only_mine') == '1'
         self.timeframe = request.args.get('timeframe', 'recent')
         if self.timeframe not in {'all', 'year', 'recent'}:
@@ -180,7 +171,7 @@ class RHRoomBookingBlockingList(RHRoomBookingBase):
 
 
 class RHRoomBookingBlockingsForMyRooms(RHRoomBookingBase):
-    def _checkParams(self):
+    def _process_args(self):
         self.state = request.args.get('state')
 
     def _process(self):

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,8 +20,8 @@ from flask import session
 
 from indico.core import signals
 from indico.core.db import db
+from indico.modules.events.logs import EventLogKind, EventLogRealm
 from indico.modules.events.persons import logger
-from indico.modules.events.logs import EventLogRealm, EventLogKind
 
 
 def update_person(person, data):
@@ -29,5 +29,5 @@ def update_person(person, data):
     db.session.flush()
     signals.event.person_updated.send(person)
     logger.info('Person %s updated by %s', person, session.user)
-    person.event_new.log(EventLogRealm.management, EventLogKind.change, 'Persons',
-                         "Person with email '{}' has been updated".format(person.email), session.user)
+    person.event.log(EventLogRealm.management, EventLogKind.change, 'Persons',
+                     "Person with email '{}' has been updated".format(person.email), session.user)

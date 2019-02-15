@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,15 +16,17 @@
 
 from __future__ import unicode_literals
 
-from flask import session, render_template
+from flask import render_template, session
 
 from indico.core import signals
 from indico.core.db import db
 from indico.core.logger import Logger
-from indico.core.roles import ManagementRole
+from indico.core.permissions import ManagementPermission
 from indico.modules.events import Event
 from indico.modules.events.features.base import EventFeature
 from indico.modules.events.layout.util import MenuEntryData
+from indico.modules.events.surveys.models.submissions import SurveySubmission
+from indico.modules.events.surveys.util import query_active_surveys
 from indico.util.i18n import _
 from indico.web.flask.templating import template_hook
 from indico.web.flask.util import url_for
@@ -52,8 +54,7 @@ def _extend_event_menu(sender, **kwargs):
     from indico.modules.events.surveys.models.surveys import Survey
 
     def _visible(event):
-        return (event.has_feature('surveys') and
-                Survey.query.with_parent(event).filter(Survey.is_visible).has_rows())
+        return event.has_feature('surveys') and query_active_surveys(event).has_rows()
 
     return MenuEntryData(_('Surveys'), 'surveys', 'surveys.display_survey_list', position=12, visible=_visible)
 
@@ -62,9 +63,9 @@ def _get_active_surveys(event):
     if not event.has_feature('surveys'):
         return []
     from indico.modules.events.surveys.models.surveys import Survey
-    return (Survey.find(Survey.is_active, Survey.event_id == int(event.id))
-                  .order_by(db.func.lower(Survey.title))
-                  .all())
+    return (query_active_surveys(event)
+            .order_by(db.func.lower(Survey.title))
+            .all())
 
 
 @template_hook('event-header')
@@ -90,9 +91,9 @@ def _get_feature_definitions(sender, **kwargs):
     return SurveysFeature
 
 
-@signals.acl.get_management_roles.connect_via(Event)
-def _get_management_roles(sender, **kwargs):
-    return SurveysRole
+@signals.acl.get_management_permissions.connect_via(Event)
+def _get_management_permissions(sender, **kwargs):
+    return SurveysPermission
 
 
 @signals.import_tasks.connect
@@ -110,7 +111,16 @@ class SurveysFeature(EventFeature):
         return True
 
 
-class SurveysRole(ManagementRole):
+class SurveysPermission(ManagementPermission):
     name = 'surveys'
     friendly_name = _('Surveys')
     description = _('Grants management access to surveys.')
+    user_selectable = True
+
+
+@signals.get_placeholders.connect_via('survey-link-email')
+def _get_placeholders(sender, event, survey, **kwargs):
+    from indico.modules.events.surveys import placeholders
+    yield placeholders.EventTitlePlaceholder
+    yield placeholders.SurveyTitlePlaceholder
+    yield placeholders.SurveyLinkPlaceholder

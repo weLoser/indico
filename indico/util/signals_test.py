@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -17,7 +17,7 @@
 import pytest
 from mock import MagicMock
 
-from indico.util.signals import values_from_signal, named_objects_from_signal
+from indico.util.signals import named_objects_from_signal, values_from_signal
 
 
 def _make_signal_response(objects):

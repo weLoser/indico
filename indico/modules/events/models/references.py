@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,7 +20,7 @@ from sqlalchemy.ext.declarative import declared_attr
 
 from indico.core.db import db
 from indico.util.locators import locator_property
-from indico.util.string import return_ascii, format_repr
+from indico.util.string import format_repr, return_ascii
 
 
 class ReferenceType(db.Model):
@@ -140,7 +140,7 @@ class EventReference(ReferenceModelBase):
     )
 
     # relationship backrefs:
-    # - event_new (Event.references)
+    # - event (Event.references)
 
     @return_ascii
     def __repr__(self):

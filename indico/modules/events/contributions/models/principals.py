@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,18 +19,19 @@ from __future__ import unicode_literals
 from sqlalchemy.ext.declarative import declared_attr
 
 from indico.core.db import db
-from indico.core.db.sqlalchemy.principals import PrincipalRolesMixin
+from indico.core.db.sqlalchemy.principals import PrincipalPermissionsMixin
 from indico.core.db.sqlalchemy.util.models import auto_table_args
-from indico.util.string import return_ascii, format_repr
+from indico.util.string import format_repr, return_ascii
 
 
-class ContributionPrincipal(PrincipalRolesMixin, db.Model):
+class ContributionPrincipal(PrincipalPermissionsMixin, db.Model):
     __tablename__ = 'contribution_principals'
     principal_backref_name = 'in_contribution_acls'
     principal_for = 'Contribution'
     unique_columns = ('contribution_id',)
     disallowed_protection_modes = frozenset()
     allow_emails = True
+    allow_event_roles = True
 
     @declared_attr
     def __table_args__(cls):
@@ -54,4 +55,5 @@ class ContributionPrincipal(PrincipalRolesMixin, db.Model):
 
     @return_ascii
     def __repr__(self):
-        return format_repr(self, 'id', 'contribution_id', 'principal', read_access=False, full_access=False, roles=[])
+        return format_repr(self, 'id', 'contribution_id', 'principal', read_access=False, full_access=False,
+                           permissions=[])

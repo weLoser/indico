@@ -5,15 +5,15 @@
 
 {{ render_event_header_msg(event) }}
 
-{% set hook_event_header = template_hook('event-header', event=conf) | trim %}
-{% set has_subheader = event.description or files or folders or lectures or conf.getOrgText()
-                       or conf.getSupportInfo().getEmail() or conf.getSupportInfo().getTelephone()
-                       or (event.references and conf.getType() == "meeting") or hook_event_header %}
+{% set hook_event_header = template_hook('event-header', event=event) | trim %}
+{% set has_subheader = event.description or files or folders or lectures or event.organizer_info
+                       or event.contact_emails or event.contact_phones
+                       or (event.references and event.type == 'meeting') or hook_event_header %}
 
-<div class="eventWrapper" itemscope itemtype="http://schema.org/Event">
+<div class="event-wrapper">
     {% block header %}
         <div class="event-header {%- if not has_subheader %} round-bottom-corners{% endif %}">
-            {% set show_button = not conf.isClosed() and event.can_manage_attachments(session.user) %}
+            {% set show_button = not event.is_locked and event.can_manage_attachments(session.user) %}
             <div class="event-manage-button">
                 {{ render_manage_button(event, 'EVENT', show_button=show_button, toggle_notes=false) }}
             </div>
@@ -23,8 +23,7 @@
             {% endif %}
 
             <h1 itemprop="name">
-                {# TODO: remove '| safe' once we start enforcing no-HTML policy #}
-                {{- event.title | safe -}}
+                {{- event.title -}}
             </h1>
             <div class="details">
                 <div class="event-date">
@@ -32,7 +31,7 @@
                 </div>
                 {% if event.has_location_info or event.address %}
                     <div class="event-location">
-                        {{ render_location(event, class='header-data') }}
+                        {{ render_location(event, class='header-data', header=true) }}
                     </div>
                 {% endif %}
                 {% set chairpersons = event.person_links | sort(attribute='display_order_key') %}
@@ -52,22 +51,18 @@
     {% block body %}
         {% if has_subheader %}
             <div class="event-sub-header">
-                <table class="eventDetails">
-                    <tbody>
-                        {# https://github.com/pallets/jinja/issues/603 #}
-                        {% set hook_event_header = hook_event_header %}
-                        {% include 'events/display/indico/_details.html' %}
-                    </tbody>
-                </table>
+                {# https://github.com/pallets/jinja/issues/603 #}
+                {% set hook_event_header = hook_event_header %}
+                {% include 'events/display/indico/_details.html' %}
             </div>
         {% endif %}
 
-        {% if event.has_note or event.can_manage(session.user) %}
-            {{ render_note(conf.note, hidden=not theme_settings.show_notes, can_edit=event.can_manage(session.user),
-                           for_event=conf) }}
+        {% if event.has_note %}
+            {{ render_note(event.note, hidden=not theme_settings.show_notes, can_edit=event.can_manage(session.user),
+                           for_event=event) }}
         {% endif %}
 
-        <div class="event-body">
+        <div class="event-body {{ 'event-locked' if event.is_locked }}">
             {{ template_hook('meeting-body', event=event) }}
         </div>
     {% endblock %}

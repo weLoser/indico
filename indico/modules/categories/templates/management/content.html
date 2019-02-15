@@ -4,12 +4,12 @@
 {% from 'events/management/_create_event_button.html' import create_event_button %}
 
 {% macro _create_category_button(classes='') %}
-    <button class="i-button js-new-category {{ classes }}"
-            data-ajax-dialog
-            data-href="{{ url_for('.create_subcategory', category) }}"
-            data-title="{% trans %}New category{% endtrans %}">
+    <a class="i-button {{ classes }}"
+       data-ajax-dialog
+       data-href="{{ url_for('.create_subcategory', category) }}"
+       data-title="{% trans %}New category{% endtrans %}">
         {% trans %}New category{% endtrans %}
-    </button>
+    </a>
 {% endmacro %}
 
 {% macro subcategory_row(subcategory) %}
@@ -59,8 +59,14 @@
                 </li>
             </ul>
             {{ _create_category_button(classes='highlight icon-plus') }}
-            <button class="i-button icon-sort-alpha-asc js-sort-categories"
-                    title="{% trans %}Sort categories alphabetically{% endtrans %}"></button>
+            <div class="group">
+                <button class="i-button icon-sort-alpha-asc js-sort-categories"
+                        title="{% trans %}Sort categories alphabetically (ascending){% endtrans %}"
+                        data-sort-order="1"></button>
+                <button class="i-button icon-sort-alpha-desc js-sort-categories"
+                        title="{% trans %}Sort categories alphabetically (descending){% endtrans %}"
+                        data-sort-order="-1"></button>
+            </div>
         </div>
         <div class="toolbar">
             <span class="i-button label icon-list"

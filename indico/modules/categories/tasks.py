@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,9 +21,9 @@ from datetime import timedelta
 from celery.schedules import crontab
 
 from indico.core.celery import celery
-from indico.core.config import Config
-from indico.core.db import DBMgr, db
-from indico.modules.categories import logger, Category
+from indico.core.config import config
+from indico.core.db import db
+from indico.modules.categories import Category, logger
 from indico.modules.users import User, UserSetting
 from indico.modules.users.models.suggestions import SuggestedCategory
 from indico.modules.users.util import get_related_categories
@@ -61,11 +61,10 @@ def category_suggestions():
 @celery.periodic_task(name='category_cleanup', run_every=crontab(minute='0', hour='5'))
 def category_cleanup():
     from indico.modules.events import Event
-    cfg = Config.getInstance()
-    janitor_user = User.get_one(cfg.getJanitorUserId())
+    janitor_user = User.get_system_user()
 
     logger.debug("Checking whether any categories should be cleaned up")
-    for categ_id, days in cfg.getCategoryCleanup().iteritems():
+    for categ_id, days in config.CATEGORY_CLEANUP.iteritems():
         try:
             category = Category.get(int(categ_id), is_deleted=False)
         except KeyError:
@@ -81,9 +80,7 @@ def category_cleanup():
                     len(to_delete), days)
         for i, event in enumerate(to_delete, 1):
             logger.info("Deleting %s", event)
-            event.as_legacy.delete(user=janitor_user)
+            event.delete('Cleaning up category', janitor_user)
             if i % 100 == 0:
                 db.session.commit()
-                DBMgr.getInstance().commit()
         db.session.commit()
-        DBMgr.getInstance().commit()

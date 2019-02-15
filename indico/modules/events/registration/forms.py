@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,34 +18,38 @@ from __future__ import unicode_literals
 
 import json
 from datetime import time
+from operator import itemgetter
 
 import jsonschema
-from flask import session
-from wtforms.fields import StringField, TextAreaField, BooleanField, IntegerField, SelectField
-from wtforms.fields.html5 import EmailField, DecimalField
-from wtforms.validators import DataRequired, NumberRange, Optional, ValidationError
+from flask import request
+from wtforms.fields import BooleanField, FloatField, HiddenField, IntegerField, SelectField, StringField, TextAreaField
+from wtforms.fields.html5 import DecimalField, EmailField
+from wtforms.validators import DataRequired, InputRequired, NumberRange, Optional, ValidationError
 from wtforms.widgets.html5 import NumberInput
 
-from indico.core.config import Config
+from indico.core.config import config
+from indico.modules.designer import PageLayout, PageOrientation, PageSize, TemplateType
+from indico.modules.designer.util import get_default_template_on_category, get_inherited_templates
 from indico.modules.events.features.util import is_feature_enabled
+from indico.modules.events.payment import payment_settings
 from indico.modules.events.registration.models.forms import ModificationMode
 from indico.modules.events.registration.models.invitations import RegistrationInvitation
 from indico.modules.events.registration.models.registrations import Registration
-from indico.modules.events.payment import settings as payment_global_settings
 from indico.util.i18n import _
-from indico.util.placeholders import render_placeholder_info, get_missing_placeholders
+from indico.util.placeholders import get_missing_placeholders, render_placeholder_info
 from indico.web.forms.base import IndicoForm, generated_data
-from indico.web.forms.fields import (IndicoDateTimeField, EmailListField, PrincipalListField, IndicoEnumSelectField,
-                                     JSONField)
-from indico.web.forms.validators import HiddenUnless, LinkedDateTime, IndicoEmail
-from indico.web.forms.widgets import SwitchWidget, CKEditorWidget
+from indico.web.forms.fields import (EmailListField, FileField, IndicoDateTimeField, IndicoEnumSelectField, JSONField,
+                                     PrincipalListField)
+from indico.web.forms.fields.simple import HiddenFieldList, IndicoEmailRecipientsField
+from indico.web.forms.validators import HiddenUnless, IndicoEmail, LinkedDateTime
+from indico.web.forms.widgets import CKEditorWidget, SwitchWidget
 
 
 def _check_if_payment_required(form, field):
     if not field.data:
         return
     if not is_feature_enabled(form.event, 'payment'):
-        raise ValidationError(_('You have to enable payment feature in order to set the registration fee.'))
+        raise ValidationError(_('You have to enable the payment feature in order to set a registration fee.'))
 
 
 class RegistrationFormForm(IndicoForm):
@@ -76,10 +80,13 @@ class RegistrationFormForm(IndicoForm):
     publish_registrations_enabled = BooleanField(_('Publish registrations'), widget=SwitchWidget(),
                                                  description=_("Registrations from this form will be displayed in the "
                                                                "event page"))
+    publish_registration_count = BooleanField(_("Publish number of registrations"), widget=SwitchWidget(),
+                                              description=_("Number of registered participants will be displayed in "
+                                                            "the event page"))
     publish_checkin_enabled = BooleanField(_('Publish check-in status'), widget=SwitchWidget(),
                                            description=_("Check-in status will be shown publicly on the event page"))
-    base_price = DecimalField(_('Registration fee'), [NumberRange(min=0), Optional(), _check_if_payment_required],
-                              filters=[lambda x: x if x is not None else 0],
+    base_price = DecimalField(_('Registration fee'), [NumberRange(min=0, max=999999.99), Optional(),
+                              _check_if_payment_required], filters=[lambda x: x if x is not None else 0],
                               widget=NumberInput(step='0.01'),
                               description=_("A fixed fee all users have to pay when registering."))
     currency = SelectField(_('Currency'), [DataRequired()], description=_('The currency for new registrations'))
@@ -100,15 +107,14 @@ class RegistrationFormForm(IndicoForm):
 
     def __init__(self, *args, **kwargs):
         self.event = kwargs.pop('event')
-        super(IndicoForm, self).__init__(*args, **kwargs)
+        super(RegistrationFormForm, self).__init__(*args, **kwargs)
         self._set_currencies()
-        default_sender_address = Config.getInstance().getNoReplyEmail()
         self.notification_sender_address.description = _('Email address set as the sender of all '
                                                          'notifications sent to users. If empty, '
-                                                         'then {0} is used.'.format(default_sender_address))
+                                                         'then {0} is used.'.format(config.NO_REPLY_EMAIL))
 
     def _set_currencies(self):
-        currencies = [(c['code'], '{0[code]} ({0[name]})'.format(c)) for c in payment_global_settings.get('currencies')]
+        currencies = [(c['code'], '{0[code]} ({0[name]})'.format(c)) for c in payment_settings.get('currencies')]
         self.currency.choices = sorted(currencies, key=lambda x: x[1].lower())
 
 
@@ -117,11 +123,15 @@ class RegistrationFormScheduleForm(IndicoForm):
                                    description=_("Moment when registrations will be open"))
     end_dt = IndicoDateTimeField(_("End"), [Optional(), LinkedDateTime('start_dt')], default_time=time(23, 59),
                                  description=_("Moment when registrations will be closed"))
+    modification_end_dt = IndicoDateTimeField(_("Modification deadline"), [Optional(), LinkedDateTime('end_dt')],
+                                              default_time=time(23, 59),
+                                              description=_("Deadline until which registration information can be "
+                                                            "modified (defaults to the end date if empty)"))
 
     def __init__(self, *args, **kwargs):
         regform = kwargs.pop('regform')
-        self.timezone = regform.event_new.timezone
-        super(IndicoForm, self).__init__(*args, **kwargs)
+        self.timezone = regform.event.timezone
+        super(RegistrationFormScheduleForm, self).__init__(*args, **kwargs)
 
 
 class _UsersField(PrincipalListField):
@@ -141,20 +151,20 @@ class _UsersField(PrincipalListField):
 
 class InvitationFormBase(IndicoForm):
     _invitation_fields = ('skip_moderation',)
-    _email_fields = ('email_from', 'email_body')
+    _email_fields = ('email_from', 'email_subject', 'email_body')
     email_from = SelectField(_('From'), [DataRequired()])
+    email_subject = StringField(_("Email subject"), [DataRequired()])
     email_body = TextAreaField(_("Email body"), [DataRequired()], widget=CKEditorWidget(simple=True))
     skip_moderation = BooleanField(_("Skip moderation"), widget=SwitchWidget(),
                                    description=_("If enabled, the user's registration will be approved automatically."))
 
     def __init__(self, *args, **kwargs):
         self.regform = kwargs.pop('regform')
+        event = self.regform.event
         super(InvitationFormBase, self).__init__(*args, **kwargs)
         if not self.regform.moderation_enabled:
             del self.skip_moderation
-        from_addresses = ['{} <{}>'.format(session.user.full_name, email)
-                          for email in sorted(session.user.all_emails, key=lambda x: x != session.user.email)]
-        self.email_from.choices = zip(from_addresses, from_addresses)
+        self.email_from.choices = event.get_allowed_sender_emails().items()
         self.email_body.description = render_placeholder_info('registration-invitation-email', invitation=None)
 
     def validate_email_body(self, field):
@@ -221,13 +231,19 @@ class EmailRegistrantsForm(IndicoForm):
                                                 "registrant."))
     subject = StringField(_("Subject"), [DataRequired()])
     body = TextAreaField(_("Email body"), [DataRequired()], widget=CKEditorWidget(simple=True))
+    recipients = IndicoEmailRecipientsField(_('Recipients'))
+    copy_for_sender = BooleanField(_('Send copy to me'), widget=SwitchWidget(),
+                                   description=_('Send copy of each email to my mailbox'))
+    attach_ticket = BooleanField(_('Attach ticket'), widget=SwitchWidget(),
+                                 description=_('Attach tickets to emails'))
+    registration_id = HiddenFieldList()
+    submitted = HiddenField()
 
     def __init__(self, *args, **kwargs):
         self.regform = kwargs.pop('regform')
+        event = self.regform.event
         super(EmailRegistrantsForm, self).__init__(*args, **kwargs)
-        from_addresses = ['{} <{}>'.format(session.user.full_name, email)
-                          for email in sorted(session.user.all_emails, key=lambda x: x != session.user.email)]
-        self.from_address.choices = zip(from_addresses, from_addresses)
+        self.from_address.choices = event.get_allowed_sender_emails().items()
         self.body.description = render_placeholder_info('registration-email', regform=self.regform, registration=None)
 
     def validate_body(self, field):
@@ -235,12 +251,15 @@ class EmailRegistrantsForm(IndicoForm):
         if missing:
             raise ValidationError(_('Missing placeholders: {}').format(', '.join(missing)))
 
+    def is_submitted(self):
+        return super(EmailRegistrantsForm, self).is_submitted() and 'submitted' in request.form
+
 
 class TicketsForm(IndicoForm):
     tickets_enabled = BooleanField(_('Enable Tickets'), widget=SwitchWidget(),
                                    description=_('Create tickets for registrations using this registration form.'))
-    ticket_on_email = BooleanField(_('Attach to registration e-mail'), [HiddenUnless('tickets_enabled',
-                                                                                     preserve_data=True)],
+    ticket_on_email = BooleanField(_('Send with an e-mail'), [HiddenUnless('tickets_enabled',
+                                                                           preserve_data=True)],
                                    widget=SwitchWidget(),
                                    description=_('Attach PDF ticket to the email sent to a user after completing '
                                                  'their registration.'))
@@ -254,6 +273,20 @@ class TicketsForm(IndicoForm):
                                           widget=SwitchWidget(),
                                           description=_('Allow users to download their ticket from the registration '
                                                         'summary page.'))
+
+    ticket_template_id = SelectField(_('Ticket template'), [HiddenUnless('tickets_enabled', preserve_data=True),
+                                                            Optional()], coerce=int)
+
+    def __init__(self, *args, **kwargs):
+        event = kwargs.pop('event')
+        super(TicketsForm, self).__init__(*args, **kwargs)
+        default_tpl = get_default_template_on_category(event.category)
+        all_templates = set(event.designer_templates) | get_inherited_templates(event)
+        badge_templates = [(tpl.id, tpl.title) for tpl in all_templates
+                           if tpl.type == TemplateType.badge and tpl != default_tpl]
+        # Show the default template first
+        badge_templates.insert(0, (default_tpl.id, '{} ({})'.format(default_tpl.title, _('Default category template'))))
+        self.ticket_template_id.choices = badge_templates
 
 
 class ParticipantsDisplayForm(IndicoForm):
@@ -305,7 +338,12 @@ class RegistrationManagersForm(IndicoForm):
     """Form to manage users with privileges to modify registration-related items"""
 
     managers = PrincipalListField(_('Registration managers'), groups=True, allow_emails=True, allow_external=True,
-                                  description=_('List of users allowed to modify registrations'))
+                                  description=_('List of users allowed to modify registrations'),
+                                  event=lambda form: form.event)
+
+    def __init__(self, *args, **kwargs):
+        self.event = kwargs.pop('event')
+        super(RegistrationManagersForm, self).__init__(*args, **kwargs)
 
 
 class CreateMultipleRegistrationsForm(IndicoForm):
@@ -327,3 +365,53 @@ class CreateMultipleRegistrationsForm(IndicoForm):
         for user in field.data:
             if user.registrations.filter_by(registration_form=self._regform, is_deleted=False).one_or_none():
                 raise ValidationError(_("A registration for {} already exists.").format(user.full_name))
+
+
+class BadgeSettingsForm(IndicoForm):
+    template = SelectField(_('Template'))
+    save_values = BooleanField(_("Save values for next time"), widget=SwitchWidget(),
+                               description=_("Save these values in the event settings"))
+    dashed_border = BooleanField(_("Dashed border around each badge"), widget=SwitchWidget(),
+                                 description=_("Display a dashed border around each badge"))
+    page_size = IndicoEnumSelectField(_('Page size'), enum=PageSize)
+    page_orientation = IndicoEnumSelectField(_('Page orientation'), enum=PageOrientation)
+    page_layout = IndicoEnumSelectField(_('Page layout'), enum=PageLayout,
+                                        description=_('The single sided (foldable) option is only available if the '
+                                                      'template orientation is the same as the page orientation and '
+                                                      'its width is exactly half of the page width'))
+
+    top_margin = FloatField(_('Top margin'), [InputRequired()])
+    left_margin = FloatField(_('Left margin'), [InputRequired()])
+    right_margin = FloatField(_('Right margin'), [InputRequired()])
+    bottom_margin = FloatField(_('Bottom margin'), [InputRequired()])
+    margin_columns = FloatField(_('Margin between columns'), [InputRequired()])
+    margin_rows = FloatField(_('Margin between rows'), [InputRequired()])
+
+    submitted = HiddenField()
+
+    def __init__(self, event, **kwargs):
+        all_templates = set(event.designer_templates) | get_inherited_templates(event)
+        badge_templates = [tpl for tpl in all_templates if tpl.type.name == 'badge']
+        tickets = kwargs.pop('tickets')
+        super(BadgeSettingsForm, self).__init__(**kwargs)
+        self.template.choices = sorted(((unicode(tpl.id), tpl.title)
+                                        for tpl in badge_templates
+                                        if tpl.is_ticket == tickets),
+                                       key=itemgetter(1))
+
+    def is_submitted(self):
+        return super(BadgeSettingsForm, self).is_submitted() and 'submitted' in request.form
+
+
+class ImportRegistrationsForm(IndicoForm):
+    source_file = FileField(_("Source File"), [DataRequired()], accepted_file_types='.csv')
+    skip_moderation = BooleanField(_("Skip Moderation"), widget=SwitchWidget(), default=True,
+                                   description=_("If enabled, the registration will be immediately accepted"))
+    notify_users = BooleanField(_("E-mail users"), widget=SwitchWidget(),
+                                description=_("Whether the imported users should receive an e-mail notification"))
+
+    def __init__(self, *args, **kwargs):
+        self.regform = kwargs.pop('regform')
+        super(ImportRegistrationsForm, self).__init__(*args, **kwargs)
+        if not self.regform.moderation_enabled:
+            del self.skip_moderation

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -24,9 +24,9 @@ from indico.modules.events.abstracts.models.abstracts import Abstract, AbstractS
 from indico.modules.events.abstracts.models.persons import AbstractPersonLink
 from indico.modules.events.abstracts.notifications import send_abstract_notifications
 from indico.modules.events.abstracts.util import build_default_email_template
+from indico.modules.events.contributions.models.persons import AuthorType
 from indico.modules.events.contributions.models.types import ContributionType
 from indico.modules.events.tracks.models.tracks import Track
-from indico.modules.events.contributions.models.persons import AuthorType
 from indico.modules.users.models.users import UserTitle
 from indico.util.date_time import now_utc
 
@@ -39,7 +39,7 @@ def assert_text_equal(v1, v2):
 @pytest.fixture
 def create_dummy_person(db, create_event_person):
     def _create(abstract, first_name, last_name, email, affiliation, title, is_speaker, author_type):
-        person = create_event_person(abstract.event_new, first_name=first_name, last_name=last_name, email=email,
+        person = create_event_person(abstract.event, first_name=first_name, last_name=last_name, email=email,
                                      affiliation=affiliation, title=title)
         link = AbstractPersonLink(abstract=abstract, person=person, is_speaker=is_speaker, author_type=author_type)
         db.session.add(person)
@@ -51,7 +51,7 @@ def create_dummy_person(db, create_event_person):
 @pytest.fixture
 def create_dummy_track(db):
     def _create(event):
-        track = Track(title='Dummy Track', event_new=event)
+        track = Track(title='Dummy Track', event=event)
         db.session.add(track)
         db.session.flush()
         return track
@@ -61,7 +61,7 @@ def create_dummy_track(db):
 @pytest.fixture
 def create_dummy_contrib_type(db):
     def _create(event, name='Poster'):
-        contrib_type = ContributionType(name=name, event_new=event)
+        contrib_type = ContributionType(name=name, event=event)
         db.session.add(contrib_type)
         db.session.flush()
         return contrib_type
@@ -69,10 +69,10 @@ def create_dummy_contrib_type(db):
 
 
 @pytest.fixture
-def dummy_abstract(db, dummy_event_new, dummy_user, create_dummy_person):
+def dummy_abstract(db, dummy_event, dummy_user, create_dummy_person):
     abstract = Abstract(friendly_id=314,
                         title="Broken Symmetry and the Mass of Gauge Vector Mesons",
-                        event_new=dummy_event_new,
+                        event=dummy_event,
                         submitter=dummy_user,
                         locator={'confId': -314, 'abstract_id': 1234},
                         judgment_comment='Vague but interesting!')
@@ -104,7 +104,7 @@ def create_email_template(db):
 
 @pytest.fixture
 def abstract_objects(dummy_abstract, create_dummy_contrib_type, create_dummy_track):
-    event = dummy_abstract.event_new
+    event = dummy_abstract.event
     return event, dummy_abstract, create_dummy_track(event), create_dummy_contrib_type(event)
 
 
@@ -129,7 +129,7 @@ def test_abstract_notification(mocker, abstract_objects, create_email_template, 
 
 
 @pytest.mark.usefixtures('request_context')
-def test_notification_rules(mocker, abstract_objects, create_email_template, dummy_user, dummy_event_new):
+def test_notification_rules(mocker, abstract_objects, create_email_template, dummy_user, dummy_event):
     send_email = mocker.patch('indico.modules.events.abstracts.notifications.send_email')
 
     event, abstract, track, contrib_type = abstract_objects
@@ -149,7 +149,7 @@ def test_notification_rules(mocker, abstract_objects, create_email_template, dum
     assert send_email.call_count == 0
 
     abstract.state = AbstractState.merged
-    abstract.merged_into = Abstract(title='test', submitter=dummy_user, event_new=dummy_event_new)
+    abstract.merged_into = Abstract(title='test', submitter=dummy_user, event=dummy_event)
     abstract.accepted_track = None
     abstract.submitted_for_tracks = {track}
     send_abstract_notifications(abstract)
@@ -210,10 +210,10 @@ def test_notification_any_conditions(mocker, abstract_objects, create_email_temp
 def test_notification_stop_on_match(mocker, abstract_objects, create_email_template, dummy_user):
     event, abstract, track, contrib_type = abstract_objects
     event.abstract_email_templates = [
-        create_email_template(event, 0, 'merge', 'merged poster', [
+        create_email_template(event, 0, 'accept', 'accepted poster', [
             {'state': [AbstractState.accepted.value]}
         ], False),
-        create_email_template(event, 0, 'merge', 'merged poster 2', [
+        create_email_template(event, 0, 'accept', 'accepted poster 2', [
             {'state': [AbstractState.accepted.value]}
         ], True)
     ]
@@ -233,8 +233,9 @@ def test_notification_stop_on_match(mocker, abstract_objects, create_email_templ
 
 @pytest.mark.usefixtures('request_context')
 def test_email_content(monkeypatch, abstract_objects, create_email_template, dummy_user):
-    def _mock_send_email(email, event, user):
+    def _mock_send_email(email, event, module, user):
         assert event == ev
+        assert module == 'Abstracts'
         assert email['subject'] == '[Indico] Abstract Acceptance notification (#314)'
         assert_text_equal(email['body'], """
             Dear Guinea Pig,
@@ -246,7 +247,7 @@ def test_email_content(monkeypatch, abstract_objects, create_email_template, dum
             Conference: {event.title}
             Submitted by: Guinea Pig
             Title: Broken Symmetry and the Mass of Gauge Vector Mesons
-            Primary Authors: John Doe, John Smith, Pocahontas Silva
+            Primary Authors: John Doe, Pocahontas Silva, John Smith
             Co-authors:
             Track classification: Dummy Track
             Presentation type: Poster

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,9 +16,9 @@
 
 from __future__ import unicode_literals
 
-from wtforms.fields import StringField, SelectField, PasswordField, TextAreaField
+from wtforms.fields import PasswordField, SelectField, StringField, TextAreaField
 from wtforms.fields.html5 import EmailField
-from wtforms.validators import DataRequired, Length, ValidationError, Optional
+from wtforms.validators import DataRequired, Length, Optional, ValidationError
 
 from indico.modules.auth import Identity
 from indico.modules.users import User
@@ -102,7 +102,7 @@ class MultipassRegistrationForm(SyncedInputsMixin, IndicoForm):
 
 
 class LocalRegistrationForm(RegistrationForm):
-    email = EmailField(_('Email address'))
+    email = EmailField(_('Email address'), [_check_existing_email])
     username = StringField(_('Username'), [DataRequired(), _check_existing_username], filters=[_tolower])
     password = PasswordField(_('Password'), [DataRequired(), Length(min=5)])
     confirm_password = PasswordField(_('Confirm password'), [DataRequired(), ConfirmPassword('password')])
@@ -112,7 +112,7 @@ class LocalRegistrationForm(RegistrationForm):
     @property
     def data(self):
         data = super(LocalRegistrationForm, self).data
-        del data['confirm_password']
+        data.pop('confirm_password', None)
         return data
 
 

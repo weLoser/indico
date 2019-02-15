@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,9 +16,11 @@
 
 from __future__ import unicode_literals
 
+from flask import session
+
 from indico.core import signals
 from indico.core.logger import Logger
-from indico.core.roles import check_roles, ManagementRole
+from indico.core.permissions import ManagementPermission, check_permissions
 from indico.core.settings import SettingsProxy
 from indico.modules.categories.models.categories import Category
 from indico.modules.categories.models.legacy_mapping import LegacyCategoryMapping
@@ -58,21 +60,22 @@ def _sidemenu_items(sender, category, **kwargs):
 
 @signals.menu.items.connect_via('admin-sidemenu')
 def _sidemenu_items(sender, **kwargs):
-    yield SideMenuItem('upcoming_events', _('Upcoming events'), url_for('categories.manage_upcoming'),
-                       section='homepage')
+    if session.user.is_admin:
+        yield SideMenuItem('upcoming_events', _('Upcoming events'), url_for('categories.manage_upcoming'),
+                           section='homepage')
 
 
 @signals.app_created.connect
-def _check_roles(app, **kwargs):
-    check_roles(Category)
+def _check_permissions(app, **kwargs):
+    check_permissions(Category)
 
 
-@signals.acl.get_management_roles.connect_via(Category)
-def _get_management_roles(sender, **kwargs):
-    return CreatorRole
+@signals.acl.get_management_permissions.connect_via(Category)
+def _get_management_permissions(sender, **kwargs):
+    return CreatorPermission
 
 
-class CreatorRole(ManagementRole):
+class CreatorPermission(ManagementPermission):
     name = 'create'
     friendly_name = _('Event creation')
     description = _('Allows creating events in the category')

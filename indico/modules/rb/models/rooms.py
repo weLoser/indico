@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,35 +16,38 @@
 
 import ast
 import json
-from datetime import date
+import warnings
+from datetime import date, time
 
-from sqlalchemy import and_, func, or_, cast, Date
-from sqlalchemy.ext.hybrid import hybrid_property, hybrid_method
-from sqlalchemy.orm import contains_eager
+from sqlalchemy import and_, cast, func, or_
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.orm import contains_eager, joinedload, load_only, raiseload
 
-from MaKaC.webinterface import urlHandlers as UH
-from MaKaC.common.Locators import Locator
-from MaKaC.common.cache import GenericCache
 from indico.core.db.sqlalchemy import db
 from indico.core.db.sqlalchemy.custom import static_array
-from indico.core.db.sqlalchemy.util.cache import versioned_cache, cached
-from indico.core.db.sqlalchemy.util.queries import escape_like
+from indico.core.db.sqlalchemy.principals import PrincipalType
+from indico.core.db.sqlalchemy.protection import ProtectionManagersMixin, ProtectionMode
+from indico.core.db.sqlalchemy.util.cache import cached, versioned_cache
+from indico.core.db.sqlalchemy.util.queries import db_dates_overlap, escape_like
 from indico.core.errors import NoReportError
+from indico.legacy.common.cache import GenericCache
 from indico.modules.groups import GroupProxy
-from indico.modules.rb.util import rb_check_user_access, rb_is_admin
-from indico.modules.rb.models.blockings import Blocking
 from indico.modules.rb.models.blocked_rooms import BlockedRoom
+from indico.modules.rb.models.blockings import Blocking
+from indico.modules.rb.models.equipment import EquipmentType, RoomEquipmentAssociation
+from indico.modules.rb.models.favorites import favorite_room_table
+from indico.modules.rb.models.principals import RoomPrincipal
 from indico.modules.rb.models.reservation_occurrences import ReservationOccurrence
-from indico.modules.rb.models.reservations import Reservation, RepeatMapping
+from indico.modules.rb.models.reservations import RepeatMapping, Reservation
 from indico.modules.rb.models.room_attributes import RoomAttribute, RoomAttributeAssociation
 from indico.modules.rb.models.room_bookable_hours import BookableHours
-from indico.modules.rb.models.equipment import EquipmentType, RoomEquipmentAssociation
 from indico.modules.rb.models.room_nonbookable_periods import NonBookablePeriod
-from indico.util.date_time import round_up_month
+from indico.modules.rb.util import rb_is_admin
 from indico.util.decorators import classproperty
 from indico.util.i18n import _
+from indico.util.locators import locator_property
 from indico.util.serializer import Serializer
-from indico.util.string import return_ascii, natural_sort_key
+from indico.util.string import format_repr, natural_sort_key, return_ascii
 from indico.util.user import unify_user_args
 from indico.web.flask.util import url_for
 
@@ -52,16 +55,21 @@ from indico.web.flask.util import url_for
 _cache = GenericCache('Rooms')
 
 
-class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
+class Room(versioned_cache(_cache, 'id'), ProtectionManagersMixin, db.Model, Serializer):
     __tablename__ = 'rooms'
     __table_args__ = (db.UniqueConstraint('id', 'location_id'),  # useless but needed for the LocationMixin fkey
+                      db.CheckConstraint("verbose_name != ''", 'verbose_name_not_empty'),
                       {'schema': 'roombooking'})
+
+    default_protection_mode = ProtectionMode.public
+    disallowed_protection_modes = frozenset({ProtectionMode.inheriting})
 
     __public__ = [
         'id', 'name', 'location_name', 'floor', 'number', 'building',
         'booking_url', 'capacity', 'comments', 'owner_id', 'details_url',
-        'large_photo_url', 'small_photo_url', 'has_photo', 'is_active',
-        'is_reservable', 'is_auto_confirm', 'marker_description', 'kind'
+        'large_photo_url', 'has_photo', 'sprite_position', 'is_active',
+        'is_reservable', 'is_auto_confirm', 'marker_description', 'kind',
+        'booking_limit_days'
     ]
 
     __public_exhaustive__ = __public__ + [
@@ -69,7 +77,8 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
     ]
 
     __calendar_public__ = [
-        'id', 'building', 'name', 'floor', 'number', 'kind', 'booking_url', 'details_url', 'location_name'
+        'id', 'building', 'name', 'floor', 'number', 'kind', 'booking_url', 'details_url', 'location_name',
+        'max_advance_days'
     ]
 
     __api_public__ = (
@@ -94,9 +103,11 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
         db.Integer,
         db.ForeignKey('roombooking.photos.id')
     )
-    name = db.Column(
+    #: Verbose name for the room (long)
+    verbose_name = db.Column(
         db.String,
-        nullable=False
+        nullable=True,
+        default=None
     )
     site = db.Column(
         db.String,
@@ -122,10 +133,11 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
     notification_before_days = db.Column(
         db.Integer
     )
-    notification_for_responsible = db.Column(
-        db.Boolean,
-        nullable=False,
-        default=False
+    notification_before_days_weekly = db.Column(
+        db.Integer
+    )
+    notification_before_days_monthly = db.Column(
+        db.Integer
     )
     notification_for_assistance = db.Column(
         db.Boolean,
@@ -155,11 +167,11 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
     surface_area = db.Column(
         db.Integer
     )
-    latitude = db.Column(
-        db.String
-    )
     longitude = db.Column(
-        db.String
+        db.Float
+    )
+    latitude = db.Column(
+        db.Float
     )
     comments = db.Column(
         db.String
@@ -183,6 +195,17 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
     )
     max_advance_days = db.Column(
         db.Integer
+    )
+    booking_limit_days = db.Column(
+        db.Integer
+    )
+
+    acl_entries = db.relationship(
+        'RoomPrincipal',
+        lazy=True,
+        backref='room',
+        cascade='all, delete-orphan',
+        collection_class=set
     )
 
     attributes = db.relationship(
@@ -211,7 +234,7 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
         'EquipmentType',
         secondary=RoomEquipmentAssociation,
         backref='rooms',
-        lazy='dynamic'
+        lazy=True
     )
 
     nonbookable_periods = db.relationship(
@@ -235,6 +258,14 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
         backref='room',
         cascade='all, delete-orphan',
         lazy='dynamic'
+    )
+
+    favorite_of = db.relationship(
+        'User',
+        secondary=favorite_room_table,
+        lazy=True,
+        collection_class=set,
+        backref=db.backref('favorite_rooms', lazy=True, collection_class=set),
     )
 
     #: The owner of the room. If the room has the `manager-group`
@@ -278,19 +309,13 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
     def details_url(self):
         if self.id is None:
             return None
-        return str(UH.UHRoomBookingRoomDetails.getURL(target=self))
+        return url_for('rooms.roomBooking-roomDetails', self)
 
     @property
     def large_photo_url(self):
         if self.id is None:
             return None
-        return url_for('rooms.photo', self, size='large')
-
-    @property
-    def small_photo_url(self):
-        if self.id is None:
-            return None
-        return url_for('rooms.photo', self, size='small')
+        return url_for('rooms.photo', roomID=self.id)
 
     @property
     def map_url(self):
@@ -307,16 +332,30 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
     def has_photo(self):
         return self.photo_id is not None
 
-    @property
+    @hybrid_property
+    def name(self):
+        return self.generate_name()
+
+    @name.expression
+    def name(cls):
+        q = (db.session.query(db.m.Location.room_name_format)
+             .filter(db.m.Location.id == cls.location_id)
+             .correlate(Room)
+             .as_scalar())
+        return db.func.format(q, cls.building, cls.floor, cls.number)
+
+    @hybrid_property
     def full_name(self):
-        if self.has_special_name:
-            return u'{} - {}'.format(self.generate_name(), self.name)
+        if self.verbose_name:
+            return u'{} - {}'.format(self.generate_name(), self.verbose_name)
         else:
             return u'{}'.format(self.generate_name())
 
-    @property
-    def has_special_name(self):
-        return self.name and self.name != self.generate_name()
+    @full_name.expression
+    def full_name(cls):
+        return db.case([
+            [cls.verbose_name.isnot(None), cls.name + ' - ' + cls.verbose_name]
+        ], else_=cls.name)
 
     @property
     @cached(_cache)
@@ -337,11 +376,6 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
     @cached(_cache)
     def has_vc(self):
         return self.has_equipment('Video conference')
-
-    @property
-    @cached(_cache)
-    def is_public(self):
-        return self.is_reservable and not self.has_booking_groups
 
     @property
     def kind(self):
@@ -370,28 +404,30 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
         return u', '.join(map(unicode, infos))
 
     @property
+    def manager_emails(self):
+        manager_group = self.get_attribute_value('manager-group')
+        if not manager_group:
+            return set()
+        group = GroupProxy.get_named_default_group(manager_group)
+        return {u.email for u in group.get_members()}
+
+    @property
     def notification_emails(self):
         return set(filter(None, map(unicode.strip, self.get_attribute_value(u'notification-email', u'').split(u','))))
 
+    @property
+    def sprite_position(self):
+        sprite_mapping = _cache.get('rooms-sprite-mapping')
+        return sprite_mapping.get(self.id, 0) if sprite_mapping else 0  # placeholder at position 0
+
     @return_ascii
     def __repr__(self):
-        return u'<Room({0}, {1}, {2})>'.format(
-            self.id,
-            self.location_id,
-            self.name
-        )
+        return format_repr(self, 'id', 'full_name')
 
     @cached(_cache)
     def has_equipment(self, *names):
-        return self.available_equipment.filter(EquipmentType.name.in_(names)).count() > 0
-
-    def find_available_vc_equipment(self):
-        vc_equipment = (self.available_equipment
-                        .correlate(Room)
-                        .with_entities(EquipmentType.id)
-                        .filter_by(name='Video conference')
-                        .as_scalar())
-        return self.available_equipment.filter(EquipmentType.parent_id == vc_equipment)
+        available = {x.name for x in self.available_equipment}
+        return bool(available & set(names))
 
     def get_attribute_by_name(self, attribute_name):
         return (self.attributes
@@ -416,31 +452,28 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
                 self.attributes.filter(RoomAttributeAssociation.attribute_id == attr.attribute_id) \
                     .delete(synchronize_session='fetch')
         elif value:
-            attr = self.location.get_attribute_by_name(name)
+            attr = RoomAttribute.query.filter_by(name=name).first()
             if not attr:
-                raise ValueError("Attribute {} not supported in location {}".format(name, self.location_name))
+                raise ValueError("Attribute {} does not exist".format(name))
             attr_assoc = RoomAttributeAssociation()
             attr_assoc.value = value
             attr_assoc.attribute = attr
             self.attributes.append(attr_assoc)
         db.session.flush()
 
-    def getLocator(self):
-        locator = Locator()
-        locator['roomLocation'] = self.location_name
-        locator['roomID'] = self.id
-        return locator
+    @locator_property
+    def locator(self):
+        return {'roomLocation': self.location_name, 'roomID': self.id}
 
     def generate_name(self):
-        return u'{}-{}-{}'.format(
-            self.building,
-            self.floor,
-            self.number
+        if self.location is None:
+            warnings.warn('Room has no location; using default name format')
+            return '{}/{}-{}'.format(self.building, self.floor, self.number)
+        return self.location.room_name_format.format(
+            building=self.building,
+            floor=self.floor,
+            number=self.number
         )
-
-    def update_name(self):
-        if not self.has_special_name and self.building and self.floor and self.number:
-            self.name = self.generate_name()
 
     @classmethod
     def find_all(cls, *args, **kwargs):
@@ -464,7 +497,7 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
 
         only_active = kwargs.pop('only_active', True)
         filters = kwargs.pop('filters', None)
-        order = kwargs.pop('order', [Location.name, Room.building, Room.floor, Room.number, Room.name])
+        order = kwargs.pop('order', [Location.name, Room.building, Room.floor, Room.number, Room.verbose_name])
         if kwargs:
             raise ValueError('Unexpected kwargs: {}'.format(kwargs))
 
@@ -474,38 +507,6 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
         if 'equipment' in args:
             entities.append(static_array.array_agg(EquipmentType.name))
             query = query.outerjoin(RoomEquipmentAssociation).outerjoin(EquipmentType)
-        if 'vc_equipment' in args or 'non_vc_equipment' in args:
-            vc_id_subquery = db.session.query(EquipmentType.id) \
-                                       .correlate(Room) \
-                                       .filter_by(name='Video conference') \
-                                       .join(RoomEquipmentAssociation) \
-                                       .filter(RoomEquipmentAssociation.c.room_id == Room.id) \
-                                       .as_scalar()
-
-            if 'vc_equipment' in args:
-                # noinspection PyTypeChecker
-                entities.append(static_array.array(
-                    db.session.query(EquipmentType.name)
-                    .join(RoomEquipmentAssociation)
-                    .filter(
-                        RoomEquipmentAssociation.c.room_id == Room.id,
-                        EquipmentType.parent_id == vc_id_subquery
-                    )
-                    .order_by(EquipmentType.name)
-                    .as_scalar()
-                ))
-            if 'non_vc_equipment' in args:
-                # noinspection PyTypeChecker
-                entities.append(static_array.array(
-                    db.session.query(EquipmentType.name)
-                    .join(RoomEquipmentAssociation)
-                    .filter(
-                        RoomEquipmentAssociation.c.room_id == Room.id,
-                        (EquipmentType.parent_id == None) | (EquipmentType.parent_id != vc_id_subquery)
-                    )
-                    .order_by(EquipmentType.name)
-                    .as_scalar()
-                ))
 
         query = (query.with_entities(*entities)
                  .outerjoin(Location, Location.id == Room.location_id)
@@ -527,7 +528,8 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
         return db.session.query(db.func.max(Room.capacity)).scalar() or 0
 
     @staticmethod
-    def filter_available(start_dt, end_dt, repetition, include_pre_bookings=True, include_pending_blockings=True):
+    def filter_available(start_dt, end_dt, repetition, include_blockings=True, include_pre_bookings=True,
+                         include_pending_blockings=False):
         """Returns a SQLAlchemy filter criterion ensuring that the room is available during the given time."""
         # Check availability against reservation occurrences
         dummy_occurrences = ReservationOccurrence.create_series(start_dt, end_dt, repetition)
@@ -537,18 +539,42 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
                                 overlap_criteria]
         if not include_pre_bookings:
             reservation_criteria.append(Reservation.is_accepted)
-        occurrences_filter = Reservation.occurrences.any(and_(*reservation_criteria))
+        occurrences_filter = (Reservation.query
+                              .join(ReservationOccurrence.reservation)
+                              .filter(and_(*reservation_criteria)))
         # Check availability against blockings
-        if include_pending_blockings:
-            valid_states = (BlockedRoom.State.accepted, BlockedRoom.State.pending)
-        else:
-            valid_states = (BlockedRoom.State.accepted,)
-        blocking_criteria = [BlockedRoom.blocking_id == Blocking.id,
-                             BlockedRoom.state.in_(valid_states),
-                             Blocking.start_date <= start_dt.date(),
-                             Blocking.end_date >= end_dt.date()]
-        blockings_filter = Room.blocked_rooms.any(and_(*blocking_criteria))
-        return ~occurrences_filter & ~blockings_filter
+        filters = ~occurrences_filter.exists()
+        if include_blockings:
+            if include_pending_blockings:
+                valid_states = (BlockedRoom.State.accepted, BlockedRoom.State.pending)
+            else:
+                valid_states = (BlockedRoom.State.accepted,)
+            # TODO: only take blockings into account which the user cannot override
+            blocking_criteria = [Room.id == BlockedRoom.room_id,
+                                 BlockedRoom.state.in_(valid_states),
+                                 db_dates_overlap(Blocking, 'start_date', end_dt.date(), 'end_date', start_dt.date(),
+                                                  inclusive=True)]
+            blockings_filter = (BlockedRoom.query
+                                .join(Blocking.blocked_rooms)
+                                .filter(and_(*blocking_criteria)))
+            return filters & ~blockings_filter.exists()
+        return filters
+
+    @staticmethod
+    def filter_bookable_hours(start_time, end_time):
+        if end_time == time(0):
+            end_time = time(23, 59, 59)
+        period_end_time = db.case({time(0): time(23, 59, 59)}, else_=BookableHours.end_time,
+                                  value=BookableHours.end_time)
+        bookable_hours_filter = Room.bookable_hours.any(
+            (BookableHours.start_time <= start_time) & (period_end_time >= end_time)
+        )
+        return ~Room.bookable_hours.any() | bookable_hours_filter
+
+    @staticmethod
+    def filter_nonbookable_periods(start_dt, end_dt):
+        return ~Room.nonbookable_periods.any(and_(NonBookablePeriod.start_dt <= end_dt,
+                                                  NonBookablePeriod.end_dt >= start_dt))
 
     @staticmethod
     def find_with_filters(filters, user=None):
@@ -584,6 +610,7 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
         if filters.get('available', -1) != -1:
             repetition = RepeatMapping.convert_legacy_repeatability(ast.literal_eval(filters['repeatability']))
             is_available = Room.filter_available(filters['start_dt'], filters['end_dt'], repetition,
+                                                 include_blockings=True,
                                                  include_pre_bookings=filters.get('include_pre_bookings', True),
                                                  include_pending_blockings=filters.get('include_pending_blockings',
                                                                                        True))
@@ -596,7 +623,7 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
                 raise ValueError('Unexpected availability value')
 
         free_search_columns = (
-            'name', 'site', 'division', 'building', 'floor', 'number', 'telephone', 'key_location', 'comments'
+            'full_name', 'site', 'division', 'building', 'floor', 'number', 'telephone', 'key_location', 'comments'
         )
         if filters.get('details'):
             # Attributes are stored JSON-encoded, so we need to JSON-encode the provided string and remove the quotes
@@ -644,48 +671,132 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
                         BlockedRoom.state.in_(states))
                 .all())
 
-    @unify_user_args
-    def _can_be_booked(self, user, prebook=False, ignore_admin=False):
-        if not user or not rb_check_user_access(user):
-            return False
+    @property
+    def protection_parent(self):
+        return None
 
-        if (not ignore_admin and rb_is_admin(user)) or (self.is_owned_by(user) and self.is_active):
-            return True
+    @staticmethod
+    def is_user_admin(user):
+        return rb_is_admin(user)
 
-        if self.is_active and self.is_reservable and (prebook or not self.reservations_need_confirmation):
-            group_name = self.get_attribute_value('allowed-booking-group')
-            if not group_name or user in GroupProxy.get_named_default_group(group_name):
-                return True
+    @classmethod
+    def get_permissions_for_user(cls, user, allow_admin=True):
+        """Get the permissions for all rooms for a user.
 
-        return False
+        In case of multipass-based groups it will try to get a list of
+        all groups the user is in, and if that's not possible check the
+        permissions one by one for each room (which may result in many
+        group membership lookups).
 
-    def can_be_booked(self, user, ignore_admin=False):
+        It is recommended to not call this in any place where performance
+        matters and to memoize the result.
         """
-        Reservable rooms which does not require pre-booking can be booked by anyone.
-        Other rooms - only by their responsibles.
-        """
-        return self._can_be_booked(user, ignore_admin=ignore_admin)
+        # XXX: When changing the logic in here, make sure to update can_* as well!
+        all_rooms_query = (Room.query
+                           .filter(Room.is_active)
+                           .options(load_only('id', 'protection_mode', 'reservations_need_confirmation',
+                                              'is_reservable'),
+                                    raiseload('owner'),
+                                    joinedload('acl_entries')))
+        is_admin = allow_admin and cls.is_user_admin(user)
+        if (is_admin and allow_admin) or not user.can_get_all_multipass_groups:
+            # check one by one if we can't get a list of all groups the user is in
+            return {r.id: {
+                'book': r.can_book(user, allow_admin=allow_admin),
+                'prebook': r.can_prebook(user, allow_admin=allow_admin),
+                'override': r.can_override(user, allow_admin=allow_admin),
+                'moderate': r.can_moderate(user, allow_admin=allow_admin),
+                'manage': r.can_manage(user, allow_admin=allow_admin),
+            } for r in all_rooms_query}
 
-    def can_be_prebooked(self, user, ignore_admin=False):
-        """
-        Reservable rooms can be pre-booked by anyone.
-        Other rooms - only by their responsibles.
-        """
-        return self._can_be_booked(user, prebook=True, ignore_admin=ignore_admin)
+        criteria = [db.and_(RoomPrincipal.type == PrincipalType.user, RoomPrincipal.user_id == user.id)]
+        for group in user.local_groups:
+            criteria.append(db.and_(RoomPrincipal.type == PrincipalType.local_group,
+                                    RoomPrincipal.local_group_id == group.id))
+        for group in user.iter_all_multipass_groups():
+            criteria.append(db.and_(RoomPrincipal.type == PrincipalType.multipass_group,
+                                    RoomPrincipal.multipass_group_provider == group.provider.name,
+                                    db.func.lower(RoomPrincipal.multipass_group_name) == group.name.lower()))
 
-    def can_be_overridden(self, user):
+        data = {}
+        permissions = {'book', 'prebook', 'override', 'moderate', 'manage'}
+        prebooking_required_rooms = set()
+        non_reservable_rooms = set()
+        for room in all_rooms_query:
+            data[room.id] = {x: False for x in permissions}
+            if room.reservations_need_confirmation:
+                prebooking_required_rooms.add(room.id)
+            if not room.is_reservable:
+                non_reservable_rooms.add(room.id)
+            if (room.is_reservable and room.is_public) or (is_admin and allow_admin):
+                if not room.reservations_need_confirmation or (is_admin and allow_admin):
+                    data[room.id]['book'] = True
+                if room.reservations_need_confirmation:
+                    data[room.id]['prebook'] = True
+            if is_admin and allow_admin:
+                data[room.id]['override'] = True
+                data[room.id]['moderate'] = True
+                data[room.id]['manage'] = True
+        query = (RoomPrincipal.query
+                 .join(Room)
+                 .filter(Room.is_active, db.or_(*criteria))
+                 .options(load_only('room_id', 'full_access', 'permissions')))
+        for principal in query:
+            is_reservable = principal.room_id not in non_reservable_rooms
+            for permission in permissions:
+                if not is_reservable and not (is_admin and allow_admin) and permission in ('book', 'prebook'):
+                    continue
+                explicit = permission == 'prebook' and principal.room_id not in prebooking_required_rooms
+                check_permission = None if permission == 'manage' else permission
+                if principal.has_management_permission(check_permission, explicit=explicit):
+                    data[principal.room_id][permission] = True
+        return data
+
+    def can_access(self, user, allow_admin=True):
+        # rooms are never access-restricted
+        raise NotImplementedError
+
+    def can_book(self, user, allow_admin=True):
+        # XXX: When changing the logic in here, make sure to update get_permissions_for_user as well!
         if not user:
             return False
-        return rb_is_admin(user) or self.is_owned_by(user)
+        if not self.is_reservable and not (allow_admin and self.is_user_admin(user)):
+            return False
+        if self.is_public and not self.reservations_need_confirmation:
+            return True
+        return self.can_manage(user, permission='book', allow_admin=allow_admin)
 
-    def can_be_modified(self, user):
-        """Only admin can modify rooms."""
+    def can_prebook(self, user, allow_admin=True):
+        # XXX: When changing the logic in here, make sure to update get_permissions_for_user as well!
+        if not user:
+            return False
+        if not self.is_reservable and not (allow_admin and self.is_user_admin(user)):
+            return False
+        if self.is_public and self.reservations_need_confirmation:
+            return True
+        # When the room does not use prebookings, we do not want the prebook option to show
+        # up for admins or room managers unless they are actually in the ACL with the prebook
+        # permission.
+        explicit = not self.reservations_need_confirmation
+        return self.can_manage(user, permission='prebook', allow_admin=allow_admin, explicit_permission=explicit)
+
+    def can_override(self, user, allow_admin=True):
+        # XXX: When changing the logic in here, make sure to update get_permissions_for_user as well!
+        return self.can_manage(user, permission='override', allow_admin=allow_admin)
+
+    def can_moderate(self, user, allow_admin=True):
+        # XXX: When changing the logic in here, make sure to update get_permissions_for_user as well!
+        return self.can_manage(user, permission='moderate', allow_admin=allow_admin)
+
+    def can_edit(self, user):
         if not user:
             return False
         return rb_is_admin(user)
 
-    def can_be_deleted(self, user):
-        return self.can_be_modified(user)
+    def can_delete(self, user):
+        if not user:
+            return False
+        return rb_is_admin(user)
 
     @unify_user_args
     @cached(_cache)
@@ -697,28 +808,6 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
         if not manager_group:
             return False
         return user in GroupProxy.get_named_default_group(manager_group)
-
-    @hybrid_method
-    def is_in_digest_window(self, exclude_first_day=False):
-        from indico.modules.rb import settings as rb_settings
-        digest_start = round_up_month(date.today(), from_day=2)
-        days_until_next_digest = (digest_start - date.today()).days
-        digest_window = self.notification_before_days or rb_settings.get('notification_before_days')
-        if exclude_first_day:
-            return days_until_next_digest < digest_window
-        else:
-            return days_until_next_digest <= digest_window
-
-    @is_in_digest_window.expression
-    def is_in_digest_window(self, exclude_first_day=False):
-        from indico.modules.rb import settings as rb_settings
-        digest_start = round_up_month(date.today(), from_day=2)
-        days_until_next_digest = cast(digest_start, Date) - cast(func.now(), Date)
-        digest_window = func.coalesce(self.notification_before_days, rb_settings.get('notification_before_days'))
-        if exclude_first_day:
-            return days_until_next_digest < digest_window
-        else:
-            return days_until_next_digest <= digest_window
 
     @classmethod
     def get_owned_by(cls, user):
@@ -752,4 +841,7 @@ class Room(versioned_cache(_cache, 'id'), db.Model, Serializer):
                 return True
         if quiet:
             return False
-        raise NoReportError('Room cannot be booked at this time')
+        raise NoReportError(u'Room cannot be booked at this time')
+
+
+Room.register_protection_events()

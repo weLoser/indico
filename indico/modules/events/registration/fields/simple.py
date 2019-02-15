@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -23,16 +23,16 @@ from operator import itemgetter
 
 import wtforms
 from werkzeug.datastructures import FileStorage
-from wtforms.validators import NumberRange, ValidationError, InputRequired
+from wtforms.validators import InputRequired, NumberRange, ValidationError
 
-from indico.modules.events.registration.fields.base import (RegistrationFormFieldBase, RegistrationFormBillableField)
+from indico.modules.events.registration.fields.base import RegistrationFormBillableField, RegistrationFormFieldBase
+from indico.util.countries import get_countries, get_country
 from indico.util.date_time import strftime_all_years
 from indico.util.fs import secure_filename
-from indico.util.i18n import _, L_
+from indico.util.i18n import L_, _
 from indico.util.string import normalize_phone_number
 from indico.web.forms.fields import IndicoRadioField
 from indico.web.forms.validators import IndicoEmail
-from MaKaC.webinterface.common.countries import CountryHolder
 
 
 class TextField(RegistrationFormFieldBase):
@@ -55,7 +55,7 @@ class NumberField(RegistrationFormBillableField):
             return 0
         return versioned_data.get('price', 0) * int(reg_data or 0)
 
-    def get_friendly_data(self, registration_data, for_humans=False):
+    def get_friendly_data(self, registration_data, for_humans=False, for_search=False):
         if registration_data.data is None:
             return ''
         return str(registration_data.data) if for_humans else registration_data.data
@@ -78,7 +78,7 @@ class CheckboxField(RegistrationFormBillableField):
             return 0
         return versioned_data.get('price', 0)
 
-    def get_friendly_data(self, registration_data, for_humans=False):
+    def get_friendly_data(self, registration_data, for_humans=False, for_search=False):
         return self.friendly_data_mapping[registration_data.data]
 
     def get_places_used(self):
@@ -128,10 +128,12 @@ class DateField(RegistrationFormFieldBase):
             value = datetime.strptime(value, date_format).isoformat()
         return super(DateField, self).process_form_data(registration, value, old_data, billable_items_locked)
 
-    def get_friendly_data(self, registration_data, for_humans=False):
+    def get_friendly_data(self, registration_data, for_humans=False, for_search=False):
         date_string = registration_data.data
         if not date_string:
             return ''
+        elif for_search:
+            return date_string  # already in isoformat
         dt = datetime.strptime(date_string, '%Y-%m-%dT%H:%M:%S')
         return strftime_all_years(dt, self.form_item.data['date_format'])
 
@@ -195,7 +197,7 @@ class BooleanField(RegistrationFormBillableField):
             return 0
         return versioned_data.get('price', 0) if reg_data else 0
 
-    def get_friendly_data(self, registration_data, for_humans=False):
+    def get_friendly_data(self, registration_data, for_humans=False, for_search=False):
         return self.friendly_data_mapping[registration_data.data]
 
 
@@ -211,11 +213,11 @@ class CountryField(RegistrationFormFieldBase):
 
     @property
     def wtf_field_kwargs(self):
-        return {'choices': sorted(CountryHolder.getCountries().items(), key=itemgetter(1))}
+        return {'choices': sorted(get_countries().iteritems(), key=itemgetter(1))}
 
     @classmethod
     def unprocess_field_data(cls, versioned_data, unversioned_data):
-        choices = sorted([{'caption': v, 'countryKey': k} for k, v in CountryHolder.getCountries().iteritems()],
+        choices = sorted(({'caption': v, 'countryKey': k} for k, v in get_countries().iteritems()),
                          key=itemgetter('caption'))
         return {'choices': choices}
 
@@ -223,8 +225,8 @@ class CountryField(RegistrationFormFieldBase):
     def filter_choices(self):
         return OrderedDict(self.wtf_field_kwargs['choices'])
 
-    def get_friendly_data(self, registration_data, for_humans=False):
-        return CountryHolder.getCountryById(registration_data.data).decode('utf-8') if registration_data.data else ''
+    def get_friendly_data(self, registration_data, for_humans=False, for_search=False):
+        return get_country(registration_data.data) if registration_data.data else ''
 
 
 class _DeletableFileField(wtforms.FileField):
@@ -254,7 +256,7 @@ class FileField(RegistrationFormFieldBase):
         if file_:
             # we have a file -> always save it
             data['file'] = {
-                'data': file_.file,
+                'data': file_.stream,
                 'name': secure_filename(file_.filename, 'attachment'),
                 'content_type': mimetypes.guess_type(file_.filename)[0] or file_.mimetype or 'application/octet-stream'
             }
@@ -266,7 +268,7 @@ class FileField(RegistrationFormFieldBase):
     def default_value(self):
         return None
 
-    def get_friendly_data(self, registration_data, for_humans=False):
+    def get_friendly_data(self, registration_data, for_humans=False, for_search=False):
         if not registration_data:
             return ''
         return registration_data.filename

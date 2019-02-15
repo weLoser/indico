@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,21 +14,27 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from persistent import Persistent
+from flask_multipass import IdentityInfo
 
-from indico.core.config import Config
-from indico.modules.users import User, logger
+from indico.legacy.common.cache import GenericCache
+from indico.legacy.fossils.user import IAvatarFossil, IAvatarMinimalFossil
 from indico.modules.auth import Identity
+from indico.modules.users import User, logger
 from indico.util.caching import memoize_request
-from indico.util.fossilize import fossilizes, Fossilizable
-from indico.util.string import to_unicode, return_ascii, encode_utf8
-from indico.util.redis import write_client as redis_write_client
-from indico.util.redis import avatar_links
-from MaKaC.common.Locators import Locator
-from MaKaC.fossils.user import IAvatarFossil, IAvatarMinimalFossil
+from indico.util.fossilize import Fossilizable, fossilizes
+from indico.util.locators import locator_property
+from indico.util.string import encode_utf8, return_ascii, to_unicode
 
 
-class AvatarUserWrapper(Persistent, Fossilizable):
+AVATAR_FIELD_MAP = {
+    'email': 'email',
+    'name': 'first_name',
+    'surName': 'last_name',
+    'organisation': 'affiliation'
+}
+
+
+class AvatarUserWrapper(Fossilizable):
     """Avatar-like wrapper class that holds a DB-stored user."""
 
     fossilizes(IAvatarFossil, IAvatarMinimalFossil)
@@ -82,25 +88,6 @@ class AvatarUserWrapper(Persistent, Fossilizable):
     @property
     def api_key(self):
         return self.user.api_key if self.user else None
-
-    def linkTo(self, obj, role):
-        if not self.user or self.user.is_deleted:
-            return
-        link = self.user.link_to(obj, role)
-        if link and redis_write_client:
-            event = avatar_links.event_from_obj(obj)
-            if event:
-                avatar_links.add_link(self.user, event, '{}_{}'.format(link.type, link.role))
-
-    def unlinkTo(self, obj, role):
-        if not self.user or self.user.is_deleted:
-            return
-        links = self.user.unlink_to(obj, role)
-        if redis_write_client:
-            for link in links:
-                event = avatar_links.event_from_obj(obj)
-                if event:
-                    avatar_links.del_link(self.user, event, '{}_{}'.format(link.type, link.role))
 
     def getStatus(self):
         return 'deleted' if not self.user or self.user.is_deleted else 'activated'
@@ -181,17 +168,6 @@ class AvatarUserWrapper(Persistent, Fossilizable):
         self.user.settings.set('timezone', to_unicode(tz))
 
     @encode_utf8
-    def getTimezone(self):
-        default = Config.getInstance().getDefaultTimezone()
-        return self.user.settings.get('timezone', default) if self.user else default
-
-    def getDisplayTZMode(self):
-        return 'MyTimezone' if self.user and self.user.settings.get('force_timezone') else 'Event Timezone'
-
-    def setDisplayTZMode(self, display_tz='Event Timezone'):
-        self.user.settings.set('force_timezone', display_tz == 'MyTimezone')
-
-    @encode_utf8
     def getAddress(self):
         return self.user.address if self.user else ''
 
@@ -234,39 +210,16 @@ class AvatarUserWrapper(Persistent, Fossilizable):
 
     setPhone = setTelephone
 
-    def isRegisteredInConf(self, conf):
-        if not self.user:
-            return False
-        return any(obj for obj in self.user.get_linked_objects('registration', 'registrant')
-                   if obj.getConference() == conf)
-
-    def getRegistrantById(self, conf_id):
-        if not self.user:
-            return None
-        return next((obj for obj in self.user.get_linked_objects('registration', 'registrant')
-                    if obj.getConference().id == conf_id), None)
-
-    def containsUser(self, avatar):
-        if self.user is None:
-            return False
-        return int(avatar.id) == self.user.id if avatar else False
-
-    containsMember = containsUser
-
-    def canModify(self, aw_or_user):
-        if hasattr(aw_or_user, 'getUser'):
-            aw_or_user = aw_or_user.getUser()
-        return self.canUserModify(aw_or_user)
-
     def canUserModify(self, avatar):
         if not self.user:
             return False
         return avatar.id == str(self.user.id) or avatar.user.is_admin
 
-    def getLocator(self):
-        d = Locator()
+    @locator_property
+    def locator(self):
+        d = {}
         if self.user:
-            d["userId"] = self.user.id
+            d['userId'] = self.user.id
         return d
 
     def isAdmin(self):
@@ -370,3 +323,22 @@ class AvatarProvisionalWrapper(Fossilizable):
             self.identity_info.provider.name,
             self.identity_info.identifier,
             **self.data.to_dict())
+
+
+def search_avatars(criteria, exact=False, search_externals=False):
+    from indico.modules.users.util import search_users
+
+    if not any(criteria.viewvalues()):
+        return []
+
+    def _process_identities(obj):
+        if isinstance(obj, IdentityInfo):
+            GenericCache('pending_identities').set('{}:{}'.format(obj.provider.name, obj.identifier), obj.data)
+            return AvatarProvisionalWrapper(obj)
+        else:
+            return obj.as_avatar
+
+    results = search_users(exact=exact, external=search_externals,
+                           **{AVATAR_FIELD_MAP[k]: v for (k, v) in criteria.iteritems() if v})
+
+    return [_process_identities(obj) for obj in results]

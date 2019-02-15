@@ -21,14 +21,16 @@
         {% if item_type == 'EVENT' %}
             {% if item.can_manage(session.user) %}
                 <li>
-                    <a href="{{ url_for('event_mgmt.conferenceModification', item) }}">
+                    <a href="{{ url_for('event_management.settings', item) }}">
                         {% trans %}Edit Event{% endtrans %}
                     </a>
                 </li>
                 <li>
-                    <a href="{{ url_for('event_mgmt.confModifTools-clone', item) }}">
+                    <a data-href="{{ url_for('event_management.clone', item) }}"
+                       data-title="{% trans %}Clone Event{% endtrans %}"
+                       data-ajax-dialog>
                         {% trans %}Clone Event{% endtrans %}
-                    </a>
+                   </a>
                 </li>
             {% endif %}
             {% if item.can_edit_note(session.user) %}
@@ -78,7 +80,8 @@
             {% endif %}
             {% if session_.can_manage(session.user, 'coordinate') %}
                 <li>
-                    <a href="{{ url_for('timetable.manage_session', session_) }}"
+                    <a href="{{ url_for('timetable.manage_session', session_,
+                                        _anchor=item.start_dt.astimezone(session_.event.tzinfo).strftime('%Y%m%d')) }}"
                        title="{% trans %}Edit the timetable for this session{% endtrans %}">
                         {% trans %}Edit session timetable{% endtrans %}
                     </a>

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,13 +16,13 @@
 
 from __future__ import unicode_literals
 
-from flask import session, render_template
+from flask import render_template, session
 
 from indico.core import signals
 from indico.core.logger import Logger
-from indico.modules.events.timetable.models.entries import TimetableEntryType, TimetableEntry
-from indico.util.i18n import _
+from indico.modules.events.timetable.models.entries import TimetableEntry, TimetableEntryType
 from indico.util.date_time import now_utc
+from indico.util.i18n import _
 from indico.web.flask.templating import template_hook
 from indico.web.flask.util import url_for
 from indico.web.menu import SideMenuItem
@@ -61,7 +61,7 @@ def _render_session_timetable(session, **kwargs):
 
 
 @template_hook('now-happening')
-def _render_now_happening_info(event, **kwargs):
+def _render_now_happening_info(event, text_color_css, **kwargs):
     from indico.modules.events.layout import layout_settings
     if layout_settings.get(event, 'show_banner'):
         current_dt = now_utc(exact=False)
@@ -71,4 +71,4 @@ def _render_now_happening_info(event, **kwargs):
         if not entries:
             return
         return render_template('events/display/now_happening.html', event=event, entries=entries,
-                               text_color=kwargs.get('text_color'))
+                               text_color_css=text_color_css)

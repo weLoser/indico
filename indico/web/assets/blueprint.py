@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,21 +16,46 @@
 
 import os
 
-from flask import current_app, json, session, render_template, Response
+from flask import Response, current_app, redirect, send_from_directory
 from werkzeug.exceptions import NotFound
 
-from indico.core.config import Config
+import indico
+from indico.core.config import config
 from indico.core.plugins import plugin_engine
-from indico.modules.users.util import serialize_user
-from indico.util.caching import make_hashable
-from indico.util.i18n import po_to_json
-from indico.util.string import crc32
-from indico.web.assets.vars_js import generate_global_file
-from indico.web.flask.util import send_file
+from indico.web.assets.vars_js import generate_global_file, generate_i18n_file, generate_user_file
+from indico.web.flask.util import send_file, url_for
 from indico.web.flask.wrappers import IndicoBlueprint
 
 
 assets_blueprint = IndicoBlueprint('assets', __name__, url_prefix='/assets')
+
+assets_blueprint.add_url_rule('!/css/<path:filename>', 'css', build_only=True)
+assets_blueprint.add_url_rule('!/images/<path:filename>', 'image', build_only=True)
+assets_blueprint.add_url_rule('!/fonts/<path:filename>', 'fonts', build_only=True)
+assets_blueprint.add_url_rule('!/dist/<path:filename>', 'dist', build_only=True)
+
+
+@assets_blueprint.route('!/<any(images,fonts):folder>/<path:filename>__v<version>.<fileext>')
+@assets_blueprint.route('!/<any(css,dist,images,fonts):folder>/<path:filename>.<fileext>')
+def folder_file(folder, filename, fileext, version=None):
+    assets_dir = os.path.join(current_app.root_path, 'web', 'static')
+    return send_from_directory(assets_dir, os.path.join(folder, filename + '.' + fileext))
+
+
+@assets_blueprint.route('!/static/plugins/<plugin>/<path:filename>__v<version>.<fileext>')
+@assets_blueprint.route('!/static/plugins/<plugin>/<path:filename>.<fileext>')
+def plugin_file(plugin, filename, fileext, version=None):
+    plugin = plugin_engine.get_plugin(plugin)
+    if not plugin:
+        raise NotFound
+    assets_dir = os.path.join(plugin.root_path, 'static')
+    return send_from_directory(assets_dir, filename + '.' + fileext)
+
+
+@assets_blueprint.route('!/<filename>')
+def root(filename):
+    assets_dir = os.path.join(current_app.root_path, 'web', 'static')
+    return send_from_directory(assets_dir, filename)
 
 
 @assets_blueprint.route('/js-vars/global.js')
@@ -39,17 +64,14 @@ def js_vars_global():
     Provides a JS file with global definitions (all users)
     Useful for server-wide config options, URLs, etc...
     """
-    config = Config.getInstance()
-    config_hash = crc32(repr(make_hashable(sorted(config._configVars.items()))))
-    cache_file = os.path.join(config.getXMLCacheDir(), 'assets_global_{}.js'.format(config_hash))
+    cache_file = os.path.join(config.CACHE_DIR, 'assets_global_{}_{}.js'.format(indico.__version__, config.hash))
 
-    if not os.path.exists(cache_file):
-        data = generate_global_file(config)
+    if config.DEBUG or not os.path.exists(cache_file):
+        data = generate_global_file()
         with open(cache_file, 'wb') as f:
             f.write(data)
 
-    return send_file('global.js', cache_file,
-                     mimetype='application/x-javascript', no_cache=False, conditional=True)
+    return send_file('global.js', cache_file, mimetype='application/javascript', no_cache=False, conditional=True)
 
 
 @assets_blueprint.route('/js-vars/user.js')
@@ -58,54 +80,44 @@ def js_vars_user():
     Provides a JS file with user-specific definitions
     Useful for favorites, settings etc.
     """
-    user = session.user
-    if user is None:
-        user_vars = {}
-    else:
-        user_vars = {
-            'id': user.id,
-            'first_name': user.first_name,
-            'last_name': user.last_name,
-            'favorite_users': {u.id: serialize_user(u) for u in user.favorite_users}
-        }
-    data = render_template('assets/vars_user.js', user_vars=user_vars, user=user)
-    return Response(data, mimetype='application/x-javascript')
-
-
-def locale_data(path, name, domain):
-    po_file = os.path.join(path, name, 'LC_MESSAGES', 'messages-js.po')
-    return po_to_json(po_file, domain=domain, locale=name) if os.access(po_file, os.R_OK) else {}
+    return Response(generate_user_file(), mimetype='application/javascript')
 
 
 @assets_blueprint.route('/i18n/<locale_name>.js')
 def i18n_locale(locale_name):
-    """
-    Retrieve a locale in a Jed-compatible format
-    """
-    config = Config.getInstance()
-    root_path = os.path.join(current_app.root_path, 'translations')
-    plugin_key = ','.join(sorted(plugin_engine.get_active_plugins()))
-    cache_file = os.path.join(config.getXMLCacheDir(), 'assets_i18n_{}_{}.js'.format(locale_name, crc32(plugin_key)))
+    return _get_i18n_locale(locale_name)
 
-    if not os.path.exists(cache_file):
-        i18n_data = locale_data(root_path, locale_name, 'indico')
-        if not i18n_data:
-            # Dummy data, not having the indico domain would cause lots of failures
-            i18n_data = {'indico': {'': {'domain': 'indico',
-                                         'lang': locale_name}}}
 
-        for pid, plugin in plugin_engine.get_active_plugins().iteritems():
-            data = {}
-            if plugin.translation_path:
-                data = locale_data(plugin.translation_path, locale_name, pid)
-            if not data:
-                # Dummy entry so we can still load the domain
-                data = {pid: {'': {'domain': pid,
-                                   'lang': locale_name}}}
-            i18n_data.update(data)
+@assets_blueprint.route('/i18n/<locale_name>-react.js')
+def i18n_locale_react(locale_name):
+    return _get_i18n_locale(locale_name, react=True)
 
+
+def _get_i18n_locale(locale_name, react=False):
+    """Retrieve a locale in a Jed-compatible format"""
+
+    react_suffix = '-react' if react else ''
+    cache_file = os.path.join(config.CACHE_DIR, 'assets_i18n_{}{}_{}_{}.js'.format(
+        locale_name, react_suffix, indico.__version__, config.hash))
+
+    if config.DEBUG or not os.path.exists(cache_file):
+        i18n_data = generate_i18n_file(locale_name, react=react)
         with open(cache_file, 'wb') as f:
-            f.write("window.TRANSLATIONS = {};".format(json.dumps(i18n_data)))
+            f.write("window.{} = {};".format('REACT_TRANSLATIONS' if react else 'TRANSLATIONS', i18n_data))
 
-    return send_file('{}.js'.format(locale_name), cache_file, mimetype='application/x-javascript',
+    return send_file('{}{}.js'.format(locale_name, react_suffix), cache_file, mimetype='application/javascript',
                      no_cache=False, conditional=True)
+
+
+@assets_blueprint.route('!/static/custom/<any(css,js):folder>/<path:filename>', endpoint='custom')
+@assets_blueprint.route('!/static/custom/files/<path:filename>', endpoint='custom', defaults={'folder': 'files'})
+def static_custom(folder, filename):
+    customization_dir = config.CUSTOMIZATION_DIR
+    if not customization_dir:
+        raise NotFound
+    return send_from_directory(os.path.join(customization_dir, folder), filename)
+
+
+@assets_blueprint.route('!/favicon.ico')
+def favicon():
+    return redirect(url_for('.image', filename='indico.ico'))

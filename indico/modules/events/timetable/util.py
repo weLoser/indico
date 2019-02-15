@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -22,7 +22,7 @@ from operator import attrgetter
 from flask import render_template, session
 from pytz import utc
 from sqlalchemy import Date, cast
-from sqlalchemy.orm import joinedload, subqueryload, undefer, contains_eager
+from sqlalchemy.orm import contains_eager, joinedload, subqueryload, undefer
 
 from indico.core.db import db
 from indico.modules.events.contributions.models.contributions import Contribution
@@ -30,13 +30,13 @@ from indico.modules.events.models.events import Event
 from indico.modules.events.models.persons import EventPersonLink
 from indico.modules.events.sessions.models.blocks import SessionBlock
 from indico.modules.events.sessions.models.sessions import Session
-from indico.modules.events.timetable.legacy import TimetableSerializer
+from indico.modules.events.timetable.legacy import TimetableSerializer, serialize_event_info
 from indico.modules.events.timetable.models.breaks import Break
 from indico.modules.events.timetable.models.entries import TimetableEntry, TimetableEntryType
-from indico.modules.events.timetable.legacy import serialize_event_info
 from indico.util.caching import memoize_request
 from indico.util.date_time import format_time, get_day_end, iterdays
 from indico.util.i18n import _
+from indico.util.string import to_unicode
 from indico.web.flask.templating import get_template_module
 from indico.web.forms.colors import get_colors
 
@@ -255,20 +255,24 @@ def get_category_timetable(categ_ids, start_dt, end_dt, detail_level='event', tz
     return result
 
 
-def render_entry_info_balloon(entry, editable=False, sess=None):
+def render_entry_info_balloon(entry, editable=False, sess=None, is_session_timetable=False):
     if entry.break_:
         return render_template('events/timetable/balloons/break.html', break_=entry.break_, editable=editable,
-                               can_manage_event=entry.event_new.can_manage(session.user), color_list=get_colors())
+                               can_manage_event=entry.event.can_manage(session.user), color_list=get_colors(),
+                               event_locked=entry.event.is_locked,
+                               is_session_timetable=is_session_timetable)
     elif entry.contribution:
         return render_template('events/timetable/balloons/contribution.html', contrib=entry.contribution,
                                editable=editable,
-                               can_manage_event=entry.event_new.can_manage(session.user),
-                               can_manage_contributions=sess.can_manage_contributions(session.user) if sess else True)
+                               can_manage_event=entry.event.can_manage(session.user),
+                               can_manage_contributions=sess.can_manage_contributions(session.user) if sess else True,
+                               event_locked=entry.event.is_locked)
     elif entry.session_block:
         return render_template('events/timetable/balloons/block.html', block=entry.session_block, editable=editable,
                                can_manage_session=sess.can_manage(session.user) if sess else True,
                                can_manage_blocks=sess.can_manage_blocks(session.user) if sess else True,
-                               color_list=get_colors())
+                               color_list=get_colors(), event_locked=entry.event.is_locked,
+                               is_session_timetable=is_session_timetable)
     else:
         raise ValueError("Invalid entry")
 
@@ -277,9 +281,9 @@ def render_session_timetable(session, timetable_layout=None, management=False):
     if not session.start_dt:
         # no scheduled sessions present
         return ''
-    timetable_data = TimetableSerializer().serialize_session_timetable(session, without_blocks=True,
-                                                                       strip_empty_days=True)
-    event_info = serialize_event_info(session.event_new)
+    timetable_data = TimetableSerializer(session.event).serialize_session_timetable(session, without_blocks=True,
+                                                                                    strip_empty_days=True)
+    event_info = serialize_event_info(session.event)
     tpl = get_template_module('events/timetable/_timetable.html')
     return tpl.render_timetable(timetable_data, event_info, timetable_layout=timetable_layout, management=management)
 
@@ -306,7 +310,7 @@ def shift_following_entries(entry, shift, session_=None):
 
 
 def get_timetable_offline_pdf_generator(event):
-    from MaKaC.PDFinterface.conference import TimeTablePlain, TimetablePDFFormat
+    from indico.legacy.pdfinterface.conference import TimeTablePlain, TimetablePDFFormat
     pdf_format = TimetablePDFFormat()
     return TimeTablePlain(event, session.user, sortingCrit=None, ttPDFFormat=pdf_format, pagesize='A4',
                           fontsize='normal')
@@ -340,7 +344,7 @@ def get_time_changes_notifications(changes, tzinfo, entry=None):
             else:
                 raise ValueError("Invalid change in session block.")
         if msg:
-            notifications.append(msg.format(format_time(new_time, timezone=tzinfo)))
+            notifications.append(msg.format(to_unicode(format_time(new_time, timezone=tzinfo))))
     return notifications
 
 

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,6 +16,7 @@
 
 from __future__ import unicode_literals
 
+import itertools
 from operator import attrgetter
 
 from flask import flash, has_request_context, session
@@ -34,16 +35,15 @@ from indico.core.db.sqlalchemy.principals import PrincipalType
 from indico.core.db.sqlalchemy.util.models import get_default_values
 from indico.modules.users.models.affiliations import UserAffiliation
 from indico.modules.users.models.emails import UserEmail
-from indico.modules.users.models.favorites import favorite_user_table, favorite_category_table
-from indico.modules.users.models.links import UserLink
+from indico.modules.users.models.favorites import favorite_category_table, favorite_user_table
 from indico.util.i18n import _
 from indico.util.locators import locator_property
-from indico.util.string import return_ascii, format_full_name, format_repr
-from indico.util.struct.enum import TitledIntEnum
+from indico.util.string import format_full_name, format_repr, return_ascii
+from indico.util.struct.enum import RichIntEnum
 
 
-class UserTitle(TitledIntEnum):
-    __titles__ = ('', _('Mr.'), _('Ms.'), _('Mrs.'), _('Dr.'), _('Prof.'))
+class UserTitle(RichIntEnum):
+    __titles__ = ('', _('Mr'), _('Ms'), _('Mrs'), _('Dr'), _('Prof.'))
     none = 0
     mr = 1
     ms = 2
@@ -51,12 +51,8 @@ class UserTitle(TitledIntEnum):
     dr = 4
     prof = 5
 
-    @classmethod
-    def from_legacy(cls, text):
-        return next((x for x in cls if unicode(x.title) == text), None)
 
-
-class NameFormat(TitledIntEnum):
+class NameFormat(RichIntEnum):
     __titles__ = (_('John Doe'), _('Doe, John'), _('Doe, J.'), _('J. Doe'),
                   _('John DOE'), _('DOE, John'), _('DOE, J.'), _('J. DOE'))
     first_last = 0
@@ -165,12 +161,16 @@ class User(PersonMixin, db.Model):
     # Useful when dealing with both users and groups in the same code
     is_group = False
     is_single_person = True
+    is_event_role = False
     is_network = False
     principal_order = 0
     principal_type = PrincipalType.user
 
     __tablename__ = 'users'
-    __table_args__ = (db.CheckConstraint('id != merged_into_id', 'not_merged_self'),
+    __table_args__ = (db.Index(None, 'is_system', unique=True, postgresql_where=db.text('is_system')),
+                      db.CheckConstraint('NOT is_system OR (NOT is_blocked AND NOT is_pending AND NOT is_deleted)',
+                                         'valid_system_user'),
+                      db.CheckConstraint('id != merged_into_id', 'not_merged_self'),
                       db.CheckConstraint("is_pending OR (first_name != '' AND last_name != '')",
                                          'not_pending_proper_names'),
                       {'schema': 'users'})
@@ -216,6 +216,12 @@ class User(PersonMixin, db.Model):
         db.Integer,
         db.ForeignKey('users.users.id'),
         nullable=True
+    )
+    #: if the user is the default system user
+    is_system = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=False
     )
     #: if the user is an administrator with unrestricted access to everything
     is_admin = db.Column(
@@ -317,13 +323,6 @@ class User(PersonMixin, db.Model):
         cascade='all, delete-orphan',
         backref=db.backref('user', lazy=True)
     )
-    #: the legacy objects the user is connected to
-    linked_objects = db.relationship(
-        'UserLink',
-        lazy='dynamic',
-        cascade='all, delete-orphan',
-        backref=db.backref('user', lazy=True)
-    )
     #: the active API key of the user
     api_key = db.relationship(
         'APIKey',
@@ -362,13 +361,16 @@ class User(PersonMixin, db.Model):
     # - attachment_files (AttachmentFile.user)
     # - attachments (Attachment.user)
     # - blockings (Blocking.created_by_user)
+    # - content_reviewer_for_contributions (Contribution.paper_content_reviewers)
     # - convener_for_tracks (Track.conveners)
     # - created_events (Event.creator)
     # - event_log_entries (EventLogEntry.user)
     # - event_notes_revisions (EventNoteRevision.user)
     # - event_persons (EventPerson.user)
     # - event_reminders (EventReminder.creator)
+    # - event_roles (EventRole.members)
     # - favorite_of (User.favorite_users)
+    # - favorite_rooms (Room.favorite_of)
     # - global_abstract_reviewer_for_events (Event.global_abstract_reviewers)
     # - global_convener_for_events (Event.global_conveners)
     # - in_attachment_acls (AttachmentPrincipal.user)
@@ -378,29 +380,45 @@ class User(PersonMixin, db.Model):
     # - in_contribution_acls (ContributionPrincipal.user)
     # - in_event_acls (EventPrincipal.user)
     # - in_event_settings_acls (EventSettingPrincipal.user)
+    # - in_room_acls (RoomPrincipal.user)
     # - in_session_acls (SessionPrincipal.user)
     # - in_settings_acls (SettingPrincipal.user)
+    # - judge_for_contributions (Contribution.paper_judges)
     # - judged_abstracts (Abstract.judge)
+    # - judged_papers (PaperRevision.judge)
+    # - layout_reviewer_for_contributions (Contribution.paper_layout_reviewers)
     # - local_groups (LocalGroup.members)
     # - merged_from_users (User.merged_into_user)
     # - modified_abstract_comments (AbstractComment.modified_by)
     # - modified_abstracts (Abstract.modified_by)
+    # - modified_review_comments (PaperReviewComment.modified_by)
     # - oauth_tokens (OAuthToken.user)
     # - owned_rooms (Room.owner)
-    # - paper_reviewing_roles (PaperReviewingRole.user)
+    # - paper_competences (PaperCompetence.user)
+    # - paper_reviews (PaperReview.user)
+    # - paper_revisions (PaperRevision.submitter)
     # - registrations (Registration.user)
     # - requests_created (Request.created_by_user)
     # - requests_processed (Request.processed_by_user)
     # - reservations (Reservation.created_by_user)
     # - reservations_booked_for (Reservation.booked_for_user)
+    # - review_comments (PaperReviewComment.user)
     # - static_sites (StaticSite.creator)
     # - survey_submissions (SurveySubmission.user)
     # - vc_rooms (VCRoom.created_by_user)
+
+    @staticmethod
+    def get_system_user():
+        return User.query.filter_by(is_system=True).one()
 
     @property
     def as_principal(self):
         """The serializable principal identifier of this user"""
         return 'User', self.id
+
+    @property
+    def identifier(self):
+        return 'User:{}'.format(self.id)
 
     @property
     def as_avatar(self):
@@ -415,9 +433,13 @@ class User(PersonMixin, db.Model):
     as_legacy = as_avatar
 
     @property
-    def avatar_css(self):
+    def avatar_bg_color(self):
         from indico.modules.users.util import get_color_for_username
-        return 'background-color: {};'.format(get_color_for_username(self.full_name))
+        return get_color_for_username(self.full_name)
+
+    @property
+    def avatar_css(self):
+        return 'background-color: {};'.format(self.avatar_bg_color)
 
     @property
     def external_identities(self):
@@ -520,6 +542,19 @@ class User(PersonMixin, db.Model):
             if item not in done:
                 yield item
 
+    @property
+    def can_get_all_multipass_groups(self):
+        """Check whether it is possible to get all multipass groups the user is in."""
+        return all(multipass.identity_providers[x.provider].supports_get_identity_groups
+                   for x in self.identities
+                   if x.provider != 'indico' and x.provider in multipass.identity_providers)
+
+    def iter_all_multipass_groups(self):
+        """Iterate over all multipass groups the user is in"""
+        return itertools.chain.from_iterable(multipass.identity_providers[x.provider].get_identity_groups(x.identifier)
+                                             for x in self.identities
+                                             if x.provider != 'indico' and x.provider in multipass.identity_providers)
+
     def get_full_name(self, *args, **kwargs):
         kwargs['_show_empty_names'] = True
         return super(User, self).get_full_name(*args, **kwargs)
@@ -536,30 +571,6 @@ class User(PersonMixin, db.Model):
         db.session.flush()
         secondary.is_primary = True
         db.session.flush()
-
-    def get_linked_roles(self, type_):
-        """Retrieves the roles the user is linked to for a given type"""
-        return UserLink.get_linked_roles(self, type_)
-
-    def get_linked_objects(self, type_, role):
-        """Retrieves linked objects for the user"""
-        return UserLink.get_links(self, type_, role)
-
-    def link_to(self, obj, role):
-        """Adds a link between the user and an object
-
-        :param obj: a legacy object
-        :param role: the role to use in the link
-        """
-        return UserLink.create_link(self, obj, role)
-
-    def unlink_to(self, obj, role):
-        """Removes a link between the user and an object
-
-        :param obj: a legacy object
-        :param role: the role to use in the link
-        """
-        return UserLink.remove_link(self, obj, role)
 
     def synchronize_data(self, refresh=False):
         """Synchronize the fields of the user from the sync identity.

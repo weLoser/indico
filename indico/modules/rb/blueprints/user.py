@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -15,13 +15,12 @@
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
 from indico.modules.rb.controllers.admin import reservations as reservation_admin_handlers
-from indico.modules.rb.controllers.user import (
-    blockings as blocking_handlers,
-    index as index_handler,
-    photos as photo_handlers,
-    reservations as reservation_handlers,
-    rooms as room_handlers
-)
+from indico.modules.rb.controllers.user import blockings as blocking_handlers
+from indico.modules.rb.controllers.user import index as index_handler
+from indico.modules.rb.controllers.user import photos as photo_handlers
+from indico.modules.rb.controllers.user import reservations as reservation_handlers
+from indico.modules.rb.controllers.user import rooms as room_handlers
+from indico.web.flask.util import make_compat_redirect_func
 from indico.web.flask.wrappers import IndicoBlueprint
 
 
@@ -30,8 +29,7 @@ _bp = IndicoBlueprint('rooms', __name__, template_folder='../templates', virtual
 
 
 # Photos
-_bp.add_url_rule('/room/<roomLocation>/<int:roomID>/photo-<any(small,large):size>.jpg', 'photo',
-                 photo_handlers.room_photo)
+_bp.add_url_rule('/room/<int:roomID>/photo.jpg', 'photo', photo_handlers.room_photo)
 
 
 # Home, map, lists, search
@@ -129,8 +127,7 @@ _bp.add_url_rule('/room/<roomLocation>/<int:roomID>/',
 
 _bp.add_url_rule('/room/<roomLocation>/<int:roomID>/stats',
                  'roomBooking-roomStats',
-                 room_handlers.RHRoomBookingRoomStats,
-                 methods=('GET', 'POST'))
+                 room_handlers.RHRoomBookingRoomStats)
 
 
 # Room blocking
@@ -160,3 +157,18 @@ _bp.add_url_rule('/blocking/list',
 _bp.add_url_rule('/blocking/list/my-rooms',
                  'blocking_my_rooms',
                  blocking_handlers.RHRoomBookingBlockingsForMyRooms)
+
+
+_compat_bp = IndicoBlueprint('compat_rooms', __name__)
+_compat_bp.add_url_rule('/roomBooking.py', 'roomBooking',
+                        make_compat_redirect_func(_bp, 'roomBooking'))
+_compat_bp.add_url_rule('/roomBooking.py/mapOfRooms', 'roomBooking-mapOfRooms',
+                        make_compat_redirect_func(_bp, 'roomBooking-mapOfRooms'))
+_compat_bp.add_url_rule('/roomBooking.py/search4Bookings', 'roomBooking-search4Bookings',
+                        make_compat_redirect_func(_bp, 'roomBooking-search4Bookings'))
+_compat_bp.add_url_rule('/roomBooking.py/bookingDetails', 'roomBooking-bookingDetails',
+                        make_compat_redirect_func(_bp, 'roomBooking-bookingDetails'))
+_compat_bp.add_url_rule('/roomBooking.py/roomDetails', 'roomBooking-roomDetails',
+                        make_compat_redirect_func(_bp, 'roomBooking-roomDetails'))
+_compat_bp.add_url_rule('/roomBooking.py/roomStats', 'roomBooking-roomStats',
+                        make_compat_redirect_func(_bp, 'roomBooking-roomStats'))

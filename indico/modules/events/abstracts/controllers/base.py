@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,8 +20,9 @@ from flask import request, session
 from werkzeug.exceptions import Forbidden
 
 from indico.modules.events.abstracts.models.abstracts import Abstract
-from MaKaC.webinterface.rh.base import RHModificationBaseProtected
-from MaKaC.webinterface.rh.conferenceDisplay import RHConferenceBaseDisplay
+from indico.modules.events.controllers.base import RHDisplayEventBase
+from indico.modules.events.management.controllers.base import ManageEventMixin
+from indico.modules.events.util import check_event_locked
 
 
 class SpecificAbstractMixin:
@@ -42,10 +43,10 @@ class SpecificAbstractMixin:
             query = query.options(*self._abstract_query_options)
         return query
 
-    def _checkParams(self):
+    def _process_args(self):
         self.abstract = self._abstract_query.filter_by(id=request.view_args['abstract_id'], is_deleted=False).one()
 
-    def _checkProtection(self):
+    def _check_access(self):
         if not self._check_abstract_protection():
             raise Forbidden
 
@@ -53,17 +54,17 @@ class SpecificAbstractMixin:
         raise NotImplementedError
 
 
-class RHAbstractsBase(RHConferenceBaseDisplay):
+class RHAbstractsBase(RHDisplayEventBase):
     """Base class for all abstract-related RHs"""
 
-    CSRF_ENABLED = True
     EVENT_FEATURE = 'abstracts'
 
-    def _checkProtection(self):
-        RHConferenceBaseDisplay._checkProtection(self)
+    def _check_access(self):
+        RHDisplayEventBase._check_access(self)
         # Only let event managers access the management versions.
-        if self.management and not self.event_new.can_manage(session.user):
+        if self.management and not self.event.can_manage(session.user):
             raise Forbidden
+        check_event_locked(self, self.event)
 
     @property
     def management(self):
@@ -71,19 +72,18 @@ class RHAbstractsBase(RHConferenceBaseDisplay):
         return request.view_args.get('management', False)
 
 
-class RHManageAbstractsBase(RHAbstractsBase, RHModificationBaseProtected):
+class RHManageAbstractsBase(ManageEventMixin, RHAbstractsBase):
     """
     Base class for all abstract-related RHs that require full event
     management permissions
     """
 
+    DENY_FRAMES = True
+
     @property
     def management(self):
         """Whether the RH is currently used in the management area"""
         return request.view_args.get('management', True)
-
-    def _checkProtection(self):
-        RHModificationBaseProtected._checkProtection(self)
 
 
 class RHAbstractBase(SpecificAbstractMixin, RHAbstractsBase):
@@ -92,13 +92,13 @@ class RHAbstractBase(SpecificAbstractMixin, RHAbstractsBase):
     to the associated abstract.
     """
 
-    def _checkParams(self, params):
-        RHAbstractsBase._checkParams(self, params)
-        SpecificAbstractMixin._checkParams(self)
+    def _process_args(self):
+        RHAbstractsBase._process_args(self)
+        SpecificAbstractMixin._process_args(self)
 
-    def _checkProtection(self):
-        RHAbstractsBase._checkProtection(self)
-        SpecificAbstractMixin._checkProtection(self)
+    def _check_access(self):
+        RHAbstractsBase._check_access(self)
+        SpecificAbstractMixin._check_access(self)
 
     def _check_abstract_protection(self):
         """Perform a permission check on the current abstract.

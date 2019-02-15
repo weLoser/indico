@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,14 +18,13 @@ from __future__ import unicode_literals
 
 from flask import flash, redirect
 
-from indico.core.config import Config
-from indico.modules.rb import settings as rb_settings
+from indico.modules.admin import RHAdminBase
+from indico.modules.admin.views import WPAdmin
+from indico.modules.rb import rb_settings
 from indico.modules.rb.forms.settings import SettingsForm
-from indico.modules.rb.views.admin.index import WPRoomBookingSettings
 from indico.util.i18n import _
 from indico.web.flask.util import url_for
 from indico.web.forms.base import FormDefaults
-from MaKaC.webinterface.rh.admins import RHAdminBase
 
 
 class RHRoomBookingSettings(RHAdminBase):
@@ -37,5 +36,4 @@ class RHRoomBookingSettings(RHAdminBase):
             flash(_('Settings saved'), 'success')
             return redirect(url_for('.settings'))
 
-        rb_active = Config.getInstance().getIsRoomBookingActive()
-        return WPRoomBookingSettings(self, rb_active=rb_active, form=form).display()
+        return WPAdmin.render_template('rb/settings.html', 'rb-settings', form=form)

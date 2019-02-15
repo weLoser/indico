@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -21,7 +21,7 @@ from indico.core.db.sqlalchemy.util.models import get_simple_column_attrs
 from indico.modules.events.cloning import EventCloner
 from indico.modules.events.features.util import is_feature_enabled
 from indico.modules.events.layout import layout_settings
-from indico.modules.events.layout.models.menu import MenuEntry, EventPage
+from indico.modules.events.layout.models.menu import EventPage, MenuEntry
 from indico.modules.events.models.events import EventType
 from indico.util.i18n import _
 
@@ -74,7 +74,7 @@ class LayoutCloner(EventCloner):
         new_menu_entry = MenuEntry(**{col: getattr(menu_entry, col) for col in base_columns})
         if menu_entry.is_page:
             with db.session.no_autoflush:  # menu_entry.page is lazy-loaded
-                page = EventPage(event_new=new_event, html=menu_entry.page.html)
+                page = EventPage(event=new_event, html=menu_entry.page.html)
             new_menu_entry.page = page
             if menu_entry.page.is_default:
                 new_event.default_page = new_menu_entry.page

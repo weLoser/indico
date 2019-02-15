@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,35 +16,35 @@
 
 from __future__ import unicode_literals
 
-from flask import session, redirect, request, flash, render_template, jsonify
+from flask import flash, jsonify, redirect, render_template, request, session
 from itsdangerous import BadData, BadSignature
 from markupsafe import Markup
+from webargs import fields
+from webargs.flaskparser import use_kwargs
 from werkzeug.exceptions import BadRequest, Forbidden, NotFound
 
 from indico.core import signals
 from indico.core.auth import multipass
-from indico.core.config import Config
+from indico.core.config import config
 from indico.core.db import db
-from indico.core.notifications import make_email
-from indico.modules.auth import logger, Identity, login_user
-from indico.modules.auth.forms import (SelectEmailForm, MultipassRegistrationForm, LocalRegistrationForm,
-                                       RegistrationEmailForm, ResetPasswordEmailForm, ResetPasswordForm,
-                                       AddLocalIdentityForm, EditLocalIdentityForm)
+from indico.core.notifications import make_email, send_email
+from indico.modules.admin import RHAdminBase
+from indico.modules.auth import Identity, logger, login_user
+from indico.modules.auth.forms import (AddLocalIdentityForm, EditLocalIdentityForm, LocalRegistrationForm,
+                                       MultipassRegistrationForm, RegistrationEmailForm, ResetPasswordEmailForm,
+                                       ResetPasswordForm, SelectEmailForm)
 from indico.modules.auth.models.registration_requests import RegistrationRequest
-from indico.modules.auth.util import load_identity_info, register_user
+from indico.modules.auth.util import impersonate_user, load_identity_info, register_user, undo_impersonate_user
 from indico.modules.auth.views import WPAuth, WPAuthUser
 from indico.modules.users import User
 from indico.modules.users.controllers import RHUserBase
 from indico.util.i18n import _
 from indico.util.signing import secure_serializer
-from indico.web.flask.util import url_for
 from indico.web.flask.templating import get_template_module
+from indico.web.flask.util import url_for
 from indico.web.forms.base import FormDefaults, IndicoForm
+from indico.web.rh import RH
 from indico.web.util import url_for_index
-
-from MaKaC.common import HelperMaKaCInfo
-from MaKaC.common.mail import GenericMailer
-from MaKaC.webinterface.rh.base import RH
 
 
 def _get_provider(name, external):
@@ -59,6 +59,12 @@ def _get_provider(name, external):
 
 class RHLogin(RH):
     """The login page"""
+
+    # Disable global CSRF check. The form might not be an IndicoForm
+    # but a normal WTForm from Flask-WTF which does not use the same
+    # CSRF token as Indico forms use. But since the form has its own
+    # CSRF check anyway disabling the global check is perfectly fine.
+    CSRF_ENABLED = False
 
     def _process(self):
         login_reason = session.pop('login_reason', None)
@@ -123,9 +129,9 @@ def _send_confirmation(email, salt, endpoint, template, template_args=None, url_
     template_args = template_args or {}
     url_args = url_args or {}
     token = secure_serializer.dumps(data or email, salt=salt)
-    url = url_for(endpoint, token=token, _external=True, _secure=True, **url_args)
+    url = url_for(endpoint, token=token, _external=True, **url_args)
     template_module = get_template_module(template, email=email, url=url, **template_args)
-    GenericMailer.send(make_email(email, template=template_module))
+    send_email(make_email(email, template=template_module))
     flash(_('We have sent you a verification email. Please check your mailbox within the next hour and open '
             'the link in that email.'))
     return redirect(url_for(endpoint, **url_args))
@@ -138,7 +144,7 @@ class RHLinkAccount(RH):
     email address and an existing user was found.
     """
 
-    def _checkParams(self):
+    def _process_args(self):
         self.identity_info = load_identity_info()
         if not self.identity_info or self.identity_info['indico_user_id'] is None:
             # Just redirect to the front page or whereever we wanted to go.
@@ -158,7 +164,7 @@ class RHLinkAccount(RH):
                 raise BadData('Emails do not match')
             session['login_identity_info']['email_verified'] = True
             session.modified = True
-            flash(_('You have successfully validated your email address and can now proceeed with the login.'),
+            flash(_('You have successfully validated your email address and can now proceed with the login.'),
                   'success')
             return redirect(url_for('.link_account', provider=self.identity_info['provider']))
 
@@ -206,7 +212,7 @@ class RHRegister(RH):
     - creation of a new user based on information from an identity provider
     """
 
-    def _checkParams(self):
+    def _process_args(self):
         self.identity_info = None
         self.provider_name = request.view_args['provider']
         if self.provider_name is not None:
@@ -217,9 +223,9 @@ class RHRegister(RH):
                 # If we have a matching user id, we shouldn't be on the registration page
                 # If the provider doesn't match it would't be a big deal but the request doesn't make sense
                 raise BadRequest
-        elif not Config.getInstance().getLocalIdentities():
+        elif not config.LOCAL_IDENTITIES:
             raise Forbidden('Local identities are disabled')
-        elif not Config.getInstance().getLocalRegistration():
+        elif not config.LOCAL_REGISTRATION:
             raise Forbidden('Local registration is disabled')
 
     def _get_verified_email(self):
@@ -290,8 +296,8 @@ class RHRegister(RH):
         user_data.update(handler.get_extra_user_data(form))
         identity_data = handler.get_identity_data(form)
         settings = {
-            'timezone': Config.getInstance().getDefaultTimezone() if session.timezone == 'LOCAL' else session.timezone,
-            'lang': session.lang or Config.getInstance().getDefaultLocale()
+            'timezone': config.DEFAULT_TIMEZONE if session.timezone == 'LOCAL' else session.timezone,
+            'lang': session.lang or config.DEFAULT_LOCALE
         }
         return {'email': email, 'extra_emails': extra_emails, 'user_data': user_data, 'identity_data': identity_data,
                 'settings': settings}
@@ -357,21 +363,22 @@ class RHAccounts(RHUserBase):
 class RHRemoveAccount(RHUserBase):
     """Removes an identity linked to a user"""
 
-    CSRF_ENABLED = True
-
-    def _checkParams(self):
-        RHUserBase._checkParams(self)
+    def _process_args(self):
+        RHUserBase._process_args(self)
         self.identity = Identity.get_one(request.view_args['identity'])
         if self.identity.user != self.user:
             raise NotFound()
 
     def _process(self):
-        if session['login_identity'] == self.identity.id:
+        if session.get('login_identity') == self.identity.id:
             raise BadRequest("The identity used to log in can't be removed")
         if self.user.local_identity == self.identity:
             raise BadRequest("The main local identity can't be removed")
         self.user.identities.remove(self.identity)
-        provider_title = multipass.identity_providers[self.identity.provider].title
+        try:
+            provider_title = multipass.identity_providers[self.identity.provider].title
+        except KeyError:
+            provider_title = self.identity.provider.title()
         flash(_("{provider} ({identifier}) successfully removed from your accounts"
               .format(provider=provider_title, identifier=self.identity.identifier)), 'success')
         return redirect(url_for('.accounts'))
@@ -509,7 +516,7 @@ class LocalRegistrationHandler(RegistrationHandler):
 
     @property
     def moderate_registrations(self):
-        return Config.getInstance().getLocalModeration()
+        return config.LOCAL_MODERATION
 
     def get_all_emails(self, form):
         emails = super(LocalRegistrationHandler, self).get_all_emails(form)
@@ -551,8 +558,8 @@ class LocalRegistrationHandler(RegistrationHandler):
 class RHResetPassword(RH):
     """Resets the password for a local identity."""
 
-    def _checkParams(self):
-        if not Config.getInstance().getLocalIdentities():
+    def _process_args(self):
+        if not config.LOCAL_IDENTITIES:
             raise Forbidden('Local identities are disabled')
 
     def _process(self):
@@ -593,3 +600,26 @@ class RHResetPassword(RH):
         form.username.data = identity.identifier
         return WPAuth.render_template('reset_password.html', form=form, identity=identity,
                                       widget_attrs={'username': {'disabled': True}})
+
+
+class RHAdminImpersonate(RHAdminBase):
+    @use_kwargs({
+        'undo': fields.Bool(missing=False),
+        'user_id': fields.Int(missing=None)
+    })
+    def _process_args(self, undo, user_id):
+        RHAdminBase._process_args(self)
+        self.user = None if undo else User.get_one(user_id, is_deleted=False)
+
+    def _check_access(self):
+        if self.user:
+            RHAdminBase._check_access(self)
+
+    def _process(self):
+        if self.user:
+            impersonate_user(self.user)
+        else:
+            # no user? it means it's an undo
+            undo_impersonate_user()
+
+        return jsonify()

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -25,7 +25,6 @@ import re
 import signal
 import SocketServer
 import struct
-import sys
 import termios
 import textwrap
 from threading import Lock
@@ -41,29 +40,6 @@ from pygments.lexers.sql import SqlLexer
 click.disable_unicode_literals_warning = True
 ignored_line_re = re.compile(r'^(?:(?P<frame>\d+):)?(?P<file>.+?)(?::(?P<line>\d+))?$')
 output_lock = Lock()
-help_text = textwrap.dedent("""
-    To use this script, you need to add the following to your logging.conf:
-
-    [logger_db]
-    level=DEBUG
-    handlers=db
-    qualname=indico.db
-    propagate=0
-
-    [handler_db]
-    class=handlers.SocketHandler
-    level=DEBUG
-    args=('localhost', 9020)
-
-
-    Also add your new logger/handler to the loggers/handlers lists, e.g. like this:
-
-    [loggers]
-    keys=root,db
-
-    [handlers]
-    keys=indico,db,other,smtp
-    """).strip()
 
 
 class LogRecordStreamHandler(SocketServer.StreamRequestHandler):
@@ -72,7 +48,7 @@ class LogRecordStreamHandler(SocketServer.StreamRequestHandler):
             chunk = self.connection.recv(4)
             if len(chunk) < 4:
                 break
-            size = struct.unpack('>L', chunk)[0]
+            size = struct.unpack(b'>L', chunk)[0]
             chunk = self.connection.recv(size)
             while len(chunk) < size:
                 chunk = chunk + self.connection.recv(size - len(chunk))
@@ -91,6 +67,14 @@ class LogRecordStreamHandler(SocketServer.StreamRequestHandler):
                 return entry
         return None
 
+    def _format_request(self, obj):
+        if obj['repl']:
+            return '\x1b[38;5;243m<shell>\x1b[0m'
+        elif obj['req_verb'] and obj['req_url']:
+            return '{} {}'.format(obj['req_verb'], obj['req_url'])
+        else:
+            return '\x1b[38;5;243m<unknown>\x1b[0m'
+
     def handle_log(self, obj):
         if any(p.match(obj.get('req_path') or '') for p in self.server.ignored_request_paths):
             return
@@ -99,13 +83,13 @@ class LogRecordStreamHandler(SocketServer.StreamRequestHandler):
             with output_lock:
                 print '\n' * 5
                 print_linesep(True, 10)
-                print '\x1b[38;5;70mBegin request\x1b[0m  {} {}'.format(obj['req_verb'] or '', obj['req_url'] or '')
+                print '\x1b[38;5;70mBegin request\x1b[0m  {}'.format(self._format_request(obj))
                 print_linesep()
             return
         elif sql_log_type == 'end_request':
             with output_lock:
-                fmt = '\x1b[38;5;202mEnd request\x1b[0m    {} {} [{} queries ({}) | {}]'
-                print fmt.format(obj['req_verb'], obj['req_url'],
+                fmt = '\x1b[38;5;202mEnd request\x1b[0m    {} [{} queries ({}) | {}]'
+                print fmt.format(self._format_request(obj),
                                  prettify_count(obj['sql_query_count']),
                                  prettify_duration(obj['req_query_duration'], True),
                                  prettify_duration(obj['req_duration'], True))
@@ -163,7 +147,7 @@ class LogRecordSocketReceiver(SocketServer.ThreadingTCPServer):
 
 
 def terminal_size():
-    h, w, hp, wp = struct.unpack('HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, struct.pack('HHHH', 0, 0, 0, 0)))
+    h, w, hp, wp = struct.unpack(b'HHHH', fcntl.ioctl(0, termios.TIOCGWINSZ, struct.pack(b'HHHH', 0, 0, 0, 0)))
     return w, h
 
 
@@ -241,11 +225,7 @@ def sigint(*unused):
 @click.option('-I', '--ignored-request-paths', multiple=True, metavar='PATH',
               help='Request paths to ignore. May be used multiple times.  Matched against request.path (e.g. '
                    '/assets/js-vars/user.js). Prefix with ~ to use a regex match instead of an exact string match.')
-@click.option('-H', '--setup-help', is_flag=True, help='Explain how to enable db logging for this script')
-def main(port, traceback_frames, ignore_selects, ignored_sources, ignored_request_paths, setup_help):
-    if setup_help:
-        print help_text
-        sys.exit(1)
+def main(port, traceback_frames, ignore_selects, ignored_sources, ignored_request_paths):
     signal.signal(signal.SIGINT, sigint)
     print 'Listening on 127.0.0.1:{}'.format(port)
     server = LogRecordSocketReceiver('localhost', port, traceback_frames=traceback_frames,

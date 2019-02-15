@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,30 +14,40 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from datetime import datetime, date
+from datetime import datetime
 from math import ceil
 
 from dateutil import rrule
-from sqlalchemy import Date, or_, func
-from sqlalchemy.ext.hybrid import hybrid_property, hybrid_method
+from sqlalchemy import Date, or_
+from sqlalchemy.ext.hybrid import hybrid_property
 from sqlalchemy.orm import defaultload
 from sqlalchemy.sql import cast
 
 from indico.core.db import db
+from indico.core.db.sqlalchemy import PyIntEnum
 from indico.core.db.sqlalchemy.util.queries import db_dates_overlap
 from indico.core.errors import IndicoError
 from indico.modules.rb.models.reservation_edit_logs import ReservationEditLog
 from indico.modules.rb.models.util import proxy_to_reservation_if_last_valid_occurrence
 from indico.util import date_time
-from indico.util.date_time import iterdays, format_date
+from indico.util.date_time import format_date, iterdays
 from indico.util.serializer import Serializer
-from indico.util.string import return_ascii
+from indico.util.string import format_repr, return_ascii
+from indico.util.struct.enum import IndicoEnum
 from indico.util.user import unify_user_args
+
+
+class ReservationOccurrenceState(int, IndicoEnum):
+    # XXX: 1 is omitted on purpose to keep the values in sync with ReservationState
+    valid = 2
+    cancelled = 3
+    rejected = 4
 
 
 class ReservationOccurrence(db.Model, Serializer):
     __tablename__ = 'reservation_occurrences'
-    __table_args__ = {'schema': 'roombooking'}
+    __table_args__ = (db.CheckConstraint("rejection_reason != ''", 'rejection_reason_not_empty'),
+                      {'schema': 'roombooking'})
     __api_public__ = (('start_dt', 'startDT'), ('end_dt', 'endDT'), 'is_cancelled', 'is_rejected')
 
     #: A relationship loading strategy that will avoid loading the
@@ -69,18 +79,14 @@ class ReservationOccurrence(db.Model, Serializer):
         nullable=False,
         default=False
     )
-    is_cancelled = db.Column(
-        db.Boolean,
+    state = db.Column(
+        PyIntEnum(ReservationOccurrenceState),
         nullable=False,
-        default=False
-    )
-    is_rejected = db.Column(
-        db.Boolean,
-        nullable=False,
-        default=False
+        default=ReservationOccurrenceState.valid
     )
     rejection_reason = db.Column(
-        db.String
+        db.String,
+        nullable=True
     )
 
     # relationship backrefs:
@@ -96,22 +102,19 @@ class ReservationOccurrence(db.Model, Serializer):
 
     @hybrid_property
     def is_valid(self):
-        return not self.is_rejected and not self.is_cancelled
+        return self.state == ReservationOccurrenceState.valid
 
-    @is_valid.expression
-    def is_valid(self):
-        return ~self.is_rejected & ~self.is_cancelled
+    @hybrid_property
+    def is_cancelled(self):
+        return self.state == ReservationOccurrenceState.cancelled
+
+    @hybrid_property
+    def is_rejected(self):
+        return self.state == ReservationOccurrenceState.rejected
 
     @return_ascii
     def __repr__(self):
-        return u'<ReservationOccurrence({0}, {1}, {2}, {3}, {4}, {5})>'.format(
-            self.reservation_id,
-            self.start_dt,
-            self.end_dt,
-            self.is_cancelled,
-            self.is_rejected,
-            self.notification_sent
-        )
+        return format_repr(self, 'reservation_id', 'start_dt', 'end_dt', 'state')
 
     @classmethod
     def create_series_for_reservation(cls, reservation):
@@ -137,31 +140,27 @@ class ReservationOccurrence(db.Model, Serializer):
         if repeat_frequency == RepeatFrequency.NEVER:
             return [start]
 
-        if repeat_frequency == RepeatFrequency.DAY:
-            if repeat_interval == 1:
-                return rrule.rrule(rrule.DAILY, dtstart=start, until=end)
-            else:
-                raise IndicoError('Unsupported interval')
+        elif repeat_frequency == RepeatFrequency.DAY:
+            if repeat_interval != 1:
+                raise IndicoError(u'Unsupported interval')
+            return rrule.rrule(rrule.DAILY, dtstart=start, until=end)
 
         elif repeat_frequency == RepeatFrequency.WEEK:
-            if 0 < repeat_interval < 4:
-                return rrule.rrule(rrule.WEEKLY, dtstart=start, until=end, interval=repeat_interval)
-            else:
-                raise IndicoError('Unsupported interval')
+            if repeat_interval <= 0:
+                raise IndicoError(u'Unsupported interval')
+            return rrule.rrule(rrule.WEEKLY, dtstart=start, until=end, interval=repeat_interval)
 
         elif repeat_frequency == RepeatFrequency.MONTH:
+            if repeat_interval == 0:
+                raise IndicoError(u'Unsupported interval')
+            position = int(ceil(start.day / 7.0))
+            if position == 5:
+                # The fifth weekday of the month will always be the last one
+                position = -1
+            return rrule.rrule(rrule.MONTHLY, dtstart=start, until=end, byweekday=start.weekday(),
+                               bysetpos=position, interval=repeat_interval)
 
-            if repeat_interval == 1:
-                position = int(ceil(start.day / 7.0))
-                if position == 5:
-                    # The fifth weekday of the month will always be the last one
-                    position = -1
-                return rrule.rrule(rrule.MONTHLY, dtstart=start, until=end, byweekday=start.weekday(),
-                                   bysetpos=position)
-            else:
-                raise IndicoError('Unsupported interval {}'.format(repeat_interval))
-
-        raise IndicoError('Unexpected frequency {}'.format(repeat_frequency))
+        raise IndicoError(u'Unexpected frequency {}'.format(repeat_frequency))
 
     @staticmethod
     def filter_overlap(occurrences):
@@ -244,11 +243,21 @@ class ReservationOccurrence(db.Model, Serializer):
 
         return q.order_by(Room.id)
 
+    def can_reject(self, user, allow_admin=True):
+        if not self.is_valid:
+            return False
+        return self.reservation.can_reject(user, allow_admin=allow_admin)
+
+    def can_cancel(self, user, allow_admin=True):
+        if not self.is_valid or self.end_dt < datetime.now():
+            return False
+        return self.reservation.can_cancel(user, allow_admin=allow_admin)
+
     @proxy_to_reservation_if_last_valid_occurrence
     @unify_user_args
     def cancel(self, user, reason=None, silent=False):
-        self.is_cancelled = True
-        self.rejection_reason = reason
+        self.state = ReservationOccurrenceState.cancelled
+        self.rejection_reason = reason or None
         if not silent:
             log = [u'Day cancelled: {}'.format(format_date(self.date).decode('utf-8'))]
             if reason:
@@ -260,8 +269,8 @@ class ReservationOccurrence(db.Model, Serializer):
     @proxy_to_reservation_if_last_valid_occurrence
     @unify_user_args
     def reject(self, user, reason, silent=False):
-        self.is_rejected = True
-        self.rejection_reason = reason
+        self.state = ReservationOccurrenceState.rejected
+        self.rejection_reason = reason or None
         if not silent:
             log = [u'Day rejected: {}'.format(format_date(self.date).decode('utf-8')),
                    u'Reason: {}'.format(reason)]
@@ -282,29 +291,3 @@ class ReservationOccurrence(db.Model, Serializer):
         if skip_self and self.reservation and occurrence.reservation and self.reservation == occurrence.reservation:
             return False
         return date_time.overlaps((self.start_dt, self.end_dt), (occurrence.start_dt, occurrence.end_dt))
-
-    @hybrid_method
-    def is_in_notification_window(self, exclude_first_day=False):
-        from indico.modules.rb import settings as rb_settings
-        if self.start_dt.date() < date.today():
-            return False
-        days_until_occurrence = (self.start_dt.date() - date.today()).days
-        notification_window = (self.reservation.room.notification_before_days
-                               or rb_settings.get('notification_before_days', 1))
-        if exclude_first_day:
-            return days_until_occurrence < notification_window
-        else:
-            return days_until_occurrence <= notification_window
-
-    @is_in_notification_window.expression
-    def is_in_notification_window(self, exclude_first_day=False):
-        from indico.modules.rb import settings as rb_settings
-        from indico.modules.rb.models.rooms import Room
-        in_the_past = cast(self.start_dt, Date) < cast(func.now(), Date)
-        days_until_occurrence = cast(self.start_dt, Date) - cast(func.now(), Date)
-        notification_window = func.coalesce(Room.notification_before_days,
-                                            rb_settings.get('notification_before_days', 1))
-        if exclude_first_day:
-            return (days_until_occurrence < notification_window) & ~in_the_past
-        else:
-            return (days_until_occurrence <= notification_window) & ~in_the_past

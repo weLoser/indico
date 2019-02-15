@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,22 +19,18 @@ from __future__ import unicode_literals
 from datetime import timedelta
 from operator import itemgetter
 
-from indico.core.celery.views import WPCelery
-from MaKaC.webinterface.rh.admins import RHAdminBase
-
 from indico.core.celery import celery
-from indico.core.config import Config
+from indico.core.celery.views import WPCelery
+from indico.core.config import config
+from indico.modules.admin import RHAdminBase
 
 
 class RHCeleryTasks(RHAdminBase):
     def _process(self):
-        flower_url = Config.getInstance().getFlowerURL()
-
         notset = object()
-        overridden_tasks = Config.getInstance().getScheduledTaskOverride()
         tasks = []
-        for entry in celery.conf['CELERYBEAT_SCHEDULE'].values():
-            override = overridden_tasks.get(entry['task'], notset)
+        for entry in celery.conf['beat_schedule'].values():
+            override = config.SCHEDULED_TASK_OVERRIDE.get(entry['task'], notset)
             custom_schedule = None
             disabled = False
             if override is notset:
@@ -52,4 +48,4 @@ class RHCeleryTasks(RHAdminBase):
                           'disabled': disabled})
         tasks.sort(key=itemgetter('disabled', 'name'))
 
-        return WPCelery.render_template('celery_tasks.html', flower_url=flower_url, tasks=tasks, timedelta=timedelta)
+        return WPCelery.render_template('celery_tasks.html', 'celery', tasks=tasks, timedelta=timedelta)

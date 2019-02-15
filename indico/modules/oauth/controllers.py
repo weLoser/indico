@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,27 +18,29 @@ from __future__ import unicode_literals
 
 from uuid import UUID
 
-from flask import flash, redirect, request, render_template, session
+from flask import flash, redirect, render_template, request, session
 from sqlalchemy.orm.exc import NoResultFound
 from werkzeug.exceptions import Forbidden
 
 from indico.core.db import db
-from indico.modules.users.controllers import RHUserBase
+from indico.modules.admin import RHAdminBase
 from indico.modules.oauth import logger
-from indico.modules.oauth.provider import oauth
 from indico.modules.oauth.forms import ApplicationForm
-from indico.modules.oauth.models.applications import OAuthApplication, SCOPES
+from indico.modules.oauth.models.applications import SCOPES, OAuthApplication
 from indico.modules.oauth.models.tokens import OAuthToken
-from indico.modules.oauth.views import WPOAuthUserProfile, WPOAuthAdmin
+from indico.modules.oauth.provider import oauth
+from indico.modules.oauth.views import WPOAuthAdmin, WPOAuthUserProfile
+from indico.modules.users.controllers import RHUserBase
 from indico.util.i18n import _
 from indico.web.flask.util import url_for
 from indico.web.forms.base import FormDefaults
-from MaKaC.webinterface.rh.admins import RHAdminBase
-from MaKaC.webinterface.rh.base import RH, RHProtected
+from indico.web.rh import RH, RHProtected
 
 
 class RHOAuthAuthorize(RHProtected):
-    def _checkParams(self):
+    CSRF_ENABLED = False
+
+    def _process_args(self):
         try:
             UUID(hex=request.args['client_id'])
         except ValueError:
@@ -72,6 +74,8 @@ class RHOAuthErrors(RHProtected):
 
 
 class RHOAuthToken(RH):
+    CSRF_ENABLED = False
+
     @oauth.token_handler
     def _process(self, **kwargs):
         return None
@@ -87,7 +91,7 @@ class RHOAuthAdmin(RHAdminBase):
 
 class RHOAuthAdminApplicationBase(RHAdminBase):
     """Base class for single OAuth application RHs"""
-    def _checkParams(self):
+    def _process_args(self):
         self.application = OAuthApplication.get(request.view_args['id'])
 
 
@@ -96,18 +100,23 @@ class RHOAuthAdminApplication(RHOAuthAdminApplicationBase):
 
     def _process(self):
         form = ApplicationForm(obj=self.application, application=self.application)
+        disabled_fields = set(self.application.system_app_type.enforced_data)
         if form.validate_on_submit():
             form.populate_obj(self.application)
             logger.info("Application %s updated by %s", self.application, session.user)
             flash(_("Application {} was modified").format(self.application.name), 'success')
             return redirect(url_for('.apps'))
-        return WPOAuthAdmin.render_template('app_details.html', application=self.application, form=form)
+        return WPOAuthAdmin.render_template('app_details.html', application=self.application, form=form,
+                                            disabled_fields=disabled_fields)
 
 
 class RHOAuthAdminApplicationDelete(RHOAuthAdminApplicationBase):
     """Handles OAuth application deletion"""
 
-    CSRF_ENABLED = True
+    def _check_access(self):
+        RHOAuthAdminApplicationBase._check_access(self)
+        if self.application.system_app_type:
+            raise Forbidden('Cannot delete system app')
 
     def _process(self):
         db.session.delete(self.application)
@@ -135,8 +144,6 @@ class RHOAuthAdminApplicationNew(RHAdminBase):
 class RHOAuthAdminApplicationReset(RHOAuthAdminApplicationBase):
     """Resets the client secret of the OAuth application"""
 
-    CSRF_ENABLED = True
-
     def _process(self):
         self.application.reset_client_secret()
         logger.info("Client secret of %s reset by %s", self.application, session.user)
@@ -146,8 +153,6 @@ class RHOAuthAdminApplicationReset(RHOAuthAdminApplicationBase):
 
 class RHOAuthAdminApplicationRevoke(RHOAuthAdminApplicationBase):
     """Revokes all user tokens associated to the OAuth application"""
-
-    CSRF_ENABLED = True
 
     def _process(self):
         self.application.tokens.delete()
@@ -167,10 +172,8 @@ class RHOAuthUserProfile(RHUserBase):
 class RHOAuthUserTokenRevoke(RHUserBase):
     """Revokes user token"""
 
-    CSRF_ENABLED = True
-
-    def _checkParams(self):
-        RHUserBase._checkParams(self)
+    def _process_args(self):
+        RHUserBase._process_args(self)
         self.token = OAuthToken.get(request.view_args['id'])
         if self.user != self.token.user:
             raise Forbidden("You can only revoke tokens associated with your user")

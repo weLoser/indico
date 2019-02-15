@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,21 +16,80 @@
 
 from __future__ import unicode_literals
 
-from flask import render_template
-from werkzeug.urls import url_parse
+import os
+
+from flask import current_app, json, render_template, session
+from werkzeug.urls import url_join, url_parse
 
 from indico.core.auth import multipass
+from indico.core.config import config
+from indico.core.plugins import plugin_engine
 from indico.modules.auth.util import url_for_login
 from indico.modules.events.registration.util import url_rule_to_angular
 from indico.modules.rb.models.locations import Location
-from indico.web.assets import core_env
-from indico.web.flask.util import url_rule_to_js, url_for
-from MaKaC.webinterface.common import tools as security_tools
-from MaKaC.webinterface import urlHandlers
+from indico.modules.users.util import serialize_user
+from indico.util.i18n import po_to_json
+from indico.web.flask.util import url_for, url_rule_to_js
 
 
-def generate_global_file(config):
-    locations = Location.find_all() if config.getIsRoomBookingActive() else []
+def get_locale_data(path, name, domain, react=False):
+    if react:
+        json_file = os.path.join(path, name, 'LC_MESSAGES', 'messages-react.json')
+        if not os.access(json_file, os.R_OK):
+            return {}
+        with open(json_file) as f:
+            rv = json.load(f)
+        rv['messages'][''] = {
+            'domain': domain,
+            'lang': name,
+            'plural_forms': rv['messages']['']['plural_forms'],
+        }
+        return {domain: rv['messages']}
+    else:
+        po_file = os.path.join(path, name, 'LC_MESSAGES', 'messages-js.po')
+        return po_to_json(po_file, domain=domain, locale=name) if os.access(po_file, os.R_OK) else {}
+
+
+def generate_i18n_file(locale_name, react=False):
+    root_path = os.path.join(current_app.root_path, 'translations')
+    i18n_data = get_locale_data(root_path, locale_name, 'indico', react=react)
+    if not i18n_data:
+        # Dummy data, not having the indico domain would cause lots of failures
+        i18n_data = {'indico': {'': {'domain': 'indico',
+                                     'lang': locale_name}}}
+
+    for pid, plugin in plugin_engine.get_active_plugins().iteritems():
+        data = {}
+        if plugin.translation_path:
+            data = get_locale_data(plugin.translation_path, locale_name, pid, react=react)
+        if not data:
+            # Dummy entry so we can still load the domain
+            data = {pid: {'': {'domain': pid,
+                               'lang': locale_name}}}
+        i18n_data.update(data)
+    return json.dumps(i18n_data)
+
+
+def generate_user_file(user=None):
+    user = user or session.user
+    if user is None:
+        user_vars = {}
+    else:
+        user_vars = {
+            'id': user.id,
+            'first_name': user.first_name,
+            'last_name': user.last_name,
+            'email': user.email,
+            'favorite_users': {u.id: serialize_user(u) for u in user.favorite_users},
+            'language': session.lang,
+            'avatar_bg_color': user.avatar_bg_color,
+            'is_admin': user.is_admin
+        }
+    return render_template('assets/vars_user.js', user_vars=user_vars, user=user)
+
+
+def generate_global_file():
+    locations = Location.find_all() if config.ENABLE_ROOMBOOKING else []
     location_names = {loc.name: loc.name for loc in locations}
     default_location = next((loc.name for loc in locations if loc.is_default), None)
     ext_auths = [{
@@ -38,40 +97,42 @@ def generate_global_file(config):
         'title': auth.title,
         'supports_groups': auth.supports_groups
     } for auth in multipass.identity_providers.itervalues() if auth.supports_search]
-    file_type_icons = dict((k.lower(), v[2]) for k, v in config.getFileTypes().iteritems())
 
     indico_vars = {
-        'FileTypeIcons': file_type_icons,
-
         'Urls': {
-            'BasePath': url_parse(config.getBaseURL()).path.rstrip('/'),
+            'Base': config.BASE_URL,
+            'BasePath': url_parse(config.BASE_URL).path.rstrip('/'),
             'JsonRpcService': url_for('api.jsonrpc'),
             'ExportAPIBase': url_for('api.httpapi', prefix='export'),
             'APIBase': url_for('api.httpapi', prefix='api'),
 
-            'ImagesBase': config.getImagesBaseURL(),
-            'SecureImagesBase': config.getImagesBaseSecureURL(),
+            'ImagesBase': config.IMAGES_BASE_URL,
 
             'Login': url_for_login(),
             'Favorites': url_for('users.user_favorites'),
             'FavoriteUserAdd': url_for('users.user_favorites_users_add'),
             'FavoriteUserRemove': url_rule_to_js('users.user_favorites_user_remove'),
 
-            'ConferenceDisplay': urlHandlers.UHConferenceDisplay.getURL(_ignore_static=True).js_router,
-
             'AttachmentManager': url_rule_to_js('attachments.management'),
             'ManagementAttachmentInfoColumn': url_rule_to_js('attachments.management_info_column'),
 
+            'RoomBooking': {
+                'room': {
+                    'check_available': url_rule_to_js('rooms_new.check_room_available'),
+                },
+                'calendar': url_join(url_for('rooms_new.roombooking'), 'calendar')
+            },
             'RoomBookingBookRoom': url_rule_to_js('rooms.room_book'),
             'RoomBookingBook': url_rule_to_js('rooms.book'),
-            'RoomBookingDetails': urlHandlers.UHRoomBookingRoomDetails.getURL(_ignore_static=True).js_router,
+            'RoomBookingDetails': url_rule_to_js('rooms.roomBooking-roomDetails'),
             'RoomBookingCloneBooking': url_rule_to_js('rooms.roomBooking-cloneBooking'),
 
             'APIKeyCreate': url_for('api.key_create'),
             'APIKeyTogglePersistent': url_for('api.key_toggle_persistent'),
-            'FontSassBundle': core_env['fonts_sass'].urls(),
+            'FontSassBundle': current_app.manifest['fonts.css']._paths,
 
             'EventCreation': url_rule_to_js('events.create'),
+            'PermissionsDialog': url_rule_to_js('event_management.permissions_dialog'),
 
             'RegistrationForm': {
                 'section': {
@@ -106,7 +167,8 @@ def generate_global_file(config):
                     'add': url_rule_to_js('timetable.add_contribution'),
                     'notScheduled': url_rule_to_js('timetable.not_scheduled'),
                     'schedule': url_rule_to_js('timetable.schedule'),
-                    'protection': url_rule_to_js('contributions.manage_contrib_protection')
+                    'protection': url_rule_to_js('contributions.manage_contrib_protection'),
+                    'clone': url_rule_to_js('timetable.clone_contribution')
                 },
                 'sessionBlocks': {
                     'add': url_rule_to_js('timetable.add_session_block'),
@@ -151,24 +213,15 @@ def generate_global_file(config):
             'Locations': location_names
         },
 
-        'Security': {
-            'allowedTags': ','.join(security_tools.allowedTags),
-            'allowedAttributes': ','.join(security_tools.allowedAttrs),
-            'allowedCssProperties': ','.join(security_tools.allowedCssProperties),
-            'allowedProtocols': ','.join(security_tools.allowedProtocols),
-            'urlProperties': ','.join(security_tools.urlProperties),
-            'sanitizationLevel': config.getSanitizationLevel()
-        },
-
         'Settings': {
             'ExtAuthenticators': ext_auths,
-            'RoomBookingModuleActive': config.getIsRoomBookingActive()
+            'RoomBookingModuleActive': config.ENABLE_ROOMBOOKING,
         },
 
         'FileRestrictions': {
-            'MaxUploadFilesTotalSize': config.getMaxUploadFilesTotalSize(),
-            'MaxUploadFileSize': config.getMaxUploadFileSize()
+            'MaxUploadFilesTotalSize': config.MAX_UPLOAD_FILES_TOTAL_SIZE,
+            'MaxUploadFileSize': config.MAX_UPLOAD_FILE_SIZE
         }
     }
 
-    return render_template('assets/vars_globals.js', indico_vars=indico_vars, config=config, url_handlers=urlHandlers)
+    return render_template('assets/vars_globals.js', indico_vars=indico_vars, config=config)

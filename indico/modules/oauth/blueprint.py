@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,10 +18,10 @@ from __future__ import unicode_literals
 
 from flask import request
 
-from indico.modules.oauth.controllers import (RHOAuthAuthorize, RHOAuthErrors, RHOAuthToken, RHOAuthUserProfile,
-                                              RHOAuthAdmin, RHOAuthAdminApplication, RHOAuthAdminApplicationNew,
-                                              RHOAuthAdminApplicationDelete, RHOAuthAdminApplicationReset,
-                                              RHOAuthAdminApplicationRevoke, RHOAuthUserTokenRevoke)
+from indico.modules.oauth.controllers import (RHOAuthAdmin, RHOAuthAdminApplication, RHOAuthAdminApplicationDelete,
+                                              RHOAuthAdminApplicationNew, RHOAuthAdminApplicationReset,
+                                              RHOAuthAdminApplicationRevoke, RHOAuthAuthorize, RHOAuthErrors,
+                                              RHOAuthToken, RHOAuthUserProfile, RHOAuthUserTokenRevoke)
 from indico.web.flask.wrappers import IndicoBlueprint
 
 

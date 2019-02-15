@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,14 +16,15 @@
 
 from __future__ import unicode_literals
 
-from flask import request, jsonify, session
+from flask import jsonify, request, session
 from werkzeug.exceptions import BadRequest
 
 from indico.core.db import db
 from indico.modules.events.registration import logger
 from indico.modules.events.registration.controllers.management.sections import RHManageRegFormSectionBase
-from indico.modules.events.registration.models.items import RegistrationFormText, RegistrationFormItemType
 from indico.modules.events.registration.models.form_fields import RegistrationFormField
+from indico.modules.events.registration.models.items import RegistrationFormItemType, RegistrationFormText
+from indico.modules.events.registration.util import update_regform_item_positions
 from indico.util.string import snakify_keys
 
 
@@ -51,8 +52,8 @@ class RHManageRegFormFieldBase(RHManageRegFormSectionBase):
         }
     }
 
-    def _checkParams(self, params):
-        RHManageRegFormSectionBase._checkParams(self, params)
+    def _process_args(self):
+        RHManageRegFormSectionBase._process_args(self)
         self.field = self.field_class.get_one(request.view_args['field_id'])
 
 
@@ -65,6 +66,7 @@ class RHRegistrationFormToggleFieldState(RHManageRegFormFieldBase):
                 self.field.personal_data_type.is_required):
             raise BadRequest
         self.field.is_enabled = enabled
+        update_regform_item_positions(self.regform)
         db.session.flush()
         logger.info('Field %s modified by %s', self.field, session.user)
         return jsonify(view_data=self.field.view_data)
@@ -77,6 +79,7 @@ class RHRegistrationFormModifyField(RHManageRegFormFieldBase):
         if self.field.type == RegistrationFormItemType.field_pd:
             raise BadRequest
         self.field.is_deleted = True
+        update_regform_item_positions(self.regform)
         db.session.flush()
         logger.info('Field %s deleted by %s', self.field, session.user)
         return jsonify()
@@ -102,12 +105,13 @@ class RHRegistrationFormMoveField(RHManageRegFormFieldBase):
             return jsonify()
         elif new_position < old_position:
             def fn(field):
-                return field.position >= new_position and field.id != self.field.id and not field.is_deleted
+                return (field.position >= new_position and field.id != self.field.id and not field.is_deleted and
+                        field.is_enabled)
             start_enum = new_position + 1
         else:
             def fn(field):
                 return (old_position < field.position <= new_position and field.id != self.field.id and
-                        not field.is_deleted)
+                        not field.is_deleted and field.is_enabled)
             start_enum = self.field.position
         to_update = filter(fn, self.section.children)
         self.field.position = new_position

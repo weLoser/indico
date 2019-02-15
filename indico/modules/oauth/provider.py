@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,12 +19,11 @@ from __future__ import unicode_literals
 from datetime import datetime, timedelta
 from uuid import UUID
 
-from flask import session, after_this_request, g
+from flask import after_this_request, g, session
 from oauthlib.oauth2 import FatalClientError, InvalidClientIdError
 
 from indico.core.db import db
-from indico.core.config import Config
-from indico.modules.oauth import oauth, logger
+from indico.modules.oauth import logger, oauth
 from indico.modules.oauth.models.applications import OAuthApplication
 from indico.modules.oauth.models.tokens import OAuthGrant, OAuthToken
 from indico.util.date_time import now_utc
@@ -53,8 +52,7 @@ def load_grant(client_id, code):  # pragma: no cover
 
 @oauth.grantsetter
 def save_grant(client_id, code, request, *args, **kwargs):
-    ttl = Config.getInstance().getOAuthGrantTokenTTL()
-    expires = datetime.utcnow() + timedelta(seconds=ttl)
+    expires = datetime.utcnow() + timedelta(seconds=120)
     grant = OAuthGrant(client_id=client_id, code=code['code'], redirect_uri=request.redirect_uri,
                        user=session.user, scopes=request.scopes, expires=expires)
     grant.save()

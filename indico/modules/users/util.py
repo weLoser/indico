@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -19,25 +19,27 @@ from __future__ import unicode_literals
 from collections import OrderedDict
 from operator import itemgetter
 
-from sqlalchemy.orm import undefer, load_only, joinedload, contains_eager
+from flask import session
+from sqlalchemy.orm import contains_eager, joinedload, load_only, undefer
+from sqlalchemy.sql.expression import nullslast
 
 from indico.core import signals
 from indico.core.auth import multipass
 from indico.core.db import db
 from indico.core.db.sqlalchemy.custom.unaccent import unaccent_match
 from indico.core.db.sqlalchemy.principals import PrincipalType
+from indico.core.db.sqlalchemy.util.queries import escape_like
 from indico.modules.categories import Category
 from indico.modules.categories.models.principals import CategoryPrincipal
 from indico.modules.events import Event
 from indico.modules.users import User, logger
 from indico.modules.users.models.affiliations import UserAffiliation
 from indico.modules.users.models.emails import UserEmail
+from indico.modules.users.models.favorites import favorite_user_table
 from indico.modules.users.models.suggestions import SuggestedCategory
 from indico.util.event import truncate_path
-from indico.util.redis import write_client as redis_write_client
-from indico.util.redis import client as redis_client
-from indico.util.redis import avatar_links
-from indico.util.string import crc32
+from indico.util.string import crc32, remove_accents
+
 
 # colors for user-specific avatar bubbles
 user_colors = ['#e06055', '#ff8a65', '#e91e63', '#f06292', '#673ab7', '#ba68c8', '#7986cb', '#3f51b5', '#5e97f6',
@@ -61,7 +63,7 @@ def get_related_categories(user, detailed=True):
     managed = set(Category.query
                   .filter(Category.acl_entries.any(db.and_(CategoryPrincipal.type == PrincipalType.user,
                                                            CategoryPrincipal.user == user,
-                                                           CategoryPrincipal.has_management_role())),
+                                                           CategoryPrincipal.has_management_permission())),
                           ~Category.is_deleted)
                   .options(undefer('chain_titles')))
     if not detailed:
@@ -79,8 +81,6 @@ def get_related_categories(user, detailed=True):
 
 def get_suggested_categories(user):
     """Gets the suggested categories of a user for the dashboard"""
-    if not redis_write_client:
-        return []
     related = set(get_related_categories(user, detailed=False))
     res = []
     category_strategy = contains_eager('category')
@@ -116,51 +116,48 @@ def get_linked_events(user, dt, limit=None):
     from indico.modules.events.abstracts.util import (get_events_with_abstract_reviewer_convener,
                                                       get_events_with_abstract_persons)
     from indico.modules.events.contributions.util import get_events_with_linked_contributions
+    from indico.modules.events.papers.util import get_events_with_paper_roles
     from indico.modules.events.registration.util import get_events_registered
     from indico.modules.events.sessions.util import get_events_with_linked_sessions
     from indico.modules.events.surveys.util import get_events_with_submitted_surveys
     from indico.modules.events.util import (get_events_managed_by, get_events_created_by,
                                             get_events_with_linked_event_persons)
 
-    links = avatar_links.get_links(user, dt) if redis_client else OrderedDict()
-    allowed_redis_links = {'conference_editor', 'conference_paperReviewManager', 'conference_referee',
-                           'conference_reviewer'}
-    for event_id, event_links in links.items():
-        event_links &= allowed_redis_links
-        if not event_links:
-            del links[event_id]
+    links = OrderedDict()
     for event_id in get_events_registered(user, dt):
-        links.setdefault(str(event_id), set()).add('registration_registrant')
+        links.setdefault(event_id, set()).add('registration_registrant')
     for event_id in get_events_with_submitted_surveys(user, dt):
-        links.setdefault(str(event_id), set()).add('survey_submitter')
+        links.setdefault(event_id, set()).add('survey_submitter')
     for event_id in get_events_managed_by(user, dt):
-        links.setdefault(str(event_id), set()).add('conference_manager')
+        links.setdefault(event_id, set()).add('conference_manager')
     for event_id in get_events_created_by(user, dt):
-        links.setdefault(str(event_id), set()).add('conference_creator')
+        links.setdefault(event_id, set()).add('conference_creator')
     for event_id, principal_roles in get_events_with_linked_sessions(user, dt).iteritems():
-        links.setdefault(str(event_id), set()).update(principal_roles)
+        links.setdefault(event_id, set()).update(principal_roles)
     for event_id, principal_roles in get_events_with_linked_contributions(user, dt).iteritems():
-        links.setdefault(str(event_id), set()).update(principal_roles)
-    for event_id in get_events_with_linked_event_persons(user, dt):
-        links.setdefault(str(event_id), set()).add('conference_chair')
+        links.setdefault(event_id, set()).update(principal_roles)
+    for event_id, role in get_events_with_linked_event_persons(user, dt).iteritems():
+        links.setdefault(event_id, set()).add(role)
     for event_id, roles in get_events_with_abstract_reviewer_convener(user, dt).iteritems():
-        links.setdefault(str(event_id), set()).update(roles)
+        links.setdefault(event_id, set()).update(roles)
     for event_id, roles in get_events_with_abstract_persons(user, dt).iteritems():
-        links.setdefault(str(event_id), set()).update(roles)
+        links.setdefault(event_id, set()).update(roles)
+    for event_id, roles in get_events_with_paper_roles(user, dt).iteritems():
+        links.setdefault(event_id, set()).update(roles)
 
     if not links:
         return OrderedDict()
 
     query = (Event.query
              .filter(~Event.is_deleted,
-                     Event.id.in_(map(int, links)))
+                     Event.id.in_(links))
              .options(joinedload('series'),
                       load_only('id', 'category_id', 'title', 'start_dt', 'end_dt',
                                 'series_id', 'series_pos', 'series_count'))
              .order_by(Event.start_dt, Event.id))
     if limit is not None:
         query = query.limit(limit)
-    return OrderedDict((event, links[str(event.id)]) for event in query)
+    return OrderedDict((event, links[event.id]) for event in query)
 
 
 def serialize_user(user):
@@ -168,8 +165,8 @@ def serialize_user(user):
     return {
         'id': user.id,
         'title': user.title,
-        'identifier': 'User:{}'.format(user.id),
-        'name': user.full_name,
+        'identifier': user.identifier,
+        'name': user.display_full_name,
         'familyName': user.last_name,
         'firstName': user.first_name,
         'affiliation': user.affiliation,
@@ -179,7 +176,55 @@ def serialize_user(user):
     }
 
 
-def search_users(exact=False, include_deleted=False, include_pending=False, external=False, **criteria):
+def _build_name_search(name_list):
+    text = remove_accents('%{}%'.format('%'.join(escape_like(name) for name in name_list)))
+    return db.or_(db.func.indico.indico_unaccent(db.func.concat(User.first_name, ' ', User.last_name)).ilike(text),
+                  db.func.indico.indico_unaccent(db.func.concat(User.last_name, ' ', User.first_name)).ilike(text))
+
+
+def build_user_search_query(criteria, exact=False, include_deleted=False, include_pending=False,
+                            favorites_first=False):
+    unspecified = object()
+    query = User.query.options(db.joinedload(User._all_emails))
+
+    if not include_pending:
+        query = query.filter(~User.is_pending)
+    if not include_deleted:
+        query = query.filter(~User.is_deleted)
+
+    affiliation = criteria.pop('affiliation', unspecified)
+    if affiliation is not unspecified:
+        query = query.join(UserAffiliation).filter(unaccent_match(UserAffiliation.name, affiliation, exact))
+
+    email = criteria.pop('email', unspecified)
+    if email is not unspecified:
+        query = query.join(UserEmail).filter(unaccent_match(UserEmail.email, email, exact))
+
+    # search on any of the name fields (first_name OR last_name)
+    name = criteria.pop('name', unspecified)
+    if name is not unspecified:
+        if exact:
+            raise ValueError("'name' is not compatible with 'exact'")
+        if 'first_name' in criteria or 'last_name' in criteria:
+            raise ValueError("'name' is not compatible with (first|last)_name")
+        query = query.filter(_build_name_search(name.replace(',', '').split()))
+
+    for k, v in criteria.iteritems():
+        query = query.filter(unaccent_match(getattr(User, k), v, exact))
+
+    if favorites_first:
+        query = (query.outerjoin(favorite_user_table, db.and_(favorite_user_table.c.user_id == session.user.id,
+                                                              favorite_user_table.c.target_id == User.id))
+                      .order_by(nullslast(favorite_user_table.c.user_id)))
+
+    query = query.order_by(db.func.lower(db.func.indico.indico_unaccent(User.first_name)),
+                           db.func.lower(db.func.indico.indico_unaccent(User.last_name)),
+                           User.id)
+    return query
+
+
+def search_users(exact=False, include_deleted=False, include_pending=False, external=False, allow_system_user=False,
+                 **criteria):
     """Searches for users.
 
     :param exact: Indicates if only exact matches should be returned.
@@ -191,51 +236,44 @@ def search_users(exact=False, include_deleted=False, include_pending=False, exte
                             pending should be returned.
     :param external: Indicates if identity providers should be searched
                      for matching users.
+    :param allow_system_user: Whether the system user may be returned
+                              in the search results.
     :param criteria: A dict containing any of the following keys:
-                     first_name, last_name, email, affiliation, phone,
+                     name, first_name, last_name, email, affiliation, phone,
                      address
     :return: A set of matching users. If `external` was set, it may
              contain both :class:`~flask_multipass.IdentityInfo` objects
              for external users not yet in Indico and :class:`.User`
              objects for existing users.
     """
-    unspecified = object()
-    query = User.query.options(db.joinedload(User.identities),
-                               db.joinedload(User._all_emails),
-                               db.joinedload(User.merged_into_user))
+
     criteria = {key: value.strip() for key, value in criteria.iteritems() if value.strip()}
-    original_criteria = dict(criteria)
 
     if not criteria:
         return set()
 
-    if not include_pending:
-        query = query.filter(~User.is_pending)
-    if not include_deleted:
-        query = query.filter(~User.is_deleted)
-
-    organisation = criteria.pop('affiliation', unspecified)
-    if organisation is not unspecified:
-        query = query.join(UserAffiliation).filter(unaccent_match(UserAffiliation.name, organisation, exact))
-
-    email = criteria.pop('email', unspecified)
-    if email is not unspecified:
-        query = query.join(UserEmail).filter(unaccent_match(UserEmail.email, email, exact))
-
-    for k, v in criteria.iteritems():
-        query = query.filter(unaccent_match(getattr(User, k), v, exact))
+    query = (build_user_search_query(
+                dict(criteria),
+                exact=exact,
+                include_deleted=include_deleted,
+                include_pending=include_pending)
+             .options(db.joinedload(User.identities),
+                      db.joinedload(User.merged_into_user)))
 
     found_emails = {}
     found_identities = {}
+    system_user = set()
     for user in query:
         for identity in user.identities:
             found_identities[(identity.provider, identity.identifier)] = user
         for email in user.all_emails:
             found_emails[email] = user
+        if user.is_system and not user.all_emails and allow_system_user:
+            system_user = {user}
 
     # external user providers
     if external:
-        identities = multipass.search_identities(exact=exact, **original_criteria)
+        identities = multipass.search_identities(exact=exact, **criteria)
 
         for ident in identities:
             if not ident.data.get('email'):
@@ -246,7 +284,7 @@ def search_users(exact=False, include_deleted=False, include_pending=False, exte
                 found_emails[ident.data['email'].lower()] = ident
                 found_identities[(ident.provider, ident.identifier)] = ident
 
-    return set(found_emails.viewvalues())
+    return set(found_emails.viewvalues()) | system_user
 
 
 def get_user_by_email(email, create_pending=False):
@@ -296,21 +334,6 @@ def merge_users(source, target, force=False):
     if target.is_deleted:
         raise ValueError('Target user {} has been deleted. Merge aborted.'.format(target))
 
-    # Merge links
-    for link in source.linked_objects:
-        if link.object is None:
-            # remove link if object does no longer exist
-            db.session.delete(link)
-        else:
-            link.user = target
-
-    # De-duplicate links
-    unique_links = {(link.object, link.role): link for link in target.linked_objects}
-    to_delete = set(target.linked_objects) - set(unique_links.viewvalues())
-
-    for link in to_delete:
-        db.session.delete(link)
-
     # Move emails to the target user
     primary_source_email = source.email
     logger.info("Target %s initial emails: %s", target, ', '.join(target.all_emails))
@@ -334,10 +357,6 @@ def merge_users(source, target, force=False):
     # Merge identities
     for identity in set(source.identities):
         identity.user = target
-
-    # Merge avatars in redis
-    if redis_write_client:
-        avatar_links.merge_avatars(target, source)
 
     # Notify signal listeners about the merge
     signals.users.merged.send(target, source=source)

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -22,8 +22,8 @@ from sqlalchemy.dialects.postgresql import ARRAY, UUID
 
 from indico.core.db import db
 from indico.core.db.sqlalchemy import UTCDateTime
+from indico.legacy.common.cache import GenericCache
 from indico.util.string import return_ascii
-from MaKaC.common.cache import GenericCache
 
 
 class OAuthToken(db.Model):
@@ -95,8 +95,7 @@ class OAuthToken(db.Model):
 
     @property
     def expires(self):
-        # work around to have a non-expiring token
-        return datetime.utcnow() + timedelta(days=3650)
+        return None
 
     @property
     def scopes(self):

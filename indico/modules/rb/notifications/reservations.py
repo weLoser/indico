@@ -2,6 +2,7 @@ from flask import render_template
 
 from indico.core.notifications import email_sender, make_email
 from indico.util.date_time import format_datetime
+from indico.util.string import to_unicode
 
 
 class ReservationNotification(object):
@@ -10,12 +11,12 @@ class ReservationNotification(object):
         self.start_dt = format_datetime(reservation.start_dt)
 
     def _get_email_subject(self, **mail_params):
-        return '{prefix}[{room}] {subject} {date} {suffix}'.format(
-            prefix=mail_params.get('subject_prefix', ''),
+        return u'{prefix}[{room}] {subject} {date} {suffix}'.format(
+            prefix=to_unicode(mail_params.get('subject_prefix', '')),
             room=self.reservation.room.full_name,
-            subject=mail_params.get('subject', ''),
-            date=self.start_dt,
-            suffix=mail_params.get('subject_suffix', '')
+            subject=to_unicode(mail_params.get('subject', '')),
+            date=to_unicode(self.start_dt),
+            suffix=to_unicode(mail_params.get('subject_suffix', ''))
         ).strip()
 
     def _make_body(self, mail_params, **body_params):
@@ -27,19 +28,22 @@ class ReservationNotification(object):
 
     def compose_email_to_user(self, **mail_params):
         creator = self.reservation.created_by_user
-        to_list = {creator.email} | self.reservation.contact_emails
+        to_list = {creator.email}
+        if self.reservation.contact_email:
+            to_list.add(self.reservation.contact_email)
         subject = self._get_email_subject(**mail_params)
         body = self._make_body(mail_params, reservation=self.reservation)
         return make_email(to_list=to_list, subject=subject, body=body)
 
     def compose_email_to_manager(self, **mail_params):
-        to_list = {self.reservation.room.owner.email} | self.reservation.room.notification_emails
+        room = self.reservation.room
+        to_list = {room.owner.email} | room.manager_emails | room.notification_emails
         subject = self._get_email_subject(**mail_params)
         body = self._make_body(mail_params, reservation=self.reservation)
         return make_email(to_list=to_list, subject=subject, body=body)
 
     def compose_email_to_vc_support(self, **mail_params):
-        from indico.modules.rb import settings as rb_settings
+        from indico.modules.rb import rb_settings
 
         if self.reservation.is_accepted and self.reservation.uses_vc:
             to_list = rb_settings.get('vc_support_emails')
@@ -49,7 +53,7 @@ class ReservationNotification(object):
                 return make_email(to_list=to_list, subject=subject, body=body)
 
     def compose_email_to_assistance(self, **mail_params):
-        from indico.modules.rb import settings as rb_settings
+        from indico.modules.rb import rb_settings
 
         if self.reservation.room.notification_for_assistance:
             if self.reservation.needs_assistance or mail_params.get('assistance_cancelled'):
@@ -58,6 +62,21 @@ class ReservationNotification(object):
                     subject = self._get_email_subject(**mail_params)
                     body = self._make_body(mail_params, reservation=self.reservation)
                     return make_email(to_list=to_list, subject=subject, body=body)
+
+
+@email_sender
+def notify_reset_approval(reservation):
+    notification = ReservationNotification(reservation)
+    return filter(None, [
+        notification.compose_email_to_user(
+            subject='Booking approval changed state on',
+            template_name='change_state_email_to_user'
+        ),
+        notification.compose_email_to_manager(
+            subject='Booking approval changed state on',
+            template_name='change_state_email_to_manager'
+        )
+    ])
 
 
 @email_sender

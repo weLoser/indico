@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,6 +20,7 @@ from flask import request, session
 from sqlalchemy.orm import contains_eager
 
 from indico.core.db import db
+from indico.modules.admin import RHAdminBase
 from indico.modules.categories.models.categories import Category
 from indico.modules.events.models.events import Event
 from indico.modules.networks import logger
@@ -27,11 +28,10 @@ from indico.modules.networks.forms import IPNetworkGroupForm
 from indico.modules.networks.models.networks import IPNetworkGroup
 from indico.modules.networks.views import WPNetworksAdmin
 from indico.web.util import jsonify_data, jsonify_form, jsonify_template
-from MaKaC.webinterface.rh.admins import RHAdminBase
 
 
 class RHNetworkBase(RHAdminBase):
-    CSRF_ENABLED = True
+    pass
 
 
 class RHManageNetworks(RHNetworkBase):
@@ -39,7 +39,7 @@ class RHManageNetworks(RHNetworkBase):
 
     def _process(self):
         network_groups = IPNetworkGroup.find().order_by(IPNetworkGroup.name).all()
-        return WPNetworksAdmin.render_template('networks.html', network_groups=network_groups)
+        return WPNetworksAdmin.render_template('networks.html', 'ip_networks', network_groups=network_groups)
 
 
 class RHCreateNetworkGroup(RHNetworkBase):
@@ -60,7 +60,7 @@ class RHCreateNetworkGroup(RHNetworkBase):
 class RHAdminNetworkGroupBase(RHNetworkBase):
     """Base class for managing in IPNetworkGroup"""
 
-    def _checkParams(self):
+    def _process_args(self):
         self.network_group = IPNetworkGroup.get_one(request.view_args['network_group_id'])
 
 
@@ -82,9 +82,9 @@ class RHDeleteNetworkGroup(RHAdminNetworkGroupBase):
     def _process_GET(self):
         query = (self.network_group.in_event_acls
                  .join(Event)
-                 .options(contains_eager('event_new'))
+                 .options(contains_eager('event'))
                  .order_by(Event.title))
-        events = [principal.event_new for principal in query]
+        events = [principal.event for principal in query]
         query = (self.network_group.in_category_acls
                  .join(Category)
                  .order_by(Category.title)

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -22,8 +22,8 @@ from flask import request
 from sqlalchemy.orm import joinedload
 
 from indico.core.db import db
-from indico.modules.events.registration.models.form_fields import (RegistrationFormPersonalDataField,
-                                                                   RegistrationFormFieldData)
+from indico.modules.events.registration.models.form_fields import (RegistrationFormFieldData,
+                                                                   RegistrationFormPersonalDataField)
 from indico.modules.events.registration.models.items import PersonalDataType, RegistrationFormItem
 from indico.modules.events.registration.models.registrations import Registration, RegistrationData, RegistrationState
 from indico.modules.events.util import ListGeneratorBase
@@ -38,7 +38,7 @@ class RegistrationListGenerator(ListGeneratorBase):
     list_link_type = 'registration'
 
     def __init__(self, regform):
-        super(RegistrationListGenerator, self).__init__(regform.event_new, entry_parent=regform)
+        super(RegistrationListGenerator, self).__init__(regform.event, entry_parent=regform)
         self.regform = regform
         self.default_list_config = {
             'items': ('title', 'email', 'affiliation', 'reg_date', 'state'),
@@ -46,7 +46,7 @@ class RegistrationListGenerator(ListGeneratorBase):
         }
         self.static_items = OrderedDict([
             ('reg_date', {
-                'title': _('Registation Date'),
+                'title': _('Registration Date'),
             }),
             ('price', {
                 'title': _('Price'),
@@ -64,6 +64,9 @@ class RegistrationListGenerator(ListGeneratorBase):
             }),
             ('checked_in_date', {
                 'title': _('Check-in date'),
+            }),
+            ('payment_date', {
+                'title': _('Payment date'),
             })
         ])
         self.personal_items = ('title', 'first_name', 'last_name', 'email', 'position', 'affiliation', 'address',
@@ -96,16 +99,13 @@ class RegistrationListGenerator(ListGeneratorBase):
     def _column_ids_to_db(self, ids):
         """Translate string-based ids to DB-based RegistrationFormItem ids."""
         result = []
+        personal_data_field_ids = {x.personal_data_type: x.id for x in self.regform.form_items if x.is_field}
         for item_id in ids:
             if isinstance(item_id, basestring):
-                personal_data = PersonalDataType.get(item_id)
-                if personal_data:
-                    result.append(RegistrationFormPersonalDataField.find_one(registration_form=self.regform,
-                                                                             personal_data_type=personal_data).id)
-                else:
-                    result.append(item_id)
-            else:
-                result.append(item_id)
+                personal_data_type = PersonalDataType.get(item_id)
+                if personal_data_type:
+                    item_id = personal_data_field_ids[personal_data_type]
+            result.append(item_id)
         return result
 
     def _get_sorted_regform_items(self, item_ids):
@@ -164,14 +164,14 @@ class RegistrationListGenerator(ListGeneratorBase):
             items_criteria.append(Registration.state.in_(states))
 
         if field_filters:
-                subquery = (RegistrationData.query
-                            .with_entities(db.func.count(RegistrationData.registration_id))
-                            .join(RegistrationData.field_data)
-                            .filter(RegistrationData.registration_id == Registration.id)
-                            .filter(db.or_(*criteria))
-                            .correlate(Registration)
-                            .as_scalar())
-                query = query.filter(subquery == len(field_filters))
+            subquery = (RegistrationData.query
+                        .with_entities(db.func.count(RegistrationData.registration_id))
+                        .join(RegistrationData.field_data)
+                        .filter(RegistrationData.registration_id == Registration.id)
+                        .filter(db.or_(*criteria))
+                        .correlate(Registration)
+                        .as_scalar())
+            query = query.filter(subquery == len(field_filters))
         return query.filter(db.or_(*items_criteria))
 
     def get_list_kwargs(self):
@@ -183,6 +183,7 @@ class RegistrationListGenerator(ListGeneratorBase):
         static_columns = self._get_static_columns(static_item_ids)
         regform_items = self._get_sorted_regform_items(dynamic_item_ids)
         return {
+            'regform': self.regform,
             'registrations': registrations,
             'total_registrations': total_entries,
             'static_columns': static_columns,
@@ -191,13 +192,16 @@ class RegistrationListGenerator(ListGeneratorBase):
         }
 
     def get_list_export_config(self):
-        reg_list_config = self._get_config()
-        static_item_ids, item_ids = self._split_item_ids(reg_list_config['items'], 'static')
-        item_ids = self._column_ids_to_db(item_ids)
+        static_item_ids, item_ids = self.get_item_ids()
         return {
             'static_item_ids': static_item_ids,
             'regform_items': self._get_sorted_regform_items(item_ids)
         }
+
+    def get_item_ids(self):
+        reg_list_config = self._get_config()
+        static_item_ids, item_ids = self._split_item_ids(reg_list_config['items'], 'static')
+        return static_item_ids, self._column_ids_to_db(item_ids)
 
     def render_list(self):
         reg_list_kwargs = self.get_list_kwargs()

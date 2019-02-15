@@ -15,8 +15,7 @@
         <div class="timetable-item-body flexcol">
             <div class="timetable-item-header flexrow">
                 <span class="timetable-title {{ 'nested' if nested }}" data-anchor="{{ anchor }}">
-                    {# TODO: remove '| safe' once we start enforcing no-HTML policy #}
-                    {{- contrib.title | safe -}}
+                    {{- contrib.title -}}
                 </span>
                 {% if contrib.duration -%}
                     <span class="icon-time timetable-duration">
@@ -28,7 +27,7 @@
                 {%- endif %}
                 <div class="timetable-item-actions">
                     {{ render_manage_button(contrib, 'CONTRIBUTION', show_notes=show_notes,
-                                            show_button=(not event.as_legacy.isClosed() and
+                                            show_button=(not event.is_locked and
                                                          contrib.can_manage_attachments(session.user))) }}
                     {{ template_hook('vc-actions', event=event, item=contrib) }}
                 </div>

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,6 +16,7 @@
 
 from blinker import Namespace
 
+
 _signals = Namespace()
 
 
@@ -31,27 +32,8 @@ only ``import`` these modules and do nothing else.
 """)
 
 after_process = _signals.signal('after-process', """
-Called after an Indico request has been processed.
-""")
-
-before_retry = _signals.signal('before-retry', """
-Called before an Indico request is being retried.
-""")
-
-indico_help = _signals.signal('indico-help', """
-Expected to return a dict containing entries for the *Indico help* page::
-
-    entries = {
-        _('Section title'): {
-            _('Item title'): ('ihelp/.../item.html', 'ihelp/.../item.pdf'),
-            _('Item title 2'): ('ihelp/.../item2.html', 'ihelp/.../item2.pdf')
-        }
-    }
-""")
-
-indico_menu = _signals.signal('indico-menu', """
-Expected to return `HeaderMenuEntry` objects which are then added to the
-Indico head menu.
+Called after an Indico request has been processed.  This signal is
+executed for both RH classes and legacy JSON-RPC services.
 """)
 
 get_storage_backends = _signals.signal('get-storage-backends', """

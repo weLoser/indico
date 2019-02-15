@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,12 +16,12 @@
 
 from __future__ import unicode_literals
 
-from flask import session, render_template, flash
+from flask import flash, render_template, session
 
 from indico.core import signals
 from indico.core.db import db
 from indico.core.logger import Logger
-from indico.core.roles import ManagementRole
+from indico.core.permissions import ManagementPermission
 from indico.modules.events import Event
 from indico.modules.events.features.base import EventFeature
 from indico.modules.events.layout.util import MenuEntryData
@@ -31,6 +31,7 @@ from indico.util.i18n import _, ngettext
 from indico.web.flask.templating import template_hook
 from indico.web.flask.util import url_for
 from indico.web.menu import SideMenuItem
+
 
 logger = Logger.get('events.registration')
 
@@ -59,38 +60,32 @@ def _extend_event_management_menu(sender, event, **kwargs):
                            section=registration_section)
 
 
-def _get_open_regforms(event):
-    if not event.has_feature('registration'):
-        return []
-    from indico.modules.events.registration.models.forms import RegistrationForm
-    return (RegistrationForm.find(RegistrationForm.is_open, event_id=int(event.id))
-                            .order_by(db.func.lower(RegistrationForm.title))
-                            .all())
-
-
 @template_hook('conference-home-info')
 def _inject_regform_announcement(event, **kwargs):
-    from indico.modules.events.registration.util import user_registered_in_event, get_registrations_with_tickets
-    regforms = _get_open_regforms(event)
-    if regforms:
-        return render_template('events/registration/display/conference_home.html', regforms=regforms, event=event,
-                               user_has_registered=(session.user and user_registered_in_event(session.user, event)),
-                               registrations_with_tickets=get_registrations_with_tickets(session.user, event))
+    from indico.modules.events.registration.util import get_registrations_with_tickets, get_event_regforms
+    if event.has_feature('registration'):
+        all_regforms = get_event_regforms(event, session.user)
+        user_registrations = sum(regform[1] for regform in all_regforms)
+        open_and_registered_regforms = [regform[0] for regform in all_regforms if regform[0].is_open or regform[1]]
+        if open_and_registered_regforms:
+            return render_template('events/registration/display/conference_home.html',
+                                   regforms=open_and_registered_regforms, event=event,
+                                   user_registrations=user_registrations,
+                                   registrations_with_tickets=get_registrations_with_tickets(session.user, event))
 
 
 @template_hook('event-header')
 def _inject_event_header(event, **kwargs):
-    from indico.modules.events.registration.models.forms import RegistrationForm
-
-    event = event.as_event
-    regforms = (event.registration_forms
-                .filter_by(is_deleted=False, is_open=True)
-                .order_by(db.func.lower(RegistrationForm.title))
-                .all())
-
-    # A participant could appear more than once in the list in case he register to multiple registration form.
-    # This is deemed very unlikely in the case of meetings and lectures and thus not worth the extra complexity.
-    return render_template('events/registration/display/event_header.html', event=event, regforms=regforms)
+    from indico.modules.events.registration.util import get_event_regforms
+    if event.has_feature('registration'):
+        all_regforms = get_event_regforms(event, session.user, with_registrations=True)
+        open_and_registered_regforms = [regform for regform, registration in all_regforms
+                                        if regform.is_open or registration]
+        user_registrations = {regform: registration for regform, registration in all_regforms}
+        # A participant could appear more than once in the list in case he register to multiple registration form.
+        # This is deemed very unlikely in the case of meetings and lectures and thus not worth the extra complexity.
+        return render_template('events/registration/display/event_header.html', event=event,
+                               regforms=open_and_registered_regforms, user_registrations=user_registrations)
 
 
 @signals.event.sidemenu.connect
@@ -101,14 +96,13 @@ def _extend_event_menu(sender, **kwargs):
     def _visible_registration(event):
         if not event.has_feature('registration'):
             return False
-        if RegistrationForm.query.with_parent(event).filter(RegistrationForm.is_scheduled).has_rows():
+        if any(form.is_scheduled for form in event.registration_forms):
             return True
         if not session.user:
             return False
         return (Registration.query.with_parent(event)
                 .join(Registration.registration_form)
                 .filter(Registration.user == session.user,
-                        ~Registration.is_deleted,
                         ~RegistrationForm.is_deleted)
                 .has_rows())
 
@@ -153,7 +147,7 @@ def _associate_registrations(user, **kwargs):
 
 @signals.event_management.management_url.connect
 def _get_event_management_url(event, **kwargs):
-    if event.can_manage(session.user, role='registration'):
+    if event.can_manage(session.user, permission='registration'):
         return url_for('event_registration.manage_regform_list', event)
 
 
@@ -186,9 +180,9 @@ def _get_feature_definitions(sender, **kwargs):
     return RegistrationFeature
 
 
-@signals.acl.get_management_roles.connect_via(Event)
-def _get_management_roles(sender, **kwargs):
-    return RegistrationRole
+@signals.acl.get_management_permissions.connect_via(Event)
+def _get_management_permissions(sender, **kwargs):
+    return RegistrationPermission
 
 
 @signals.event_management.get_cloners.connect
@@ -208,7 +202,8 @@ class RegistrationFeature(EventFeature):
         return event.type_ == EventType.conference
 
 
-class RegistrationRole(ManagementRole):
+class RegistrationPermission(ManagementPermission):
     name = 'registration'
     friendly_name = _('Registration')
     description = _('Grants management access to the registration form.')
+    user_selectable = True

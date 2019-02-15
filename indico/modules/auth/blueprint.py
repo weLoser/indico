@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,10 +18,11 @@ from __future__ import unicode_literals
 
 from flask import request
 
-from indico.modules.auth.controllers import (RHLogin, RHLoginForm, RHLogout, RHRegister, RHLinkAccount,
-                                             RHResetPassword, RHAccounts, RHRemoveAccount)
+from indico.modules.auth.controllers import (RHAccounts, RHAdminImpersonate, RHLinkAccount, RHLogin, RHLoginForm,
+                                             RHLogout, RHRegister, RHRemoveAccount, RHResetPassword)
 from indico.web.flask.util import make_compat_redirect_func
 from indico.web.flask.wrappers import IndicoBlueprint
+
 
 _bp = IndicoBlueprint('auth', __name__, template_folder='templates', virtual_template_folder='auth')
 
@@ -30,12 +31,14 @@ _bp.add_url_rule('/login/', 'login', RHLogin, methods=('GET', 'POST'))
 _bp.add_url_rule('/login/<provider>/', 'login', RHLogin)
 _bp.add_url_rule('/login/<provider>/form', 'login_form', RHLoginForm)
 _bp.add_url_rule('/login/<provider>/link-account', 'link_account', RHLinkAccount, methods=('GET', 'POST'))
-_bp.add_url_rule('/logout/', 'logout', RHLogout, methods=('GET', 'POST'))
+_bp.add_url_rule('/logout/', 'logout', RHLogout)
 
 _bp.add_url_rule('/register/', 'register', RHRegister, methods=('GET', 'POST'), defaults={'provider': None})
 _bp.add_url_rule('/register/<provider>', 'register', RHRegister, methods=('GET', 'POST'))
 
 _bp.add_url_rule('/reset-password/', 'resetpass', RHResetPassword, methods=('GET', 'POST'))
+
+_bp.add_url_rule('/admin/users/impersonate', 'admin_impersonate', RHAdminImpersonate, methods=('POST',))
 
 with _bp.add_prefixed_rules('/user/<int:user_id>', '/user'):
     _bp.add_url_rule('/accounts/', 'accounts', RHAccounts, methods=('GET', 'POST'))

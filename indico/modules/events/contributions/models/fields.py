@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,8 +20,11 @@ from sqlalchemy.dialects.postgresql import JSON
 from sqlalchemy.ext.declarative import declared_attr
 
 from indico.core.db import db
+from indico.core.db.sqlalchemy import PyIntEnum
+from indico.util.i18n import _
 from indico.util.locators import locator_property
 from indico.util.string import format_repr, return_ascii, text_to_repr
+from indico.util.struct.enum import RichIntEnum
 
 
 def _get_next_position(context):
@@ -29,6 +32,14 @@ def _get_next_position(context):
     event_id = context.current_parameters['event_id']
     res = db.session.query(db.func.max(ContributionField.position)).filter_by(event_id=event_id).one()
     return (res[0] or 0) + 1
+
+
+class ContributionFieldVisibility(RichIntEnum):
+    __titles__ = [None, _('Everyone'), _('Managers and submitters'), _('Only managers')]
+    __css_classes__ = [None, 'public', 'submitters', 'managers']
+    public = 1
+    managers_and_submitters = 2
+    managers_only = 3
 
 
 class ContributionField(db.Model):
@@ -74,6 +85,16 @@ class ContributionField(db.Model):
         nullable=False,
         default=True
     )
+    is_user_editable = db.Column(
+        db.Boolean,
+        nullable=False,
+        default=True
+    )
+    visibility = db.Column(
+        PyIntEnum(ContributionFieldVisibility),
+        nullable=False,
+        default=ContributionFieldVisibility.public
+    )
     field_type = db.Column(
         db.String,
         nullable=True
@@ -84,7 +105,7 @@ class ContributionField(db.Model):
         default={}
     )
 
-    event_new = db.relationship(
+    event = db.relationship(
         'Event',
         lazy=True,
         backref=db.backref(
@@ -125,7 +146,7 @@ class ContributionField(db.Model):
 
     @locator_property
     def locator(self):
-        return dict(self.event_new.locator, contrib_field_id=self.id)
+        return dict(self.event.locator, contrib_field_id=self.id)
 
 
 class ContributionFieldValueBase(db.Model):

@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -18,26 +18,24 @@ from __future__ import unicode_literals
 
 from datetime import timedelta
 
-from flask import flash, request, redirect, session
+from flask import flash, redirect, request, session
 
 from indico.core.db import db
-from indico.modules.news import news_settings, logger
-from indico.modules.news.forms import NewsSettingsForm, NewsForm
+from indico.modules.admin import RHAdminBase
+from indico.modules.news import logger, news_settings
+from indico.modules.news.forms import NewsForm, NewsSettingsForm
 from indico.modules.news.models.news import NewsItem
 from indico.modules.news.util import get_recent_news
-from indico.modules.news.views import WPNews, WPManageNews
+from indico.modules.news.views import WPManageNews, WPNews
 from indico.util.date_time import now_utc
 from indico.util.i18n import _
 from indico.web.flask.util import url_for
 from indico.web.forms.base import FormDefaults
+from indico.web.rh import RH
 from indico.web.util import jsonify_data, jsonify_form
-from MaKaC.webinterface.rh.admins import RHAdminBase
-from MaKaC.webinterface.rh.base import RH
 
 
 class RHNews(RH):
-    CSRF_ENABLED = True
-
     @staticmethod
     def _is_new(item):
         days = news_settings.get('new_days')
@@ -51,13 +49,13 @@ class RHNews(RH):
 
 
 class RHManageNewsBase(RHAdminBase):
-    CSRF_ENABLED = True
+    pass
 
 
 class RHManageNews(RHManageNewsBase):
     def _process(self):
         news = NewsItem.query.order_by(NewsItem.created_dt.desc()).all()
-        return WPManageNews.render_template('admin/news.html', news=news)
+        return WPManageNews.render_template('admin/news.html', 'news', news=news)
 
 
 class RHNewsSettings(RHManageNewsBase):
@@ -87,8 +85,8 @@ class RHCreateNews(RHManageNewsBase):
 
 
 class RHManageNewsItemBase(RHManageNewsBase):
-    def _checkParams(self, params):
-        RHManageNewsBase._checkParams(self, params)
+    def _process_args(self):
+        RHManageNewsBase._process_args(self)
         self.item = NewsItem.get_one(request.view_args['news_id'])
 
 

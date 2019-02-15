@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -136,6 +136,18 @@ class StoredFileMixin(object):
         )
 
     @declared_attr
+    def md5(cls):
+        """
+        An MD5 hash of the file.
+
+        Automatically assigned when `save()` is called.
+        """
+        return db.Column(
+            db.String,
+            nullable=not cls.file_required
+        )
+
+    @declared_attr
     def storage_backend(cls):
         return db.Column(
             db.String,
@@ -192,7 +204,7 @@ class StoredFileMixin(object):
         if self.version_of:
             assert getattr(self, self.version_of) is not None
         self.storage_backend, path = self._build_storage_path()
-        self.storage_file_id = self.storage.save(path, self.content_type, self.filename, data)
+        self.storage_file_id, self.md5 = self.storage.save(path, self.content_type, self.filename, data)
         self.size = self.storage.getsize(self.storage_file_id)
 
     def open(self):
@@ -206,3 +218,14 @@ class StoredFileMixin(object):
         if self.storage_file_id is None:
             raise Exception('There is no file to send')
         return self.storage.send_file(self.storage_file_id, self.content_type, self.filename, inline=inline)
+
+    def delete(self):
+        """Delete the file from storage"""
+        if self.storage_file_id is None:
+            raise Exception('There is no file to delete')
+        self.storage.delete(self.storage_file_id)
+        self.storage_backend = None
+        self.storage_file_id = None
+        self.size = None
+        self.content_type = None
+        self.filename = None

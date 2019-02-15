@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -20,9 +20,9 @@ from flask import session
 
 from indico.core import signals
 from indico.core.logger import Logger
-from indico.modules.events.agreements.base import AgreementPersonInfo, AgreementDefinitionBase
+from indico.modules.events.agreements.base import AgreementDefinitionBase, AgreementPersonInfo
 from indico.modules.events.agreements.models.agreements import Agreement
-from indico.modules.events.agreements.placeholders import PersonNamePlaceholder, AgreementLinkPlaceholder
+from indico.modules.events.agreements.placeholders import AgreementLinkPlaceholder, PersonNamePlaceholder
 from indico.modules.events.agreements.util import get_agreement_definitions
 from indico.util.i18n import _
 from indico.web.flask.util import url_for

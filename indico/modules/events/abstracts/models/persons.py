@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -16,11 +16,11 @@
 
 from __future__ import unicode_literals
 
-from indico.core.db.sqlalchemy import db, PyIntEnum
+from indico.core.db.sqlalchemy import PyIntEnum, db
 from indico.modules.events.contributions.models.persons import AuthorType
 from indico.modules.events.models.persons import PersonLinkBase
 from indico.util.locators import locator_property
-from indico.util.string import return_ascii, format_repr
+from indico.util.string import format_repr, return_ascii
 
 
 class AbstractPersonLink(PersonLinkBase):

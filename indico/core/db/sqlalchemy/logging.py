@@ -1,5 +1,5 @@
 # This file is part of Indico.
-# Copyright (C) 2002 - 2017 European Organization for Nuclear Research (CERN).
+# Copyright (C) 2002 - 2018 European Organization for Nuclear Research (CERN).
 #
 # Indico is free software; you can redistribute it and/or
 # modify it under the terms of the GNU General Public License as
@@ -14,20 +14,21 @@
 # You should have received a copy of the GNU General Public License
 # along with Indico; if not, see <http://www.gnu.org/licenses/>.
 
-from __future__ import absolute_import
+from __future__ import absolute_import, unicode_literals
 
 import logging
-import os
 import pprint
 import time
 import traceback
 
-from flask import current_app, g, request_tearing_down, request_started, request, has_request_context
+from flask import appcontext_tearing_down, current_app, g, has_request_context, request, request_tearing_down
 from sqlalchemy.engine import Engine
 from sqlalchemy.event import listens_for
 
+from indico.core.config import config
 from indico.core.db import db
 from indico.core.plugins import plugin_engine
+from indico.web.flask.stats import get_request_stats
 
 
 def _prettify_sql(statement):
@@ -43,9 +44,7 @@ def _interesting_tb_item(item, paths):
 
 
 def _get_sql_line():
-    indico_path = current_app.root_path
-    makac_path = os.path.abspath(os.path.join(indico_path, '..', 'MaKaC'))
-    paths = [indico_path, makac_path] + [p.root_path for p in plugin_engine.get_active_plugins().itervalues()]
+    paths = [current_app.root_path] + [p.root_path for p in plugin_engine.get_active_plugins().itervalues()]
     stack = [item for item in reversed(traceback.extract_stack()) if _interesting_tb_item(item, paths)]
     for i, item in enumerate(stack):
         return {'file': item[0],
@@ -60,13 +59,13 @@ def _fix_param(param):
     return '<binary>' if param.__class__.__name__ == 'Binary' else param
 
 
-def apply_db_loggers(app):
-    if not app.debug or getattr(db, '_loggers_applied', False):
+def apply_db_loggers(app, force=False):
+    if not (force or config.DB_LOG) or getattr(db, '_loggers_applied', False):
         return
     db._loggers_applied = True
     from indico.core.logger import Logger
 
-    logger = Logger.get('db')
+    logger = Logger.get('_db')
     logger.setLevel(logging.DEBUG)
 
     @listens_for(Engine, 'before_cursor_execute')
@@ -74,6 +73,7 @@ def apply_db_loggers(app):
         if not g.get('req_start_sent'):
             g.req_start_sent = True
             logger.debug('Request started', extra={'sql_log_type': 'start_request',
+                                                   'repl': app.config.get('REPL'),
                                                    'req_verb': request.method if has_request_context() else None,
                                                    'req_path': request.path if has_request_context() else None,
                                                    'req_url': request.url if has_request_context() else None})
@@ -117,25 +117,21 @@ def apply_db_loggers(app):
                                                                      'sql_source': source,
                                                                      'sql_duration': total,
                                                                      'sql_verb': statement.split()[0]})
-        g.sql_query_count = g.get('sql_query_count', 0) + 1
-        g.req_query_duration = g.get('req_query_duration', 0) + total
 
-    @request_started.connect_via(app)
-    def on_request_started(sender, **kwargs):
-        g.req_query_duration = 0.0
-        g.req_start_ts = time.time()
-        g.req_start_sent = False
-
+    @appcontext_tearing_down.connect_via(app)
     @request_tearing_down.connect_via(app)
-    def on_request_tearing_down(sender, **kwargs):
-        query_count = g.get('sql_query_count', 0)
-        if not query_count:
+    def on_tearing_down(sender, **kwargs):
+        if g.get('req_end_sent'):
             return
-        duration = (time.time() - g.req_start_ts) if 'req_start_ts' in g else 0
+        g.req_end_sent = True
+        stats = get_request_stats()
+        if not stats['query_count']:
+            return
         logger.debug('Request finished', extra={'sql_log_type': 'end_request',
-                                                'sql_query_count': query_count,
+                                                'sql_query_count': stats['query_count'],
+                                                'repl': app.config.get('REPL'),
                                                 'req_verb': request.method if has_request_context() else None,
                                                 'req_url': request.url if has_request_context() else None,
                                                 'req_path': request.path if has_request_context() else None,
-                                                'req_duration': duration,
-                                                'req_query_duration': g.req_query_duration})
+                                                'req_duration': stats['req_duration'],
+                                                'req_query_duration': stats['query_duration']})
